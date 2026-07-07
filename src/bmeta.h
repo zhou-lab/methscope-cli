@@ -3,7 +3,7 @@
  * Booster metadata embedded inside a .ubj as XGBoost string attributes
  * (XGBoosterSetAttr/GetAttr — these persist through a UBJ save/load round-trip).
  *
- * methscope-cli stores the human-readable class label names here so a trained `.ubj`
+ * methscope stores the human-readable class label names here so a trained `.ubj`
  * is self-describing: `predict` needs only the booster and the matching `.mrmp`,
  * with no separate labels sidecar. The pattern count is NOT stored — it equals
  * the booster's num_feature (XGBoosterGetNumFeature).

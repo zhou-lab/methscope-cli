@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * Booster metadata: embed/read the methscope-cli class labels inside a `.ubj` as
+ * Booster metadata: embed/read the methscope class labels inside a `.ubj` as
  * XGBoost attributes. `ms_annotate_booster()` injects those attributes into a raw
  * (e.g. R-trained) booster so it becomes self-describing; it is the reusable core
  * behind `bundle -l` (which labels a booster while packing it into a `.ubjx`).

@@ -36,6 +36,9 @@ static int inspect_usage(void) {
     "  Describe a bundle without running it: its framework mark (kind), the on-disk\n"
     "  section layout (offset/size/contents), and a breakdown of the model section\n"
     "  (labels, feature/pattern counts, linear-model weights).\n"
+    "\n"
+    "Options:\n"
+    "  -h   Show this help message.\n"
     "\n");
   return 1;
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * methscope-cli — pure-C analysis of sparse DNA methylomes via MRMP encoding.
+ * methscope — pure-C analysis of sparse DNA methylomes via MRMP encoding.
  * Single multi-call binary; dispatches to subcommands (cf. yame's main.c).
  *
  * Copyright (C) 2025 Hongxiang Fu and Wanding Zhou
@@ -14,7 +14,7 @@
 static int usage(void) {
   fprintf(stderr,
     "\n"
-    "methscope-cli (v%s) — ultra-fast sparse DNA methylome analysis via MRMP encoding\n"
+    "methscope (v%s) — ultra-fast sparse DNA methylome analysis via MRMP encoding\n"
     "Built against YAME %s\n"
     "\n"
     "Usage:\n"
