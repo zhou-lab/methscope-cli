@@ -1,0 +1,4 @@
+num_class	62
+npattern	1000
+genome	hg38
+labels	Alpha,ASC,AT1,AT2,B Mem,B Naive,B Plasma,Basal Brst,Basal/Club/Goblet,Beta,Delta,Endo Lym,Endo Vas,Ent Co,Ent Ileum,Epi Aci,Epi Duc,Epi Gas,Epi Krt/Lum,Fibro Adr,Fibro Brst,Fibro EndN,Fibro EpiN,Fibro GI,Fibro HT,Fibro Mus,Fibro Mus AdipoP,Fibro Myo,Fibro Sk,Gob,Hema Mast,IT L2/3,IT L4,IT L5,IT L6,LAMP5,Macrophage,Mic,Mono,Mus Crd Atr,Mus Crd Ven,Mus Fast,Mus Slow,Neu Schw,NK CD16,NK CD56,NP,ODC,OPC,Perivascular,PVALB,SCT,SNCG,SST,Tmem CD4,Tmem CD8,Tnaive CD4,Tnaive CD8,VCT,VIP,ZG,ZR/ZF
