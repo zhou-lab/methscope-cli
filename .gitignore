@@ -53,3 +53,11 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# --- methscope-cli project ---
+/methscope
+/models/
+*.msm
+*~
+*.swp
+.DS_Store
