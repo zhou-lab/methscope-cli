@@ -5,7 +5,7 @@
  * Declares the f2c-translated reference implementation vendored verbatim in
  * src/nnls.c (Charles L. Lawson & Richard J. Hanson, JPL 1973; SIAM 1995
  * reprint; netlib.org/lawson-hanson). This is the same algorithm the R `nnls`
- * package wraps, so methscope-cli's `deconv` matches the R nnls_deconv() numerics.
+ * package wraps, so methscope's `deconv` matches the R nnls_deconv() numerics.
  *
  * Solves  min ||A x - b||_2  subject to  x >= 0.
  *

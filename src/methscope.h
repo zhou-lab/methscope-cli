@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * methscope-cli — pure-C analysis of sparse DNA methylomes via MRMP encoding.
+ * methscope — pure-C analysis of sparse DNA methylomes via MRMP encoding.
  *
  * Copyright (C) 2025 Hongxiang Fu and Wanding Zhou
  *
@@ -49,7 +49,7 @@ void ms_mrmp_trim(const char *in_cm, char *const *keep_names, int n_keep,
 /* ------------------------------------------------------------------ */
 /* Model artifacts                                                    */
 /* ------------------------------------------------------------------ */
-/* A methscope-cli model ships as a self-contained bundle (`.ubjx`/`.updecx`/`.refx`,
+/* A methscope model ships as a self-contained bundle (`.ubjx`/`.updecx`/`.refx`,
  * see bundle.h) wrapping an inner model + its MRMP. The loose parts are:
  *   <mrmp>.mrmp            the MRMP pattern definition (a YAME .cm)
  *   <mrmp>-<panel>.ubj     an XGBoost booster with class labels embedded as

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * `upscale`: pure-C inference of a methscope-cli "upscale" block decoder, the
+ * `upscale`: pure-C inference of a methscope "upscale" block decoder, the
  * MLP that maps an MRMP embedding to CpG-level methylation within a 10k-CpG
  * block. Reimplements (no torch, no BLAS -- only libm) the forward pass of the
  * PyTorch BottleneckDecoder + its sklearn impute/standardize preprocessing,
@@ -170,7 +170,7 @@ static int upscale_usage(void) {
   fprintf(stderr,
     "\n"
     "Usage:\n"
-    "  methscope upscale [options] <model.updec> [features.tsv]\n"
+    "  methscope upscale [options] <model.updec|.updecx> [input]\n"
     "\n"
     "Purpose:\n"
     "  Upscale an MRMP embedding to CpG-level methylation for one genomic block,\n"
