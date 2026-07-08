@@ -62,3 +62,6 @@ dkms.conf
 *.swp
 .DS_Store
 CLAUDE.md
+
+# release tarballs (bioconda upload assets)
+dist/
