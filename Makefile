@@ -25,7 +25,7 @@ endif
 SRC = $(wildcard src/*.c)
 OBJ = $(SRC:.c=.o)
 
-.PHONY: all clean yame-lib check-xgb
+.PHONY: all clean clean-all dist yame-lib check-xgb
 
 all: $(PROG)
 
@@ -52,6 +52,31 @@ check-xgb:
 	  echo "  Install it: conda install -c conda-forge libxgboost"; \
 	  echo "  Then activate the env (sets CONDA_PREFIX) or pass XGB_PREFIX=..."; \
 	  exit 1; }
+
+# --- release tarball (self-contained: bundles the pinned YAME submodule) ----
+# The GitHub auto tag-tarball OMITS the submodule, so bioconda's source: url
+# needs this self-contained asset. Reproducible: pre-sorted names + fixed
+# mtime/owner + `gzip -n`, so re-running yields a BYTE-IDENTICAL tarball (an
+# ad-hoc `git archive` + worktree tar is not). GNU tar required. Archiving the
+# YAME worktree via `git -C YAME ls-files` (not `git archive <sha>`) also
+# sidesteps a submodule whose object store can't archive (e.g. stale alternates).
+# Workflow: check out the release commit/tag AND `git submodule update --init`,
+# then `make dist` (override the version with `make dist DIST_VERSION=1.2.3`).
+DIST_VERSION ?= $(patsubst v%,%,$(shell git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0))
+DIST_MTIME   ?= $(shell git log -1 --format=%ct 2>/dev/null || echo 0)
+DIST_NAME     = methscope-cli-$(DIST_VERSION)
+DIST_TARBALL  = dist/$(DIST_NAME).tar.gz
+
+dist:
+	@test -f YAME/Makefile || { echo "ERROR: YAME submodule not checked out; run: git submodule update --init"; exit 1; }
+	@mkdir -p dist
+	@{ git ls-files | grep -vx YAME; git -C YAME ls-files | sed 's,^,YAME/,'; } | LC_ALL=C sort > dist/.$(DIST_NAME).files
+	@tar --create --transform 's,^,$(DIST_NAME)/,' --owner=0 --group=0 --numeric-owner \
+	     --mtime=@$(DIST_MTIME) --no-recursion --files-from=dist/.$(DIST_NAME).files \
+	   | gzip -n -9 > $(DIST_TARBALL)
+	@rm -f dist/.$(DIST_NAME).files
+	@echo "built $(DIST_TARBALL)"
+	@sha256sum $(DIST_TARBALL) 2>/dev/null || shasum -a 256 $(DIST_TARBALL)
 
 clean:
 	rm -f $(OBJ) $(PROG)
