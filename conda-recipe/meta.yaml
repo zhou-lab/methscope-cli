@@ -1,24 +1,20 @@
-{% set version = "0.1.0" %}
+{% set name = "methscope-cli" %}
+{% set version = "0.1.1" %}
 
 package:
-  name: methscope-cli
+  name: {{ name }}
   version: {{ version }}
 
 source:
-  # NOTE: GitHub's auto-generated tag tarballs do NOT contain the pinned YAME
-  # submodule. Publish a self-contained release asset that bundles YAME, e.g.:
-  #   git checkout v{{ version }} && git submodule update --init
-  #   git-archive-all --prefix=methscope-cli-{{ version }}/ methscope-cli-{{ version }}.tar.gz
-  #   gh release upload v{{ version }} methscope-cli-{{ version }}.tar.gz
-  #   sha256sum methscope-cli-{{ version }}.tar.gz   # -> paste below
-  url: https://github.com/zhou-lab/methscope-cli/releases/download/v{{ version }}/methscope-cli-{{ version }}.tar.gz
-  sha256: 6ab92bc418682632befbb2058fb1aaca3a8c6047879ef1de1e8de86901959acd
+  # In-repo recipe: build the checked-out tree, which already contains the
+  # pinned YAME submodule. (GitHub's auto-generated tag tarballs do NOT contain
+  # submodules, which is why we do not fetch a url here.) A release build =
+  # check out the vX.Y.Z tag, `git submodule update --init`, then conda build.
+  path: ..
 
 build:
   number: 0
-  run_exports:
-    # keep ABI-compatible against the libxgboost it was built with
-    - {{ pin_compatible('libxgboost') }}
+  skip: true  # [win]
 
 requirements:
   build:
@@ -27,22 +23,32 @@ requirements:
   host:
     - libxgboost
     - zlib
-    # - ncurses   # uncomment if libyame.a linking pulls in ncurses symbols
   run:
-    - libxgboost   # usually auto-added via libxgboost's own run_exports
+    # libxgboost's and zlib's run_exports pin the runtime automatically;
+    # listed for clarity
+    - libxgboost
 
 test:
   commands:
-    - methscope 2>&1 | grep -qi methscope
+    - methscope --version
+    - methscope inspect -h 2>&1 | grep -qi inspect
 
 about:
   home: https://github.com/zhou-lab/methscope-cli
   license: AGPL-3.0-or-later
   license_family: AGPL
   license_file: LICENSE
-  summary: "Sparse DNA methylome analysis via MRMP encoding (C CLI companion to the MethScope R package)"
+  summary: Sparse DNA methylome analysis via MRMP encoding (C CLI companion to the MethScope R package)
+  description: |
+    methscope-cli is a pure-C command-line tool for ultra-fast analysis of
+    sparse DNA methylomes via Most Recurrent Methylation Pattern (MRMP)
+    encoding. It performs the headline MethScope path, taking a query .cg file
+    plus an MRMP reference to a cell-by-pattern feature matrix, then to
+    XGBoost cell-type prediction or NNLS deconvolution, with no R runtime.
+    YAME is linked statically for .cg/.cm I/O and the summary computation;
+    libxgboost is the single external runtime dependency.
   dev_url: https://github.com/zhou-lab/methscope-cli
 
 extra:
   recipe-maintainers:
-    - zhou-lab
+    - zwdzwd
