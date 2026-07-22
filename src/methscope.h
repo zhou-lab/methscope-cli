@@ -102,6 +102,6 @@ int main_upscale(int argc, char *argv[]);
 int main_bundle(int argc, char *argv[]);
 int main_unbundle(int argc, char *argv[]);
 
-#define METHSCOPE_VERSION "0.1.0"
+#define METHSCOPE_VERSION "0.1.1"
 
 #endif /* METHSCOPE_H */
