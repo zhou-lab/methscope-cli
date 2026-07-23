@@ -11,6 +11,7 @@
 #include <zlib.h>
 #include "methscope.h"
 #include "updec.h"
+#include "updec_cuda.h"
 #include "updec_nn.h"
 
 #define UPSCALE_N_IN 101
@@ -356,6 +357,7 @@ static int train_usage(void) {
     "  --eps X           BatchNorm epsilon (default 1e-5)\n"
     "  --momentum X      BatchNorm running-stat momentum (default 0.1)\n"
     "  --seed N          deterministic PRNG seed (default 1)\n"
+    "  --device DEVICE   cpu, cuda, or cuda:N (default cpu)\n"
     "  -h, --help        show this help\n\n"
     "Input columns must be feat_1..feat_101 then target_1..target_10000; target 2 is missing.\n");
   return 1;
@@ -383,14 +385,27 @@ static int parse_int_option(const char *s, const char *name, int max) {
   return (int)v;
 }
 
+static int parse_cuda_device(const char *s) {
+  if(!strcmp(s,"cpu"))return -1;
+  if(!strcmp(s,"cuda"))return 0;
+  if(!strncmp(s,"cuda:",5)) {
+    long v=parse_long(s+5,"--device");
+    if(v<0||v>INT_MAX)tdie("CUDA device index out of range",s);
+    return (int)v;
+  }
+  tdie("--device must be cpu, cuda, or cuda:N",s);
+  return -1;
+}
+
 int main_upscale_train(int argc, char **argv) {
-  const char *out=NULL,*train_path=NULL,*val_path=NULL,*test_path=NULL;
+  const char *out=NULL,*train_path=NULL,*val_path=NULL,*test_path=NULL,*device="cpu";
   int epochs=3,batch=64,hidden=512; double lr=1e-3,wd=1e-5,eps=1e-5,momentum=0.1;
   uint64_t seed=1;
   for(int i=1;i<argc;++i) {
     if(!strcmp(argv[i],"-h")||!strcmp(argv[i],"--help"))return train_usage();
 #define OPT(S,V) if(!strcmp(argv[i],S)&&i+1<argc){V=argv[++i];continue;}
     OPT("-o",out) OPT("--train",train_path) OPT("--val",val_path) OPT("--test",test_path)
+    OPT("--device",device)
 #undef OPT
     if(!strcmp(argv[i],"--epochs")&&i+1<argc){epochs=parse_int_option(argv[++i],"--epochs",INT_MAX);continue;}
     if(!strcmp(argv[i],"--batch")&&i+1<argc){batch=parse_int_option(argv[++i],"--batch",INT_MAX-1);continue;}
@@ -411,6 +426,7 @@ int main_upscale_train(int argc, char **argv) {
   if(wd<0)tdie("--wd must be nonnegative",NULL);
   if(!(eps>0))tdie("--eps must be positive",NULL);
   if(momentum<0||momentum>1)tdie("--momentum must be in [0,1]",NULL);
+  int cuda_device=parse_cuda_device(device);
 
   split_t train=split_load(train_path),val=split_load(val_path),test={0};
   if(test_path)test=split_load(test_path);
@@ -421,6 +437,45 @@ int main_upscale_train(int argc, char **argv) {
   model->bn_eps=(float)eps; best->bn_eps=(float)eps;
   fit_preprocessing(&train,&val,test_path?&test:NULL,model);
   pcg_t rng; pcg_seed(&rng,seed); init_model(model,&rng);
+
+  if(cuda_device>=0) {
+    if(!ms_updec_cuda_available())
+      tdie("CUDA backend unavailable (rebuild with make CUDA=1, or use --device cpu)",device);
+    if(train.n>UINT32_MAX)tdie("CUDA backend supports at most UINT32_MAX training rows",train_path);
+    size_t nperm=xmul((size_t)epochs,train.n,"CUDA epoch permutations");
+    uint32_t *all_idx=xmalloc(xmul(nperm,sizeof(*all_idx),"CUDA epoch permutations"),
+                              "CUDA epoch permutations");
+    size_t *idx=xmalloc(xmul(train.n,sizeof(*idx),"shuffle indices"),"shuffle indices");
+    for(size_t i=0;i<train.n;++i)idx[i]=i;
+    for(int ep=0;ep<epochs;++ep) {
+      shuffle(idx,train.n,&rng);
+      for(size_t i=0;i<train.n;++i)all_idx[(size_t)ep*train.n+i]=(uint32_t)idx[i];
+    }
+    free(idx);
+    ms_updec_cuda_config_t cfg={
+      .train_x=train.x,.val_x=val.x,.test_x=test_path?test.x:NULL,
+      .train_target=train.target,.val_target=val.target,
+      .test_target=test_path?test.target:NULL,
+      .n_train=train.n,.n_val=val.n,.n_test=test_path?test.n:0,
+      .epoch_indices=all_idx,.epochs=epochs,.batch=batch,.device=cuda_device,
+      .lr=lr,.weight_decay=wd,.bn_momentum=momentum
+    };
+    ms_updec_cuda_result_t result={0};
+    if(ms_updec_train_cuda(&cfg,model,best,&result))
+      tdie("CUDA training failed",device);
+    if(test_path)
+      fprintf(stderr,"[methscope] upscale-train: test accuracy %.6f  MAE %.6f  valid %llu  missing %llu\n",
+              result.test_accuracy,result.test_mae,
+              (unsigned long long)result.test_valid,
+              (unsigned long long)result.test_missing);
+    ms_updec_write(out,best);
+    fprintf(stderr,"[methscope] upscale-train: wrote best model (val_loss %.9g) -> %s\n",
+            result.best_val,out);
+    free(all_idx);
+    ms_updec_free(model);ms_updec_free(best);split_free(&train);split_free(&val);
+    if(test_path)split_free(&test);
+    return 0;
+  }
 
   size_t HI=(size_t)hidden*UPSCALE_N_IN,OH=(size_t)UPSCALE_N_OUT*hidden;
   param_t ps[6]={param_make(model->W1,HI,"Adam W1"),param_make(model->b1,hidden,"Adam b1"),

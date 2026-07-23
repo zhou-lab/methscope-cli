@@ -25,6 +25,11 @@ static int usage(void) {
     "  matrix       Build the record x pattern beta matrix (TSV; --refx -> a .refx reference)\n"
     "  deconv       Estimate cell-type proportions (NNLS): mixture.cg + panel.refx\n"
     "  upscale      Upscale an MRMP embedding to CpG-level methylation (MLP decoder)\n"
+    "  upscale-prepare Build compact raw-CG simulation/features for global upscale\n"
+    "  upscale-factor-train Train the global MRMP-factorized decoder (native CUDA)\n"
+    "  upscale-residual-index Build membership-first residual decoder index\n"
+    "  upscale-residual-train Train frozen-encoder residual heads (native CUDA)\n"
+    "  upscale-hybrid-eval Evaluate global+residual model on an external cohort\n"
     "  upscale-train Train an upscale block decoder from prepared TSV splits\n"
     "  train        Train a label classifier (xgboost/threshold/logistic) -> model.ubjx\n"
     "  inspect      Report a bundle's framework mark, on-disk layout, and model summary\n"
@@ -49,6 +54,11 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "deconv")     == 0) return main_deconv(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale")    == 0) return main_upscale(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-train") == 0) return main_upscale_train(argc - 1, argv + 1);
+  if (strcmp(argv[1], "upscale-prepare") == 0) return main_upscale_prepare(argc - 1, argv + 1);
+  if (strcmp(argv[1], "upscale-factor-train") == 0) return main_upscale_factor_train(argc - 1, argv + 1);
+  if (strcmp(argv[1], "upscale-residual-index") == 0) return main_upscale_residual_index(argc - 1, argv + 1);
+  if (strcmp(argv[1], "upscale-residual-train") == 0) return main_upscale_residual_train(argc - 1, argv + 1);
+  if (strcmp(argv[1], "upscale-hybrid-eval") == 0) return main_upscale_hybrid_eval(argc - 1, argv + 1);
   if (strcmp(argv[1], "train")      == 0) return main_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "inspect")    == 0) return main_inspect(argc - 1, argv + 1);
   if (strcmp(argv[1], "bundle")     == 0) return main_bundle(argc - 1, argv + 1);

@@ -3,6 +3,13 @@ CC ?= gcc
 CFLAGS ?= -W -Wall -O3 -std=gnu99
 PROG = methscope
 
+# Optional native CUDA backend (`make CUDA=1`). The normal build remains
+# CPU-only and has no CUDA runtime dependency.
+CUDA ?= 0
+CUDA_HOME ?= $(if $(CUDA_ROOT),$(CUDA_ROOT),/usr/local/cuda)
+CUDA_ARCH ?= sm_80
+NVCC ?= $(CUDA_HOME)/bin/nvcc
+
 # --- YAME static library (built from the pinned submodule) ---------------
 YAME_DIR = YAME
 YAME_LIB = $(YAME_DIR)/libyame.a
@@ -24,8 +31,17 @@ endif
 
 SRC = $(wildcard src/*.c)
 OBJ = $(SRC:.c=.o)
+CUDA_OBJ =
 
-.PHONY: all clean clean-all dist yame-lib check-xgb check check-upscale-grad regen-upscale-grad
+ifeq ($(CUDA),1)
+  CUDA_OBJ = src/updec_cuda.o src/upfactor_cuda.o src/upresidual_cuda.o src/uphybrid_eval_cuda.o
+  LDFLAGS += -L$(CUDA_HOME)/lib -Wl,-rpath,$(CUDA_HOME)/lib
+  LIBS += -lcublas -lcudart -lstdc++
+endif
+
+OBJ += $(CUDA_OBJ)
+
+.PHONY: all clean clean-all dist yame-lib check-xgb check check-upscale-grad regen-upscale-grad force-link
 
 all: $(PROG)
 
@@ -51,12 +67,29 @@ $(YAME_LIB) $(HTSLIB): yame-lib
 src/%.o: src/%.c | check-xgb
 	$(CC) $(CFLAGS) -c $< -o $@
 
+src/updec_cuda.o: src/updec_cuda.cu src/updec_cuda.h src/updec.h | check-xgb
+	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
+
+src/upfactor_cuda.o: src/upfactor_cuda.cu src/upfactor_cuda.h | check-xgb
+	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
+
+src/upresidual_cuda.o: src/upresidual_cuda.cu src/upresidual_cuda.h | check-xgb
+	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
+
+src/uphybrid_eval_cuda.o: src/uphybrid_eval_cuda.cu src/uphybrid_eval_cuda.h | check-xgb
+	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
+
 # Vendored f2c-translated Lawson-Hanson NNLS: K&R style, compile warnings off.
 src/nnls.o: src/nnls.c
 	$(CC) $(CFLAGS) -w -c $< -o $@
 
-$(PROG): $(OBJ) $(YAME_LIB) $(HTSLIB)
+# CUDA changes both the object list and link libraries, which make does not
+# otherwise track as prerequisites. Relink so switching CUDA=0/1 can never
+# leave a stale binary from the other build mode.
+$(PROG): $(OBJ) $(YAME_LIB) $(HTSLIB) force-link
 	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDFLAGS) $(LIBS)
+
+force-link:
 
 check-xgb:
 	@test -f "$(XGB_PREFIX)/include/xgboost/c_api.h" || { \
@@ -91,7 +124,7 @@ dist:
 	@sha256sum $(DIST_TARBALL) 2>/dev/null || shasum -a 256 $(DIST_TARBALL)
 
 clean:
-	rm -f $(OBJ) $(PROG) test/upscale_grad_check
+	rm -f $(OBJ) src/updec_cuda.o src/upfactor_cuda.o src/upresidual_cuda.o src/uphybrid_eval_cuda.o $(PROG) test/upscale_grad_check
 
 # Also clean the YAME submodule build artifacts.
 clean-all: clean
