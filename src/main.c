@@ -25,6 +25,7 @@ static int usage(void) {
     "  matrix       Build the record x pattern beta matrix (TSV; --refx -> a .refx reference)\n"
     "  deconv       Estimate cell-type proportions (NNLS): mixture.cg + panel.refx\n"
     "  upscale      Upscale an MRMP embedding to CpG-level methylation (MLP decoder)\n"
+    "  upscale-train Train an upscale block decoder from prepared TSV splits\n"
     "  train        Train a label classifier (xgboost/threshold/logistic) -> model.ubjx\n"
     "  inspect      Report a bundle's framework mark, on-disk layout, and model summary\n"
     "  bundle       Wrap a model + its MRMP (+ labels via -l) -> self-contained bundle\n"
@@ -47,6 +48,7 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "matrix")     == 0) return main_matrix(argc - 1, argv + 1);
   if (strcmp(argv[1], "deconv")     == 0) return main_deconv(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale")    == 0) return main_upscale(argc - 1, argv + 1);
+  if (strcmp(argv[1], "upscale-train") == 0) return main_upscale_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "train")      == 0) return main_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "inspect")    == 0) return main_inspect(argc - 1, argv + 1);
   if (strcmp(argv[1], "bundle")     == 0) return main_bundle(argc - 1, argv + 1);

@@ -25,9 +25,21 @@ endif
 SRC = $(wildcard src/*.c)
 OBJ = $(SRC:.c=.o)
 
-.PHONY: all clean clean-all dist yame-lib check-xgb
+.PHONY: all clean clean-all dist yame-lib check-xgb check check-upscale-grad regen-upscale-grad
 
 all: $(PROG)
+
+check: check-upscale-grad
+
+test/upscale_grad_check: test/upscale_grad_check.c src/updec_nn.c src/updec_nn.h
+	$(CC) $(CFLAGS) -Isrc test/upscale_grad_check.c src/updec_nn.c -lm -o $@
+
+check-upscale-grad: test/upscale_grad_check test/upscale_grad_reference.bin
+	./test/upscale_grad_check test/upscale_grad_reference.bin
+
+PYTORCH_PYTHON ?= python3
+regen-upscale-grad:
+	$(PYTORCH_PYTHON) test/make_upscale_grad_reference.py -o test/upscale_grad_reference.bin
 
 # Always (incrementally) rebuild libyame.a from the pinned submodule so the
 # static lib can never go stale relative to the checked-out YAME source.
@@ -79,7 +91,7 @@ dist:
 	@sha256sum $(DIST_TARBALL) 2>/dev/null || shasum -a 256 $(DIST_TARBALL)
 
 clean:
-	rm -f $(OBJ) $(PROG)
+	rm -f $(OBJ) $(PROG) test/upscale_grad_check
 
 # Also clean the YAME submodule build artifacts.
 clean-all: clean

@@ -12,8 +12,8 @@
  *   y   = sigmoid(W2 bn + b2)                                    (n_hidden -> n_out)
  *   call = y > 0.5
  *
- * Weights come from a portable .updec file produced by
- * tools/export_upscale_model.py (the only step that needs torch/sklearn).
+ * Weights come from a portable .updec file produced by `upscale-train` or by
+ * the legacy tools/export_upscale_model.py converter.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,104 +23,13 @@
 #include <unistd.h>
 #include "methscope.h"
 #include "bundle.h"
+#include "updec.h"
 #include "cfile.h"     /* YAME: cdata_t, cdata_write1, open_cfile, read_cdata1, FMT6_/FMT0_ macros */
 
 static void udie(const char *msg, const char *arg) {
   if (arg) fprintf(stderr, "[methscope] %s: %s\n", msg, arg);
   else     fprintf(stderr, "[methscope] %s\n", msg);
   exit(1);
-}
-
-/* ------------------------------------------------------------------ */
-/* .updec model (see tools/export_upscale_model.py for the byte layout) */
-/* ------------------------------------------------------------------ */
-typedef struct {
-  int     n_in, n_hidden, n_out;
-  float   bn_eps;
-  float  *imp_mean;                 /* n_in  */
-  float  *sc_mean, *sc_scale;       /* n_in  */
-  float  *W1, *b1;                  /* n_hidden*n_in, n_hidden */
-  float  *bn_g, *bn_b, *bn_m, *bn_v;/* n_hidden each */
-  float  *W2, *b2;                  /* n_out*n_hidden, n_out */
-} updec_t;
-
-static float *read_f32(FILE *fp, size_t n, const char *what) {
-  float *a = malloc(n * sizeof(float));
-  if (!a) udie("out of memory reading model", what);
-  if (fread(a, sizeof(float), n, fp) != n) udie("truncated .updec at", what);
-  return a;
-}
-
-static updec_t *updec_read(FILE *fp) {
-  char magic[8];
-  if (fread(magic, 1, 8, fp) != 8 || memcmp(magic, "UPDEC1", 6) != 0)
-    udie("not a .updec (bad magic)", NULL);
-  updec_t *m = calloc(1, sizeof(updec_t));
-  int32_t dims[3];
-  if (fread(dims, sizeof(int32_t), 3, fp) != 3) udie("truncated .updec header", NULL);
-  m->n_in = dims[0]; m->n_hidden = dims[1]; m->n_out = dims[2];
-  if (m->n_in <= 0 || m->n_hidden <= 0 || m->n_out <= 0)
-    udie("bad dimensions in .updec", NULL);
-  if (fread(&m->bn_eps, sizeof(float), 1, fp) != 1) udie("truncated .updec eps", NULL);
-  size_t I = m->n_in, H = m->n_hidden, O = m->n_out;
-  m->imp_mean = read_f32(fp, I, "imputer_mean");
-  m->sc_mean  = read_f32(fp, I, "scaler_mean");
-  m->sc_scale = read_f32(fp, I, "scaler_scale");
-  m->W1 = read_f32(fp, H * I, "W1"); m->b1 = read_f32(fp, H, "b1");
-  m->bn_g = read_f32(fp, H, "bn_gamma"); m->bn_b = read_f32(fp, H, "bn_beta");
-  m->bn_m = read_f32(fp, H, "bn_mean");  m->bn_v = read_f32(fp, H, "bn_var");
-  m->W2 = read_f32(fp, O * H, "W2"); m->b2 = read_f32(fp, O, "b2");
-  return m;
-}
-
-static updec_t *updec_load(const char *path) {
-  FILE *fp = fopen(path, "rb");
-  if (!fp) udie("cannot open .updec", path);
-  updec_t *m = updec_read(fp);
-  fclose(fp);
-  return m;
-}
-
-static updec_t *updec_load_buf(const void *buf, size_t len) {
-  FILE *fp = fmemopen((void *)buf, len, "rb");
-  if (!fp) udie("fmemopen failed for embedded model", NULL);
-  updec_t *m = updec_read(fp);
-  fclose(fp);
-  return m;
-}
-
-static void updec_free(updec_t *m) {
-  if (!m) return;
-  free(m->imp_mean); free(m->sc_mean); free(m->sc_scale);
-  free(m->W1); free(m->b1); free(m->bn_g); free(m->bn_b); free(m->bn_m); free(m->bn_v);
-  free(m->W2); free(m->b2); free(m);
-}
-
-/* Standardize one sample's features once (impute NaN with the model mean, then
- * (x - scaler_mean)/scaler_scale), so the Linear1 loop need not repeat it. */
-static void standardize(const updec_t *m, const double *feat, double *xs) {
-  for (int j = 0; j < m->n_in; ++j) {
-    double x = feat[j];
-    if (isnan(x)) x = m->imp_mean[j];
-    xs[j] = (x - m->sc_mean[j]) / m->sc_scale[j];
-  }
-}
-
-static void forward_xs(const updec_t *m, const double *xs, double *out, double *hbuf) {
-  int I = m->n_in, H = m->n_hidden, O = m->n_out;
-  for (int i = 0; i < H; ++i) {
-    const float *w = m->W1 + (size_t)i * I;
-    double acc = m->b1[i];
-    for (int j = 0; j < I; ++j) acc += (double)w[j] * xs[j];
-    if (acc < 0) acc = 0;
-    hbuf[i] = m->bn_g[i] * (acc - m->bn_m[i]) / sqrt((double)m->bn_v[i] + m->bn_eps) + m->bn_b[i];
-  }
-  for (int k = 0; k < O; ++k) {
-    const float *w = m->W2 + (size_t)k * H;
-    double acc = m->b2[k];
-    for (int i = 0; i < H; ++i) acc += (double)w[i] * hbuf[i];
-    out[k] = 1.0 / (1.0 + exp(-acc));
-  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -210,7 +119,7 @@ typedef struct {
   cdata_t *mask;       /* outcpg (decompressed fmt0); NULL => dense block .cg */
 } usink_t;
 
-static void write_pred_cg(BGZF *fp, const updec_t *m, const double *outv, cdata_t *mask) {
+static void write_pred_cg(BGZF *fp, const ms_updec_t *m, const double *outv, cdata_t *mask) {
   cdata_t c = {0};
   c.fmt = '6'; c.unit = 2; c.compressed = 1;   /* fmt6: on-disk == in-memory bytes */
   if (mask) {
@@ -235,7 +144,7 @@ static void write_pred_cg(BGZF *fp, const updec_t *m, const double *outv, cdata_
   free(c.s);
 }
 
-static void sink_emit(usink_t *sk, const updec_t *m, const double *outv) {
+static void sink_emit(usink_t *sk, const ms_updec_t *m, const double *outv) {
   if (sk->as_cg) { write_pred_cg(sk->cg, m, outv, sk->mask); return; }
   for (int k = 0; k < m->n_out; ++k) {          /* --probs TSV */
     if (k) fputc('\t', sk->tsv);
@@ -245,7 +154,7 @@ static void sink_emit(usink_t *sk, const updec_t *m, const double *outv) {
 }
 
 /* Mode A: feature TSV in (bare .updec). */
-static long run_from_tsv(const updec_t *m, const char *feat_path, usink_t *sk) {
+static long run_from_tsv(const ms_updec_t *m, const char *feat_path, usink_t *sk) {
   FILE *in = (strcmp(feat_path, "-") == 0) ? stdin : fopen(feat_path, "r");
   if (!in) udie("cannot open features", feat_path);
   double *feat = malloc((size_t)m->n_in * sizeof(double));
@@ -262,8 +171,8 @@ static long run_from_tsv(const updec_t *m, const char *feat_path, usink_t *sk) {
     free(copy);
     if (nc == 0) continue;
     if (nc < m->n_in) udie("feature row has fewer columns than the model expects", feat_path);
-    standardize(m, feat, xs);
-    forward_xs(m, xs, outv, hbuf);
+    ms_updec_standardize(m, feat, xs);
+    ms_updec_forward_eval(m, xs, outv, hbuf);
     sink_emit(sk, m, outv);
     row++;
   }
@@ -276,7 +185,7 @@ static long run_from_tsv(const updec_t *m, const char *feat_path, usink_t *sk) {
 /* Mode B: query .cg in, featurized against an MRMP (.updecx bundle).
  * The MRMP's numeric pattern order (P1..Pn, Pna last) IS the decoder's
  * feat_1..feat_n_in order, so the first n_in matrix columns map directly. */
-static long run_from_cg(const updec_t *m, const char *mrmp_path,
+static long run_from_cg(const ms_updec_t *m, const char *mrmp_path,
                         const char *query_cg, usink_t *sk) {
   ms_matrix_t *mx = ms_matrix_build(query_cg, mrmp_path);
   if (mx->n_patterns < m->n_in)
@@ -289,8 +198,8 @@ static long run_from_cg(const updec_t *m, const char *mrmp_path,
   for (int r = 0; r < mx->n_cells; ++r) {
     const double *src = mx->M + (size_t)r * mx->n_patterns;
     for (int j = 0; j < m->n_in; ++j) feat[j] = src[j];   /* NaN stays; imputed in standardize */
-    standardize(m, feat, xs);
-    forward_xs(m, xs, outv, hbuf);
+    ms_updec_standardize(m, feat, xs);
+    ms_updec_forward_eval(m, xs, outv, hbuf);
     sink_emit(sk, m, outv);
   }
   long row = mx->n_cells;
@@ -345,7 +254,7 @@ int main_upscale(int argc, char *argv[]) {
     /* .updecx: model + MRMP (+ optional outcpg) bundled; input is a query .cg. */
     size_t mlen, olen;
     void *mbuf = ms_bundle_section(model_path, "model", &mlen);
-    updec_t *m = updec_load_buf(mbuf, mlen);
+    ms_updec_t *m = ms_updec_load_buf(mbuf, mlen);
     free(mbuf);
 
     /* optional output-CpG mask -> genome-dimension .cg */
@@ -363,12 +272,12 @@ int main_upscale(int argc, char *argv[]) {
 
     n_out = m->n_out;
     row = run_from_cg(m, model_path, input_path, &sk);   /* front bytes are the mrmp .cm */
-    updec_free(m);
+    ms_updec_free(m);
   } else {
-    updec_t *m = updec_load(model_path);
+    ms_updec_t *m = ms_updec_load(model_path);
     n_out = m->n_out;
     row = run_from_tsv(m, input_path, &sk);
-    updec_free(m);
+    ms_updec_free(m);
   }
 
   if (sk.as_cg) bgzf_close(sk.cg);
