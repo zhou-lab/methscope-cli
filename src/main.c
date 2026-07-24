@@ -21,7 +21,7 @@ static int usage(void) {
   const char *B = tty ? "\033[1m"    : ""; /* section headers */
   const char *D = tty ? "\033[2m"    : ""; /* dim: version, hints */
   const char *R = tty ? "\033[0m"    : "";
-#define CMD(n, d) fprintf(stderr, "  %s%-15s%s %s\n", A, n, R, d)
+#define CMD(n, d) fprintf(stderr, "  %s%-17s%s %s\n", A, n, R, d)
   fprintf(stderr, "\n%smethscope%s %sv%s · built against YAME %s%s\n",
           A, R, D, METHSCOPE_VERSION, YAME_VERSION, R);
   fprintf(stderr, "%spure-C analysis of sparse DNA methylomes via MRMP encoding%s\n\n",
@@ -43,6 +43,8 @@ static int usage(void) {
 
   fprintf(stderr, "\n%sUpscaling%s %s(imputation)%s\n", B, R, D, R);
   CMD("upscale",      "Impute genome-wide CpG methylation from a sparse methylome");
+  CMD("upscale-featurize", "Build the MSURAW2 training sidecar from a truth .cg");
+  CMD("upscale-set-units", "Build the MSUIDX1 processing-unit index from a .mrmp");
   CMD("upscale-train","Train the whole-genome upscale decoder (CUDA)");
 
   fprintf(stderr, "\n%sModel bundles%s\n", B, R);
@@ -75,6 +77,8 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "deconv")     == 0) return main_deconv(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale")    == 0) return main_upscale(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-train") == 0) return main_upscale_train(argc - 1, argv + 1);
+  if (strcmp(argv[1], "upscale-featurize") == 0) return main_upscale_prepare(argc - 1, argv + 1);
+  if (strcmp(argv[1], "upscale-set-units") == 0) return main_upscale_residual_index(argc - 1, argv + 1);
   if (strcmp(argv[1], "_upscale") == 0) return main_upscale_internal(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-factor-train") == 0 ||
       strcmp(argv[1], "upscale-residual-train") == 0) {

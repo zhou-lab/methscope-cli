@@ -74,12 +74,12 @@ typedef struct {
 } units_t;
 
 static void fail(const char *msg) {
-  fprintf(stderr, "[methscope] _upscale index: %s\n", msg);
+  fprintf(stderr, "[methscope] upscale-set-units: %s\n", msg);
   exit(1);
 }
 
 static void fail_path(const char *msg, const char *path) {
-  fprintf(stderr, "[methscope] _upscale index: %s: %s\n", msg, path);
+  fprintf(stderr, "[methscope] upscale-set-units: %s: %s\n", msg, path);
   exit(1);
 }
 
@@ -203,7 +203,7 @@ static int group_cmp(const void *aa, const void *bb) {
 static uint64_t parse_u64(const char *s, const char **endp, const char *what) {
   errno = 0; char *e = NULL; unsigned long long x = strtoull(s, &e, 10);
   if (errno || e == s) {
-    fprintf(stderr, "[methscope] _upscale index: invalid %s\n", what);
+    fprintf(stderr, "[methscope] upscale-set-units: invalid %s\n", what);
     exit(1);
   }
   *endp = e;
@@ -222,7 +222,7 @@ static uint64_t file_size(const char *path) {
 
 static int usage(void) {
   ms_help(stderr,
-    "Usage: methscope _upscale index (--mrmp FILE | --binstrings FILE\n"
+    "Usage: methscope upscale-set-units (--mrmp FILE | --binstrings FILE\n"
     "       --pattern-counts FILE) -o UNITS.msui [--unit-cpgs 16384]\n\n"
     "Build the whole-genome processing-unit index used by UPDEC2. Real MRMP\n"
     "memberships are size-ranked and never split. PNA CpGs are implicit\n"
@@ -262,7 +262,7 @@ int main_upscale_residual_index(int argc, char **argv) {
       ++i; /* accepted temporarily so old scripts fail only on changed output semantics */
     } else {
       usage();
-      fprintf(stderr, "[methscope] _upscale index: bad option: %s\n", argv[i]);
+      fprintf(stderr, "[methscope] upscale-set-units: bad option: %s\n", argv[i]);
       return 1;
     }
   }
@@ -521,12 +521,12 @@ int main_upscale_residual_index(int argc, char **argv) {
     if (z > max_unit) max_unit = z;
   }
   fprintf(stderr,
-    "[methscope] _upscale index: CpGs=%" PRIu64 " real=%" PRIu64
+    "[methscope] upscale-set-units: CpGs=%" PRIu64 " real=%" PRIu64
     " PNA=%" PRIu64 " memberships=%zu\n"
-    "[methscope] _upscale index: units=%u pure=%u mixed=%u PNA=%u oversized=%u\n"
-    "[methscope] _upscale index: unit CpGs min=%" PRIu64
+    "[methscope] upscale-set-units: units=%u pure=%u mixed=%u PNA=%u oversized=%u\n"
+    "[methscope] upscale-set-units: unit CpGs min=%" PRIu64
     " mean=%.1f max=%" PRIu64 "\n"
-    "[methscope] _upscale index: wrote %s (%" PRIu64 " bytes) and %s\n",
+    "[methscope] upscale-set-units: wrote %s (%" PRIu64 " bytes) and %s\n",
     total, n_real_cpg, n_pna_cpg, n_real_groups, h.n_units, pure,
     n_real_units - pure, h.n_pna_units, oversized, min_unit,
     (double)total / h.n_units, max_unit, out_path, h.file_bytes, manifest);

@@ -75,7 +75,13 @@
   .tipbox{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:30;display:none;
      background:var(--card);color:var(--fg);border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));
      border-radius:9px;padding:10px 12px;box-shadow:0 6px 22px rgba(0,0,0,.22);font-size:.72rem;line-height:1.5}
-  .tipwrap:has(.tip:hover) .tipbox,.tipwrap:has(.tip:focus) .tipbox{display:block}
+  /* One rule per tip name, so a block with several tips shows the right box. */
+  .tipwrap:has(.tip[data-tip=mrmp]:hover) .tipbox[data-tip=mrmp],
+  .tipwrap:has(.tip[data-tip=mrmp]:focus) .tipbox[data-tip=mrmp],
+  .tipwrap:has(.tip[data-tip=msur]:hover) .tipbox[data-tip=msur],
+  .tipwrap:has(.tip[data-tip=msur]:focus) .tipbox[data-tip=msur],
+  .tipwrap:has(.tip[data-tip=msui]:hover) .tipbox[data-tip=msui],
+  .tipwrap:has(.tip[data-tip=msui]:focus) .tipbox[data-tip=msui]{display:block}
   .tipbox b{color:var(--accent)}
   .tipbox dl{margin:6px 0 0;display:grid;grid-template-columns:auto 1fr;gap:2px 10px}
   .tipbox dt{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--accent);white-space:nowrap}
@@ -154,12 +160,12 @@ git clone \
       <code class="inl">mrmp-build</code> constructs it natively from a discretized reference
       <code class="inl">.cg</code> — no YAME + awk + sort pipeline, ~576&nbsp;MB peak.</p>
     <div class="tipwrap">
-      <pre><code>methscope <span class="sub">mrmp-build</span> ref.cg <span class="tip" tabindex="0">panel.mrmp</span>
+      <pre><code>methscope <span class="sub">mrmp-build</span> ref.cg <span class="tip" data-tip="mrmp" tabindex="0">panel.mrmp</span>
 methscope <span class="sub">mrmp-inspect</span> panel.mrmp --patterns
 <span class="cm"># runtime mask — inspection only, not a pipeline step</span>
 methscope <span class="sub">mrmp-export</span> --top 1000 \
   panel.mrmp panel.cm</code></pre>
-      <span class="tipbox">
+      <span class="tipbox" data-tip="mrmp">
         <b>MRMPIDX1</b> — a rank-complete artifact. No top-K is baked in: every candidate is
         ranked and every CpG keeps its exact rank, so consumers choose their own cut.
         <dl>
@@ -177,8 +183,8 @@ methscope <span class="sub">mrmp-export</span> --top 1000 \
     <p style="margin-top:11px">Ranking is deterministic (count desc, key asc), so a build is
       byte-reproducible from the reference alone — hover <code class="inl">panel.mrmp</code> above
       for the on-disk scheme. The
-      artifact is the build pipeline's currency — <code class="inl">_upscale prepare</code>,
-      <code class="inl">_upscale index</code>, and <code class="inl">upscale-train</code> all read
+      artifact is the build pipeline's currency — <code class="inl">upscale-featurize</code>,
+      <code class="inl">upscale-set-units</code>, and <code class="inl">upscale-train</code> all read
       it, so the sidecar's group map and the mask a model ships cannot drift apart. The
       <code class="inl">.cm</code> is the runtime form, materialized into the bundle at train
       time; <code class="inl">export --mask</code> is for inspection, not a pipeline step.</p>
@@ -213,12 +219,67 @@ Blood-NK         NK CD16           0.8127</span>
   </section>
 
   <section class="card">
-    <h2>upscale <span class="m">— impute genome-wide CpG</span></h2>
-    <p>Reconstruct dense CpG methylation from a sparse methylome with a bundled decoder
-      (<code class="inl">.updecx</code>). Pure-C inference — no CUDA or BLAS at run time.</p>
-    <pre><code>methscope <span class="sub">upscale</span> -o imputed.cg \
-  models/hg38_10k1.updecx test/human_hg38_test.cg
+    <h2>upscale-train … upscale <span class="m">— the whole-genome decoder</span></h2>
+    <p>Train the unified upscale model (<code class="inl">UPDEC2</code>) on CUDA — one processing
+      unit per MRMP membership — then impute with it in pure C, no CUDA or BLAS at run time.
+      The three build steps all read the same <code class="inl">.mrmp</code>.</p>
+    <div class="tipwrap">
+      <pre><code><span class="cm"># 1. featurize the truth atlas -> sampling/truth sidecar</span>
+methscope <span class="sub">upscale-featurize</span> -o <span class="tip" data-tip="msur" tabindex="0">train.msur</span> \
+  --truth atlas.cg --mrmp panel.mrmp --embed-truth
+
+<span class="cm"># 2. group CpGs into processing units</span>
+methscope <span class="sub">upscale-set-units</span> --mrmp panel.mrmp \
+  --unit-cpgs 16384 -o <span class="tip" data-tip="msui" tabindex="0">units.msui</span>
+
+<span class="cm"># 3. train (CUDA); --split pins the exact held-out cells,
+#    else cells are cut 70/15/15 by --seed</span>
+make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80
+methscope <span class="sub">upscale-train</span> -i train.msur \
+  --index units.msui --mrmp panel.mrmp \
+  -o model.updecx --work-dir work/ \
+  --split cells.tsv
+
+<span class="cm"># 4. impute a sparse methylome with the bundle</span>
+methscope <span class="sub">upscale</span> -o imputed.cg \
+  model.updecx test/human_hg38_test.cg
 <span class="out">[methscope] upscaled 1 sample(s) x 29,401,795 CpGs (genome .cg)</span></code></pre>
+      <span class="tipbox" data-tip="msur">
+        <b>MSURAW2</b> (<code class="inl">.msur</code>) — the training sidecar. Deterministic
+        YAME-compatible downsampling: every cell × replicate, with the exact CpGs each
+        simulation retained. The truth <code class="inl">.cg</code> is never copied.
+        <dl>
+          <dt>header</dt><dd>72 B — <i>n_cells</i>, <i>n_reps</i>, <i>n_patterns</i>,
+            <i>n_cpg</i>, sampled-per-cell, section offsets</dd>
+          <dt>groups</dt><dd><i>n_cpg</i> × <code class="inl">uint16</code> — each CpG's MRMP
+            feature group, 0 = PNA/background</dd>
+          <dt>truth</dt><dd><i>n_cells</i> × <i>n_cpg</i> × <code class="inl">uint16</code> beta
+            (65535 = missing), only with <code class="inl">--embed-truth</code>, which training
+            requires</dd>
+          <dt>records</dt><dd><i>n_cells·n_reps</i> × {per-pattern beta + observed count,
+            sampled CpG positions}</dd>
+        </dl>
+        hg38 × 207 cells × 100 reps ≈ 15 GB, of which the truth block is 12.2 GB.
+      </span>
+      <span class="tipbox" data-tip="msui">
+        <b>MSUIDX1</b> (<code class="inl">.msui</code>) — the processing-unit index. Real MRMP
+        memberships are ordered by decreasing size (ternary key breaks ties) and are
+        <b>never split</b>; CpGs keep genomic order inside a membership, and PNA CpGs become
+        singleton memberships packed last.
+        <dl>
+          <dt>header</dt><dd>pattern length, target CpGs per unit, <i>n_units</i>,
+            <i>n_real_memberships</i>, <i>n_pna_units</i>, real/PNA CpG split, pattern checksum
+            tying it to the <code class="inl">.mrmp</code></dd>
+          <dt>units</dt><dd><i>n_units</i> × {output offset, first membership, membership count,
+            CpG count, flags: pure / PNA / oversized}</dd>
+          <dt>cpg</dt><dd><i>n_cpg</i> × <code class="inl">uint32</code> — permutation from
+            unit-local output slot back to genomic CpG index</dd>
+          <dt>membership</dt><dd><i>n_real_memberships</i> × {pattern key, output offset, count,
+            unit}</dd>
+        </dl>
+        hg38 at 16,384 CpGs/unit: 700 units over 2,345,190 memberships ≈ 174 MB.
+      </span>
+    </div>
   </section>
 
   <section class="card">
@@ -246,19 +307,6 @@ methscope <span class="sub">build-reference</span> --matrix query.cg panel.mrmp<
       betas are imputed at predict time — accurate even at &lt;1% genome coverage.</p>
   </section>
 
-  <section class="card">
-    <h2>upscale-train <span class="m">— whole-genome decoder</span></h2>
-    <p>Train the unified whole-genome upscale model (<code class="inl">UPDEC2</code>) on CUDA —
-      one processing unit per MRMP membership. Inference stays pure-C.
-      Source cells are cut 70/15/15 by <code class="inl">--seed</code> unless
-      <code class="inl">--split</code> pins the exact assignment.</p>
-    <pre><code>make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80
-methscope <span class="sub">upscale-train</span> -i train.msur \
-  --index units.msui --mrmp panel.mrmp \
-  -o model.updecx --work-dir work/ \
-  --split loyfer_split.tsv
-<span class="cm"># split rows: &lt;cell_index&gt;TAB&lt;train|val|test&gt;, one per source cell</span></code></pre>
-  </section>
 
   <section class="card">
     <h2>bundle / unbundle <span class="m">— package a model</span></h2>

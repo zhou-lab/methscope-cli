@@ -60,8 +60,8 @@ downstream of MRMP aggregation, not a CpG-to-MRMP encoder. Beta-only,
 beta-plus-missing, and beta-plus-count inputs are supported. PyTorch is not
 used.
 
-The `.mrmp` artifact is the build pipeline's currency: `_upscale prepare`,
-`_upscale index`, and `upscale-train` all read the same one, so the sidecar's
+The `.mrmp` artifact is the build pipeline's currency: `upscale-featurize`,
+`upscale-set-units`, and `upscale-train` all read the same one, so the sidecar's
 per-CpG group map and the mask the model ships cannot drift apart. The `.cm` is
 the *runtime* form — `upscale-train` materializes it into `--work-dir` and packs
 it into the bundle. `mrmp-export` stays available for inspection and for
@@ -99,8 +99,10 @@ Build training support with
 under `--work-dir`, so interrupted runs resume completed units. The distributed
 model still runs through the pure-C CPU inference path without CUDA or BLAS.
 
-Preparation and reference-index construction remain experimental internal
-tools under `methscope _upscale`; the Zhou 2018 evaluator is invoked by the
+The three build steps are public commands: `upscale-featurize` (MSURAW2
+sidecar), `upscale-set-units` (MSUIDX1 unit index), then `upscale-train`. Only
+the research trunk trainer and the Zhou 2018 evaluator remain under
+`methscope _upscale`; the latter is invoked by the
 non-public `analysis/zhou2018_upscale_eval.sh` script. See the MethScope lab journal (`20251216_methscope.org`) and the
 [docs page](https://zhou-lab.github.io/methscope-cli/).
 

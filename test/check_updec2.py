@@ -28,7 +28,7 @@ def main():
         (d / "counts").write_text("".join(f"{n} {p}\n" for n, p in counts))
         (d / "binstrings").write_text("".join(p + "\n" for p in order))
         idx = d / "units.msui"
-        run(exe, "_upscale", "index", "--binstrings", str(d / "binstrings"),
+        run(exe, "upscale-set-units", "--binstrings", str(d / "binstrings"),
             "--pattern-counts", str(d / "counts"), "--unit-cpgs", "4",
             "-o", str(idx))
         raw = idx.read_bytes()

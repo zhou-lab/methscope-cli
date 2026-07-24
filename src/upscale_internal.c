@@ -8,10 +8,9 @@ static int internal_usage(void) {
   ms_help(stderr,
     "Usage: methscope _upscale <command> [options]\n\n"
     "Internal development tools; interfaces and file formats may change:\n"
-    "  prepare   Build an MSURAW2 sampling/truth sidecar\n"
-    "  index     Build the whole-genome MSUIDX1 processing-unit index\n"
     "  trunk-train Train a research shared 512-dimensional decoder trunk\n"
-    "  eval      Legacy hybrid research evaluator\n\n"
+    "  eval        Legacy hybrid research evaluator\n\n"
+    "The pipeline steps are public: upscale-featurize, upscale-set-units.\n\n"
     "These commands are intentionally omitted from the public command list.\n");
   return 1;
 }
@@ -22,10 +21,6 @@ int main_upscale_internal(int argc, char **argv) {
     internal_usage();
     return 0;
   }
-  if (!strcmp(argv[1], "prepare"))
-    return main_upscale_prepare(argc - 1, argv + 1);
-  if (!strcmp(argv[1], "index"))
-    return main_upscale_residual_index(argc - 1, argv + 1);
   if (!strcmp(argv[1], "trunk-train"))
     return main_upscale_trunk_train(argc - 1, argv + 1);
   if (!strcmp(argv[1], "eval"))
