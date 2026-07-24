@@ -26,6 +26,7 @@ static int usage(void) {
     "  deconv       Estimate cell-type proportions (NNLS): mixture.cg + panel.refx\n"
     "  upscale      Impute CpG methylation from a sparse methylome\n"
     "  upscale-train Train the unified whole-genome upscale model (CUDA)\n"
+    "  mrmp         Build/inspect/export the MRMP membership-pattern mask from a reference .cg\n"
     "  train        Train a label classifier (xgboost/threshold/logistic) -> model.ubjx\n"
     "  inspect      Report a bundle's framework mark, on-disk layout, and model summary\n"
     "  bundle       Wrap a model + its MRMP (+ labels via -l) -> self-contained bundle\n"
@@ -70,6 +71,7 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "[methscope] research evaluator moved to '_upscale eval'\n");
     return 1;
   }
+  if (strcmp(argv[1], "mrmp")       == 0) return main_mrmp(argc - 1, argv + 1);
   if (strcmp(argv[1], "train")      == 0) return main_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "inspect")    == 0) return main_inspect(argc - 1, argv + 1);
   if (strcmp(argv[1], "bundle")     == 0) return main_bundle(argc - 1, argv + 1);

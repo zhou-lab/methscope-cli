@@ -107,6 +107,7 @@ int main_upscale_hybrid_eval(int argc, char *argv[]);
 int main_upscale_trunk_train(int argc, char *argv[]);
 int main_bundle(int argc, char *argv[]);
 int main_unbundle(int argc, char *argv[]);
+int main_mrmp(int argc, char *argv[]);
 
 #define METHSCOPE_VERSION "0.1.1"
 
