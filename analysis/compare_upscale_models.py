@@ -155,7 +155,7 @@ class HybridModel:
 
 
 def sample_rows(data_path, model, split, rows, targets_per_row, seed,
-                include_observed):
+                include_observed, split_file=None):
     path = Path(data_path)
     with path.open("rb") as f:
         d = struct.unpack("<8s4IQ2I4Q", f.read(72))
@@ -166,7 +166,7 @@ def sample_rows(data_path, model, split, rows, targets_per_row, seed,
         raise ValueError("sidecar dimensions disagree")
     raw = np.memmap(path, "u1", "r")
     truth = np.memmap(path, "<u2", "r", truth_off, (n_cells, n_cpg))
-    _, val, test = source_split(n_cells, seed)
+    _, val, test = source_split(n_cells, seed, split_file)
     cells = val if split == "validation" else \
         test if split == "test" else list(range(n_cells))
     rng = np.random.default_rng(seed + 987654321)
@@ -298,6 +298,9 @@ def main():
     ap.add_argument("--rows", type=int, default=32)
     ap.add_argument("--targets-per-row", type=int, default=131072)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--split-file",
+                    help="upscale-train --split file the model was trained with;\n"
+                         "omit only for a seeded 70/15/15 model")
     ap.add_argument("--include-observed", action="store_true")
     ap.add_argument("--row-tsv")
     ap.add_argument("--log-every-blocks", type=int, default=100)
@@ -309,7 +312,8 @@ def main():
             current.patterns != hybrid.patterns:
         raise ValueError("current and hybrid dimensions disagree")
     rows = sample_rows(args.data, current, args.split, args.rows,
-                       args.targets_per_row, args.seed, args.include_observed)
+                       args.targets_per_row, args.seed, args.include_observed,
+                       args.split_file)
 
     current_pred, hybrid_pred = [], []
     for i, row in enumerate(rows):

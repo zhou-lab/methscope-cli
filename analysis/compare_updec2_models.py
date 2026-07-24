@@ -116,6 +116,9 @@ def main():
     ap.add_argument("--rows", type=int, default=32)
     ap.add_argument("--targets-per-row", type=int, default=131072)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--split-file",
+                    help="upscale-train --split file the model was trained with;\n"
+                         "omit only for a seeded 70/15/15 model")
     ap.add_argument("--include-observed", action="store_true")
     ap.add_argument("--row-tsv")
     args = ap.parse_args()
@@ -132,7 +135,7 @@ def main():
         raise ValueError("sidecar dimensions differ")
     raw = np.memmap(dp, "u1", "r")
     truth = np.memmap(dp, "<u2", "r", truth_off, (n_cells, n_cpg))
-    _, val, test = source_split(n_cells, args.seed)
+    _, val, test = source_split(n_cells, args.seed, args.split_file)
     cells = val if args.split == "validation" else \
             test if args.split == "test" else list(range(n_cells))
     rng = np.random.default_rng(args.seed + 987654321)

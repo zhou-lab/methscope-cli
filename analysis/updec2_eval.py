@@ -27,7 +27,15 @@ class Pcg32:
         return ((x >> r) | (x << ((-r) & 31))) & 0xFFFFFFFF
 
 
-def source_split(n, seed):
+def source_split(n, seed, split_file=None):
+    """Reproduce the trainer's train/val/test cell split.
+
+    Must match src/upunit_cuda.cu: the seeded 70/15/15 shuffle, or the same
+    --split file the model was trained with.  Scoring a --split model against
+    the seeded cut silently evaluates on cells it was trained on.
+    """
+    if split_file:
+        return read_split(split_file, n)
     cells = list(range(n))
     rng = Pcg32(seed)
     for q in range(n, 1, -1):
@@ -35,6 +43,36 @@ def source_split(n, seed):
         cells[q - 1], cells[j] = cells[j], cells[q - 1]
     nt, nv = n * 70 // 100, n * 15 // 100
     return cells[:nt], cells[nt:nt + nv], cells[nt + nv:]
+
+
+def read_split(path, n):
+    """Parse an upscale-train --split file (see src/upsplit.c) into cell lists."""
+    groups = {"train": [], "val": [], "test": []}
+    seen = set()
+    first = True
+    for line in Path(path).read_text().splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) < 2:
+            raise ValueError(f"{path}: row is not <cell_index>TAB<split>: {line}")
+        try:
+            idx = int(fields[0])
+        except ValueError:
+            if first:          # one leading non-numeric row is the header
+                first = False
+                continue
+            raise
+        first = False
+        if fields[1] not in groups:
+            raise ValueError(f"{path}: split must be train, val, or test: {fields[1]}")
+        if idx in seen:
+            raise ValueError(f"{path}: cell index is assigned twice: {idx}")
+        seen.add(idx)
+        groups[fields[1]].append(idx)
+    if len(seen) != n or max(seen) != n - 1:
+        raise ValueError(f"{path}: expected one row per source cell ({n}), got {len(seen)}")
+    return groups["train"], groups["val"], groups["test"]
 
 
 def model_section(path):
@@ -68,6 +106,9 @@ def main():
     ap.add_argument("--rows-per-unit", type=int, default=8)
     ap.add_argument("--targets", type=int, default=8192)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--split-file",
+                    help="upscale-train --split file the model was trained with;\n"
+                         "omit only for a seeded 70/15/15 model")
     ap.add_argument("--include-observed", action="store_true",
                     help="score sparse input CpGs too (historical Zhou/Hao protocol)")
     ap.add_argument("--shared-rows", action="store_true",
@@ -104,7 +145,7 @@ def main():
         raise ValueError("model and sidecar dimensions differ")
     raw = np.memmap(data_path, "u1", "r")
     truth = np.memmap(data_path, "<u2", "r", truth_off, (n_cells, n_cpg))
-    _, val_cells, test_cells = source_split(n_cells, args.seed)
+    _, val_cells, test_cells = source_split(n_cells, args.seed, args.split_file)
     cells = val_cells if args.split == "validation" else \
             test_cells if args.split == "test" else list(range(n_cells))
     shared = []

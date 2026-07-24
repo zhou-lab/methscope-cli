@@ -23,6 +23,9 @@ def main():
     ap.add_argument("--data", required=True)
     ap.add_argument("-o", "--output", required=True)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--split-file",
+                    help="upscale-train --split file the model was trained with;\n"
+                         "omit only for a seeded 70/15/15 model")
     ap.add_argument("--cpgs-per-unit", type=int, default=1024)
     args = ap.parse_args()
 
@@ -42,7 +45,7 @@ def main():
     with dp.open("rb") as f:
         dh = struct.unpack("<8s4IQ2I4Q", f.read(72))
     n_cells, side_cpg, truth_off = dh[2], dh[5], dh[9]
-    train, _, _ = source_split(n_cells, args.seed)
+    train, _, _ = source_split(n_cells, args.seed, args.split_file)
     truth = np.memmap(dp, "<u2", "r", truth_off, (n_cells, side_cpg))
 
     mixed = []
