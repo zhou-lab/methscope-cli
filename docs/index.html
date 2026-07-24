@@ -84,7 +84,9 @@
   :root:not(.js-tips) .tipwrap:has(.tip[data-tip=msur]:hover) .tipbox[data-tip=msur],
   :root:not(.js-tips) .tipwrap:has(.tip[data-tip=msur]:focus) .tipbox[data-tip=msur],
   :root:not(.js-tips) .tipwrap:has(.tip[data-tip=msui]:hover) .tipbox[data-tip=msui],
-  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=msui]:focus) .tipbox[data-tip=msui]{display:block}
+  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=msui]:focus) .tipbox[data-tip=msui],
+  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=updecx]:hover) .tipbox[data-tip=updecx],
+  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=updecx]:focus) .tipbox[data-tip=updecx]{display:block}
   #tipfloat{position:fixed;z-index:60;display:none;max-width:min(600px,93vw);pointer-events:none}
   #tipfloat.on{display:block}
   .tipbox b,#tipfloat b{color:var(--accent)}
@@ -162,14 +164,14 @@ git clone \
   </section>
 
   <section class="card">
-    <h2>mrmp-build / -inspect / -export <span class="m">— the MRMP foundation</span></h2>
+    <h2>mrmp-build / mrmp-export <span class="m">— the MRMP foundation</span></h2>
     <p>An <b>MRMP</b> is one recurrent methylation pattern across a reference panel; the mask that
       labels every genomic CpG with its pattern is what every model is built on.
       <code class="inl">mrmp-build</code> constructs it natively from a discretized reference
       <code class="inl">.cg</code> — no YAME + awk + sort pipeline, ~576&nbsp;MB peak.</p>
     <div class="tipwrap">
       <pre><code>methscope <span class="sub">mrmp-build</span> ref.cg <span class="tip" data-tip="mrmp" tabindex="0">panel.mrmp</span>
-methscope <span class="sub">mrmp-inspect</span> panel.mrmp --patterns
+methscope <span class="sub">inspect</span> panel.mrmp --patterns
 <span class="cm"># runtime mask — inspection only, not a pipeline step</span>
 methscope <span class="sub">mrmp-export</span> --top 1000 \
   panel.mrmp panel.cm</code></pre>
@@ -197,11 +199,17 @@ methscope <span class="sub">mrmp-export</span> --top 1000 \
   </section>
 
   <section class="card">
-    <h2>predict <span class="m">— cell type / sex</span></h2>
-    <p>Classify a methylome against a bundled classifier
-      (<code class="inl">xgboost</code> / <code class="inl">logistic</code> /
-      <code class="inl">threshold</code>) → label + confidence per cell.</p>
-    <pre><code><span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
+    <h2>train … predict <span class="m">— cell type / sex</span></h2>
+    <p>Fit a label classifier over MRMP features and bundle it with its MRMP + labels in one
+      step, then classify with it. Three frameworks (<code class="inl">xgboost</code> /
+      <code class="inl">logistic</code> / <code class="inl">threshold</code>); the bundle records
+      which.</p>
+    <pre><code><span class="cm"># fit + bundle in one step</span>
+methscope <span class="sub">train</span> -l labels.txt \
+  -o hg38_celltype.ubjx query.cg panel.mrmp
+<span class="cm"># --framework xgboost | logistic | threshold</span>
+
+<span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
 methscope <span class="sub">predict</span> cells.cg models/hg38_celltype.ubjx
 <span class="out">cell             prediction_label  confidence
 Oligodendrocyte  ODC               0.9151
@@ -209,14 +217,22 @@ Pancreas-Beta    Beta              0.9307
 Blood-NK         NK CD16           0.8127</span>
 <span class="cm"># Loyfer truth -> Zhou label: 4/4 concordant.
 # same call runs a sex / age / any bundled model</span></code></pre>
+    <p style="margin-top:11px">Linear models store per-feature training means, so missing/sparse
+      betas are imputed at predict time — accurate even at &lt;1% genome coverage.</p>
   </section>
 
   <section class="card">
-    <h2>deconv <span class="m">— cell-type proportions</span></h2>
-    <p>Non-negative least squares of a mixture <code class="inl">.cg</code> against a
-      <code class="inl">.refx</code> signature panel → a proportion per cell type. Uses all
-      MRMP patterns; robust to extreme sparsity (split-MRMP references).</p>
-    <pre><code>methscope <span class="sub">deconv</span> test/human_hg38_immune_mixture.cg \
+    <h2>build-reference … deconv <span class="m">— cell-type proportions</span></h2>
+    <p>Summarize per-cell-type pseudobulks against the MRMP into a self-contained
+      <code class="inl">.refx</code>, then solve a mixture against it by non-negative least
+      squares → a proportion per cell type. Uses all MRMP patterns; robust to extreme sparsity.</p>
+    <pre><code><span class="cm"># 1. build the signature panel</span>
+methscope <span class="sub">build-reference</span> -o panel.refx \
+  celltypes.cg panel.mrmp
+<span class="cm"># --matrix emits the raw record x pattern beta TSV instead</span>
+
+<span class="cm"># 2. deconvolve a mixture against it</span>
+methscope <span class="sub">deconv</span> test/human_hg38_immune_mixture.cg \
   models/hg38_65celltypes.refx
 <span class="out">cell  … Macrophage  Mono    NK_CD56  …
 1     … 0.7486      0.2370  0.0000   …</span></code></pre>
@@ -243,7 +259,7 @@ methscope <span class="sub">upscale-set-units</span> --unit-cpgs 16384 \
 make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80
 methscope <span class="sub">upscale-train</span> -i train.msur \
   --units units.msui --mrmp panel.mrmp \
-  -o model.updecx --work-dir work/ \
+  -o <span class="tip" data-tip="updecx" tabindex="0">model.updecx</span> --work-dir work/ \
   --split cells.tsv
 
 <span class="cm"># 4. impute a sparse methylome with the bundle</span>
@@ -275,33 +291,21 @@ methscope <span class="sub">upscale</span> -o imputed.cg \
 <span class="k">cpg</span>        4 B × 29,401,795   output slot → genomic CpG index
 <span class="k">membership</span> 24 B × 2,345,190   {key, offset, count, unit}</pre>
       </span>
+      <span class="tipbox" data-tip="updecx">
+        <b>UPDEC2</b> <span class="tdim">— in an MSBNDL1 bundle with its runtime .cm mask</span>
+<pre class="tsch"><span class="c">hg38 · 1000 MRMP in · 700 units · 29,401,795 CpGs out · 2.8 GB</span>
+
+<span class="k">header</span>     patterns, input_dim, n_units, activation, section offsets
+<span class="k">mean/scale</span> f32 × input_dim   train-cell standardization
+<span class="k">units</span>      32 B × 700        {out offset, param offset, bytes, n_cpg, rank}
+<span class="k">cpg</span>        4 B × 29,401,795  output slot → genomic CpG index
+<span class="k">params</span>     f32               per unit: z = act(A·x + a); logit = E·z + b
+                             <span class="c">pure rank 16 · mixed/PNA rank 32</span></pre>
+      </span>
     </div>
   </section>
 
-  <section class="card">
-    <h2>build-reference <span class="m">— deconvolution reference</span></h2>
-    <p>Summarize per-cell-type pseudobulks against the MRMP and bundle the signature + its MRMP
-      into a self-contained <code class="inl">.refx</code> for <code class="inl">deconv</code>.
-      <code class="inl">--matrix</code> emits the raw record&nbsp;×&nbsp;pattern beta TSV instead
-      (the featurization, also reachable with <code class="inl">yame summary</code>).</p>
-    <pre><code><span class="cm"># a .refx deconvolution reference (default)</span>
-methscope <span class="sub">build-reference</span> -o panel.refx \
-  celltypes.cg panel.mrmp
 
-<span class="cm"># or the raw feature matrix (TSV)</span>
-methscope <span class="sub">build-reference</span> --matrix query.cg panel.mrmp</code></pre>
-  </section>
-
-  <section class="card">
-    <h2>train <span class="m">— fit a classifier</span></h2>
-    <p>Train a label classifier over MRMP features and bundle it with its MRMP + labels in one
-      step. Three frameworks; the bundle records which.</p>
-    <pre><code>methscope <span class="sub">train</span> -l labels.txt \
-  -o hg38_celltype.ubjx query.cg panel.cm
-<span class="cm"># --framework xgboost | logistic | threshold</span></code></pre>
-    <p style="margin-top:11px">Linear models store per-feature training means, so missing/sparse
-      betas are imputed at predict time — accurate even at &lt;1% genome coverage.</p>
-  </section>
 
 
   <section class="card">
@@ -315,15 +319,23 @@ methscope <span class="sub">unbundle</span> model.ubjx      <span class="cm"># -
   </section>
 
   <section class="card">
-    <h2>inspect <span class="m">— look inside a bundle</span></h2>
-    <p>Report a bundle's framework mark, on-disk section layout, and model summary (labels,
-      weights, feature count).</p>
+    <h2>inspect <span class="m">— look inside any artifact</span></h2>
+    <p>One command for every format, detected from its magic: a bundle's framework mark, section
+      layout, and model summary; or the dimensions and parameters of a
+      <code class="inl">.mrmp</code>, <code class="inl">.msui</code>, or
+      <code class="inl">.msur</code>.</p>
     <pre><code>methscope <span class="sub">inspect</span> models/hg38_sex.ubjx
 <span class="out">container  MSBNDL1 — 3 sections, 30,931 bytes
   0  mrmp    fmt2 MRMP definition, 3 states
   1  kind    "logistic" framework mark
   2  model   methscope-linear text spec
-     labels  Female, Male</span></code></pre>
+     labels  Female, Male</span>
+
+methscope <span class="sub">inspect</span> units.msui
+<span class="out">format            MSUIDX1 v1
+cpgs              29401795  (26841955 real + 2559840 PNA)
+units             700  (157 PNA)
+real_memberships  2345190</span></code></pre>
   </section>
 
 </div>
@@ -383,36 +395,6 @@ paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) \
   </div>
 </section>
 
-<section class="full">
-  <h2>The MRMP idea <span class="m">— why a query .cg runs against a tiny feature set</span></h2>
-  <p>DNA methylation is stored <b>positionally</b> as compact YAME <code class="inl">.cg</code> files —
-    one M/U or beta value per CpG in a fixed genome order, with no coordinates inside. A
-    <b>Most Recurrent Methylation Pattern (MRMP)</b> mask (<code class="inl">.cm</code>, or a
-    <code class="inl">.mrmp</code> artifact) labels every CpG with the recurrent cross-sample
-    pattern it belongs to. To featurize a query, MethScope averages the observed CpGs within each
-    pattern → one beta per pattern (a few hundred to a few thousand features), which is what every
-    model consumes. Because the reference panel's rare, cell-type-specific patterns are exactly the
-    informative ones, this stays accurate under extreme sparsity — single-cell and spatial input,
-    or cfDNA.</p>
-  <div class="cols">
-    <div>
-      <h3>Featurize once, reuse everywhere</h3>
-      <pre><code><span class="cm"># the shared step behind predict/deconv/train</span>
-methscope <span class="sub">build-reference</span> --matrix query.cg panel.mrmp
-<span class="out">cell   P1     P2     P3    …  Pna
-1      0.91   0.04   NA    …  0.62</span>
-<span class="cm"># Pna = background; NA = no observed CpG</span></code></pre>
-    </div>
-    <div>
-      <h3>Self-contained bundles</h3>
-      <pre><code><span class="cm"># one file = inner model + its MRMP + labels</span>
-model.ubjx   <span class="cm"># classifier   (predict)</span>
-model.updecx <span class="cm"># upscale decoder (upscale)</span>
-model.refx   <span class="cm"># deconv reference (deconv)</span>
-<span class="cm"># inspect prints the framework `kind` mark</span></code></pre>
-    </div>
-  </div>
-</section>
 
 <section class="full">
   <h2>Pretrained models <span class="m">— <a href="https://github.com/zhou-lab/methscope_data">zhou-lab/methscope_data</a></span></h2>

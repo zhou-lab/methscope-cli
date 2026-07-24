@@ -30,7 +30,6 @@ static int usage(void) {
 
   fprintf(stderr, "%sMRMP construction%s %s— the feature foundation%s\n", B, R, D, R);
   CMD("mrmp-build",   "Construct the MRMP artifact from a discretized reference .cg");
-  CMD("mrmp-inspect", "Report an artifact's dimensions, parameters, and top patterns");
   CMD("mrmp-export",  "Emit the runtime .cm mask (and pattern / count tables)");
 
   fprintf(stderr, "\n%sClassification%s %s(cell type, sex, ...)%s\n", B, R, D, R);
@@ -50,7 +49,7 @@ static int usage(void) {
   fprintf(stderr, "\n%sModel bundles%s\n", B, R);
   CMD("bundle",       "Wrap a model + its MRMP into a self-contained bundle");
   CMD("unbundle",     "Unpack a bundle into its model, MRMP, and outcpg mask");
-  CMD("inspect",      "Report a bundle's framework, layout, and model summary");
+  CMD("inspect",      "Describe any artifact: bundle, .mrmp, .msui, or .msur");
 
   fprintf(stderr, "\n%sRun 'methscope <command> -h' for command-specific options.%s\n\n",
           D, R);
@@ -98,7 +97,6 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   if (strcmp(argv[1], "mrmp-build")   == 0) return main_mrmp_build(argc - 1, argv + 1);
-  if (strcmp(argv[1], "mrmp-inspect") == 0) return main_mrmp_inspect(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-export")  == 0) return main_mrmp_export(argc - 1, argv + 1);
   if (strcmp(argv[1], "train")      == 0) return main_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "inspect")    == 0) return main_inspect(argc - 1, argv + 1);

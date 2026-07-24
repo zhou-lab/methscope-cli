@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /* Native MRMP (methylation reference membership pattern) construction.
  *
- * `methscope mrmp-build` / `mrmp-inspect` / `mrmp-export` replace the YAME +
- * awk + sort + text pipeline that used to define the MRMP mask. mrmp-build
- * reads a discretized (pseudo-binary) reference .cg, reproduces `rowop -o binstring`
- * per-CpG resolution deterministically, counts exact membership patterns,
- * ranks them, and serializes a self-describing MRMPIDX1 artifact.
+ * `methscope mrmp-build` / `mrmp-export` replace the YAME + awk + sort + text
+ * pipeline that used to define the MRMP mask. mrmp-build reads a discretized
+ * (pseudo-binary) reference .cg, reproduces `rowop -o binstring` per-CpG
+ * resolution deterministically, counts exact membership patterns, ranks them,
+ * and serializes a self-describing MRMPIDX1 artifact. `methscope inspect`
+ * reports on it.
  *
  * A pattern is one fixed-length ternary string over the reference samples:
  *   '0' unmethylated, '1' methylated, '2' missing/ambiguous.
@@ -61,13 +62,13 @@ typedef struct {
 } mrmp_pattern_t;
 
 int main_mrmp_build(int argc, char *argv[]);
-int main_mrmp_inspect(int argc, char *argv[]);
 int main_mrmp_export(int argc, char *argv[]);
+int main_mrmp_inspect(int argc, char *argv[]);   /* the MRMPIDX1 arm of `inspect` */
 
-/* The artifact is the build pipeline's currency: `_upscale prepare`, `_upscale
- * index`, and `upscale-train` all read it, so the per-CpG mask and the group
- * map they use cannot drift apart.  The .cm exists only as the runtime form,
- * materialized into the model bundle. */
+/* The artifact is the build pipeline's currency: `upscale-featurize`,
+ * `upscale-set-units`, and `upscale-train` all read it, so the per-CpG mask and
+ * the group map they use cannot drift apart.  The .cm exists only as the
+ * runtime form, materialized into the model bundle. */
 
 /* Nonzero if PATH is a MRMPIDX1 artifact rather than an exported .cm mask. */
 int ms_mrmp_is_artifact(const char *path);

@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include "methscope.h"
+#include "mrmp.h"
 #include "bundle.h"
 #include "bmeta.h"
 #include "updec2.h"
@@ -32,15 +33,20 @@ static int inspect_usage(void) {
   ms_help(stderr,
     "\n"
     "Usage:\n"
-    "  methscope inspect <model.ubjx|.updecx|.refx>\n"
+    "  methscope inspect <FILE>\n"
     "\n"
     "Purpose:\n"
-    "  Describe a bundle without running it: its framework mark (kind), the on-disk\n"
-    "  section layout (offset/size/contents), and a breakdown of the model section\n"
-    "  (labels, feature/pattern counts, linear-model weights).\n"
+    "  Describe any methscope artifact without running it. The format is detected\n"
+    "  from its magic:\n"
+    "    .ubjx/.updecx/.refx  bundle: kind mark, section layout, model breakdown\n"
+    "    .mrmp   MRMPIDX1  pattern set: dimensions, binstring parameters, top ranks\n"
+    "    .msui   MSUIDX1   processing-unit index: units, memberships, CpG split\n"
+    "    .msur   MSURAW2   training sidecar: cells, replicates, embedded truth\n"
     "\n"
     "Options:\n"
-    "  -h   Show this help message.\n"
+    "  --patterns   .mrmp only: list the top-ranked patterns\n"
+    "  --top K      .mrmp only: how many to list (default 20)\n"
+    "  -h           Show this help message.\n"
     "\n");
   return 1;
 }
@@ -104,10 +110,27 @@ int main_inspect(int argc, char *argv[]) {
   if (argc == 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
     inspect_usage(); return 0;
   }
+  /* The first bare argument is the file; --top takes a value, so skip its. */
+  const char *path = NULL;
+  for (int i = 1; i < argc && !path; ++i)
+    if (argv[i][0] != '-' && (i == 1 || strcmp(argv[i - 1], "--top")))
+      path = argv[i];
+  if (!path) return inspect_usage();
+
+  /* Detect the artifact from its magic and hand off to the owning reporter. */
+  unsigned char magic[8] = {0};
+  int mfd = open(path, O_RDONLY);
+  if (mfd < 0) idie("cannot open", path);
+  ssize_t got = pread(mfd, magic, sizeof(magic), 0);
+  close(mfd);
+  if (got < 8) idie("file is too short to identify", path);
+  if (!memcmp(magic, "MRMPIDX1", 8)) return main_mrmp_inspect(argc, argv);
+  if (!memcmp(magic, "MSUIDX1", 7)) { ms_msui_report(path); return 0; }
+  if (!memcmp(magic, "MSURAW2", 7)) { ms_msur_report(path); return 0; }
+
   if (argc != 2) return inspect_usage();
-  const char *path = argv[1];
   if (!ms_bundle_is(path))
-    idie("not a methscope bundle (.ubjx/.updecx/.refx)", path);
+    idie("not a methscope bundle, .mrmp, .msui, or .msur", path);
 
   char  *kind = ms_bundle_kind(path);               /* NULL if unmarked */
   ms_bundle_entry_t me;

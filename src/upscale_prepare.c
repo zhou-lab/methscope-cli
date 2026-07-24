@@ -306,3 +306,32 @@ int main_upscale_prepare(int argc, char *argv[]) {
   fprintf(stderr, "[methscope] upscale-featurize: wrote %s and %s\n", out, manifest);
   return 0;
 }
+
+/* ---- `methscope inspect DATA.msur` -------------------------------------- */
+
+void ms_msur_report(const char *path) {
+  FILE *f = fopen(path, "rb");
+  if (!f) pdie("cannot open", path);
+  msur_header_t h;
+  if (fread(&h, 1, sizeof(h), f) != sizeof(h)) pdie("truncated", path);
+  if (fclose(f)) pdie("error closing", path);
+  if (memcmp(h.magic, MSUR_MAGIC, 8) || h.version != MSUR_VERSION)
+    pdie("not a MSURAW2 training sidecar", path);
+  int truth = (h.flags & MSUR_F_TRUTH_U16) && h.truth_offset;
+  printf("format\tMSURAW2 v%u\n", h.version);
+  printf("cells\t%u\n", h.n_cells);
+  printf("replicates\t%u\n", h.n_reps);
+  printf("rows\t%" PRIu64 "\t(cells x replicates)\n",
+         (uint64_t)h.n_cells * h.n_reps);
+  printf("cpgs\t%" PRIu64 "\n", h.n_cpg);
+  printf("patterns\t%u\n", h.n_patterns);
+  printf("sampled_per_cell\t%u\n", h.sampled_per_cell);
+  printf("embedded_truth\t%s\n", truth ? "yes (trainable)" :
+         "no (upscale-train will reject it)");
+  printf("groups_bytes\t%" PRIu64 "\n", h.n_cpg * 2);
+  if (truth)
+    printf("truth_bytes\t%" PRIu64 "\n", (uint64_t)h.n_cells * h.n_cpg * 2);
+  printf("record_bytes\t%" PRIu64 "\n", h.record_bytes);
+  printf("records_bytes\t%" PRIu64 "\n",
+         (uint64_t)h.n_cells * h.n_reps * h.record_bytes);
+}

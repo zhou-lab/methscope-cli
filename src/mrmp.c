@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-/* Native MRMP construction: `methscope mrmp-build` / `mrmp-inspect` / `mrmp-export`.
+/* Native MRMP construction: `methscope mrmp-build` / `mrmp-export`, plus the
+ * MRMPIDX1 arm of `methscope inspect`.
  * See mrmp.h for the artifact format and the binstring semantics reproduced. */
 #include <errno.h>
 #include <inttypes.h>
@@ -426,11 +427,11 @@ static void mrmp_close(mrmp_reader_t *r) {
 /* ---------------- inspect ----------------------------------------------- */
 
 int main_mrmp_inspect(int argc, char *argv[]) {
-  g_cmd = "mrmp-inspect";
+  g_cmd = "inspect";
   const char *path = NULL; int show_patterns = 0; uint32_t top_k = 20;
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-      ms_help(stderr, "Usage: methscope mrmp-inspect [options] IN.mrmp\n\n"
+      ms_help(stderr, "Usage: methscope inspect [options] IN.mrmp\n\n"
         "  IN.mrmp      MRMPIDX1 artifact to report on\n\n"
         "  --patterns   list the top-ranked patterns after the header\n"
         "  --top K      how many to list (default 20)\n");

@@ -555,3 +555,24 @@ int main_upscale_residual_index(int argc, char **argv) {
   if (mmap_fd >= 0) close(mmap_fd);
   return 0;
 }
+
+/* ---- `methscope inspect UNITS.msui` ------------------------------------- */
+
+void ms_msui_report(const char *path) {
+  FILE *f = fopen(path, "rb");
+  if (!f) fail_path("cannot open", path);
+  msui_header_t h;
+  if (fread(&h, 1, sizeof(h), f) != sizeof(h)) fail_path("truncated", path);
+  if (fclose(f)) fail_path("error closing", path);
+  if (memcmp(h.magic, "MSUIDX1", 7) || h.version != 1)
+    fail_path("not a MSUIDX1 processing-unit index", path);
+  printf("format\tMSUIDX1 v%u\n", h.version);
+  printf("cpgs\t%" PRIu64 "\t(%" PRIu64 " real + %" PRIu64 " PNA)\n",
+         h.n_cpg, h.n_real_cpg, h.n_pna_cpg);
+  printf("pattern_length\t%u\n", h.pattern_length);
+  printf("target_unit_cpgs\t%u\n", h.target_unit_cpgs);
+  printf("units\t%u\t(%u PNA)\n", h.n_units, h.n_pna_units);
+  printf("real_memberships\t%u\n", h.n_real_memberships);
+  printf("pattern_checksum\t%016" PRIx64 "\n", h.pattern_checksum);
+  printf("file_bytes\t%" PRIu64 "\n", h.file_bytes);
+}
