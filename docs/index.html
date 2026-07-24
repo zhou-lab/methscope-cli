@@ -8,15 +8,15 @@
 <style>
   :root{
     --bg:#fbfdfd;--fg:#152029;--muted:#51636b;--line:#e2eaea;--soft:#eef5f4;--card:#ffffff;
-    --accent:#0f766e;--accent-2:#0d9488;--accent-soft:#d5f5ef;--code-bg:#0b1a1a;--code-fg:#e3f2ef;--cm:#6f9490;--ok:#22c55e;
+    --accent:#0f766e;--accent-2:#0d9488;--accent-soft:#d5f5ef;--on-accent:#ffffff;--code-bg:#0b1a1a;--code-fg:#e3f2ef;--cm:#6f9490;--ok:#22c55e;
     --shadow:0 1px 2px rgba(15,45,45,.04),0 6px 20px rgba(15,45,45,.05);
   }
   @media (prefers-color-scheme:dark){:root{
     --bg:#08110f;--fg:#e3f2ef;--muted:#8fa8a3;--line:#1c2b28;--soft:#0f1c19;--card:#0f1a18;
-    --accent:#5eead4;--accent-2:#2dd4bf;--accent-soft:#123330;--code-bg:#050d0c;--code-fg:#d7ece8;--cm:#5f7a76;--ok:#4ade80;
+    --accent:#5eead4;--accent-2:#2dd4bf;--accent-soft:#123330;--on-accent:#06241f;--code-bg:#050d0c;--code-fg:#d7ece8;--cm:#5f7a76;--ok:#4ade80;
     --shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}}
-  :root[data-theme=light]{--bg:#fbfdfd;--fg:#152029;--muted:#51636b;--line:#e2eaea;--soft:#eef5f4;--card:#fff;--accent:#0f766e;--accent-2:#0d9488;--accent-soft:#d5f5ef;--code-bg:#0b1a1a;--code-fg:#e3f2ef;--cm:#6f9490;--ok:#22c55e;--shadow:0 1px 2px rgba(15,45,45,.04),0 6px 20px rgba(15,45,45,.05);}
-  :root[data-theme=dark]{--bg:#08110f;--fg:#e3f2ef;--muted:#8fa8a3;--line:#1c2b28;--soft:#0f1c19;--card:#0f1a18;--accent:#5eead4;--accent-2:#2dd4bf;--accent-soft:#123330;--code-bg:#050d0c;--code-fg:#d7ece8;--cm:#5f7a76;--ok:#4ade80;--shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}
+  :root[data-theme=light]{--bg:#fbfdfd;--fg:#152029;--muted:#51636b;--line:#e2eaea;--soft:#eef5f4;--card:#fff;--accent:#0f766e;--accent-2:#0d9488;--accent-soft:#d5f5ef;--on-accent:#ffffff;--code-bg:#0b1a1a;--code-fg:#e3f2ef;--cm:#6f9490;--ok:#22c55e;--shadow:0 1px 2px rgba(15,45,45,.04),0 6px 20px rgba(15,45,45,.05);}
+  :root[data-theme=dark]{--bg:#08110f;--fg:#e3f2ef;--muted:#8fa8a3;--line:#1c2b28;--soft:#0f1c19;--card:#0f1a18;--accent:#5eead4;--accent-2:#2dd4bf;--accent-soft:#123330;--on-accent:#06241f;--code-bg:#050d0c;--code-fg:#d7ece8;--cm:#5f7a76;--ok:#4ade80;--shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased}
   .wrap{max-width:1520px;margin:0 auto;padding:0 22px 44px}
@@ -27,6 +27,20 @@
   h1 b{font-weight:800}
   .badge{margin-left:9px;font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
      color:var(--accent);background:var(--accent-soft);border:1px solid var(--line);padding:2px 8px;border-radius:20px;vertical-align:middle}
+  .badge.ver{margin-left:6px;color:var(--muted);background:transparent;text-transform:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .titlerow{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px}
+  .titlerow .badge,.titlerow .badge.ver{margin-left:0}
+  /* header conda-install badge: copy-able command + anaconda.org link */
+  .install{display:inline-flex;align-items:stretch;gap:0;border:1px solid var(--accent);border-radius:6px;overflow:hidden;margin-left:4px}
+  #install-btn{font:inherit;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.74rem;cursor:pointer;border:0;
+     color:var(--on-accent);background:var(--accent);padding:.42em .7em;line-height:1.15;display:inline-flex;align-items:center;gap:.5em;white-space:nowrap}
+  #install-btn:hover{filter:brightness(1.08)}
+  #install-btn:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
+  #install-btn .ico::before{content:"⧉";opacity:.75}
+  #install-btn.done .ico::before{content:"✓";opacity:1}
+  .install .ana{display:inline-flex;align-items:center;padding:.42em .55em;font-size:.72rem;text-decoration:none;
+     color:var(--accent);background:var(--accent-soft);border-left:1px solid var(--accent)}
+  .install .ana:hover{filter:brightness(.97)}
   .expand{color:var(--muted);margin:8px 0 12px;font-size:.9rem;max-width:82ch}
   .links{font-size:.85rem;color:var(--muted)}
   .links a{font-weight:600}.links span{opacity:.4;margin:0 8px}
@@ -72,13 +86,22 @@
 <div class="wrap">
 
 <header>
-  <h1><b>Meth</b>Scope</h1> <span class="badge">cli</span>
+  <div class="titlerow">
+    <h1><b>Meth</b>Scope</h1>
+    <span class="badge">cli</span><span class="badge ver">v0.1.1</span>
+    <span class="install">
+      <button id="install-btn" type="button"
+              data-cmd="conda install -c zhou-lab -c conda-forge methscope"
+              title="Copy to clipboard"><span class="ico"></span>conda install -c zhou-lab -c conda-forge methscope</button>
+      <a class="ana" href="https://anaconda.org/zhou-lab/methscope"
+         title="anaconda.org/zhou-lab/methscope" rel="noopener">↗</a>
+    </span>
+  </div>
   <p class="expand">Ultra-fast analysis of sparse DNA methylomes via <b>MRMP</b> (Most Recurrent
     Methylation Pattern) encoding — cell-type annotation, deconvolution, and genome-wide CpG
     upscaling, as a single pure-C binary. No R, no Python at runtime.</p>
   <p class="links">
     <a href="https://github.com/zhou-lab/methscope-cli">GitHub</a><span>·</span>
-    <a href="https://anaconda.org/zhou-lab/methscope">conda</a><span>·</span>
     <a href="https://huggingface.co/zhou-lab/methscope">models</a><span>·</span>
     <a href="https://github.com/zhou-lab/YAME">YAME</a><span>·</span>
     <a href="https://zhou-lab.github.io/MethScope/">R / MethScope</a><span>·</span>
@@ -297,6 +320,13 @@ model.refx   <span class="cm"># deconv reference (deconv)</span>
       });
     });
     pre.appendChild(b);
+  });
+  // header conda-install badge: click the command to copy it (⧉ -> ✓)
+  var ib=document.getElementById('install-btn');
+  if(ib)ib.addEventListener('click',function(){
+    navigator.clipboard.writeText(ib.getAttribute('data-cmd')).then(function(){
+      ib.classList.add('done');setTimeout(function(){ib.classList.remove('done');},1400);
+    });
   });
 })();
 </script>
