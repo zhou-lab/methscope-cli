@@ -13,12 +13,18 @@ source:
   path: ..
 
 build:
-  number: 0
+  # 1: rebuilt against the pinned glibc 2.17 sysroot (was an unpinned 2.34).
+  number: 1
   skip: true  # [win]
 
 requirements:
   build:
     - {{ compiler('c') }}
+    # Pins the glibc/macOS SDK the binary is built against (see
+    # conda_build_config.yaml) and adds the matching `__glibc >=2.17` /
+    # `__osx >=11.0` run constraint, so the package will not install on a host
+    # that is too old to run it.
+    - {{ stdlib('c') }}
     - make
   host:
     - libxgboost
