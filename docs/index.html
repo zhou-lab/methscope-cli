@@ -158,17 +158,14 @@ methscope <span class="sub">mrmp</span> export panel.mrmp \
     <p>Classify a methylome against a bundled classifier
       (<code class="inl">xgboost</code> / <code class="inl">logistic</code> /
       <code class="inl">threshold</code>) → label + confidence per cell.</p>
-    <pre><code><span class="cm"># cell type (62 human types)</span>
-methscope <span class="sub">predict</span> test/human_hg38_celltypes.cg \
-  models/hg38_celltype.ubjx
-
-<span class="cm"># sex (XCI logistic model)</span>
-methscope <span class="sub">predict</span> test/human_hg38_celltypes.cg \
-  models/hg38_sex.ubjx
+    <pre><code><span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
+methscope <span class="sub">predict</span> cells.cg models/hg38_celltype.ubjx
 <span class="out">cell             prediction_label  confidence
-Oligodendrocyte  Male              0.9744
-Blood-NK         Male              0.4511
-…</span></code></pre>
+Oligodendrocyte  ODC               0.9151
+Pancreas-Beta    Beta              0.9307
+Blood-NK         NK CD16           0.8127</span>
+<span class="cm"># Loyfer truth -> Zhou label: 4/4 concordant.
+# same call runs a sex / age / any bundled model</span></code></pre>
   </section>
 
   <section class="card">
@@ -250,6 +247,61 @@ methscope <span class="sub">unbundle</span> model.ubjx      <span class="cm"># -
   </section>
 
 </div>
+
+<section class="full">
+  <h2>Runnable examples <span class="m">— models from HuggingFace, fixtures from GitHub</span></h2>
+  <p>A four-part smoke test on the shipped models. Each featurizes against the whole-genome
+    human MRMP, so allow ~1–2&nbsp;min per test. Have <code class="inl">yame</code> on
+    <code class="inl">PATH</code> and the conda env that provided
+    <code class="inl">libxgboost</code> active.</p>
+  <pre><code><span class="cm"># scratch dir; models from HuggingFace, .cg fixtures from methscope_data</span>
+mkdir -p ~/tmp/methscope-test &amp;&amp; cd ~/tmp/methscope-test
+hf download zhou-lab/methscope hg38_celltype.ubjx    --local-dir . <span class="cm"># 62-type classifier</span>
+hf download zhou-lab/methscope hg38_65celltypes.refx --local-dir . <span class="cm"># 65-type deconv ref</span>
+hf download zhou-lab/methscope hg38_10k1.updecx      --local-dir . <span class="cm"># block-10k1 decoder</span>
+MD=https://raw.githubusercontent.com/zhou-lab/methscope_data/main/test
+wget -q $MD/human_hg38_celltypes.cg $MD/human_hg38_celltypes.cg.idx  <span class="cm"># 4 typed cells</span>
+wget -q $MD/human_hg38_immune_mixture.cg                             <span class="cm"># 70% macro / 30% mono</span>
+wget -q $MD/human_hg38_test.cg $MD/human_hg38_test.truth.cg          <span class="cm"># upscale input + truth</span></code></pre>
+  <div class="cols">
+    <div>
+      <h3>1 — cell-type prediction (cross-atlas concordance)</h3>
+      <pre><code>methscope <span class="sub">predict</span> human_hg38_celltypes.cg hg38_celltype.ubjx
+<span class="out">cell             prediction_label  confidence
+Oligodendrocyte  ODC               0.9151   # oligodendrocyte
+Pancreas-Beta    Beta              0.9307   # islet beta
+Blood-NK         NK CD16           0.8127   # natural killer
+Blood-Monocytes  Mono              0.8360   # monocyte</span>
+<span class="cm"># Loyfer truth -> Zhou2025 label: 4/4 concordant</span></code></pre>
+    </div>
+    <div>
+      <h3>2 — deconvolution, self-identity</h3>
+      <pre><code><span class="cm"># build a per-cell .refx; each cell must deconvolve to itself</span>
+methscope <span class="sub">matrix</span> --refx -o self.refx \
+  human_hg38_celltypes.cg hg38_celltype.ubjx
+methscope <span class="sub">deconv</span> human_hg38_celltypes.cg self.refx
+<span class="out"># Oligodendrocyte  Oligodendrocyte=100%
+# Pancreas-Beta    Pancreas-Beta=100%   ... (each 100% itself)</span></code></pre>
+    </div>
+    <div>
+      <h3>3 — deconvolution of a whole-body mixture</h3>
+      <pre><code><span class="cm"># simulated 70% macrophage / 30% monocyte vs the 65-type ref</span>
+methscope <span class="sub">deconv</span> human_hg38_immune_mixture.cg \
+  hg38_65celltypes.refx
+<span class="out"># 1   Macrophage=70%  Mono=29%   (truth 70/30; other 63 types ~0)</span></code></pre>
+    </div>
+    <div>
+      <h3>4 — upscaling from ~0.1% coverage</h3>
+      <pre><code>methscope <span class="sub">upscale</span> -o recon.cg \
+  hg38_10k1.updecx human_hg38_test.cg
+<span class="cm"># block-10k1 calls vs ground truth</span>
+paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) \
+      &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) \
+  | awk '$2!=2{t++;if($1==$2)c++} END{printf "%d/%d (%.1f%%)\n",c,t,100*c/t}'
+<span class="out"># 9211/9794 (94.0%)   — 94% accurate from ~0.1% input</span></code></pre>
+    </div>
+  </div>
+</section>
 
 <section class="full">
   <h2>The MRMP idea <span class="m">— why a query .cg runs against a tiny feature set</span></h2>

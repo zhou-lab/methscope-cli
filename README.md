@@ -13,10 +13,11 @@ It builds [YAME](https://github.com/zhou-lab/YAME) as a static library
 
 ## Models
 
-**Pretrained models live in the [methscope_data](https://github.com/zhou-lab/methscope_data)
-repo (`models/`) — see [its README](https://github.com/zhou-lab/methscope_data/blob/main/README.md)
-for the catalog (files, genome, labels, framework, source MRMP).** This section
-defines the bundle *formats*.
+**Pretrained models are hosted on HuggingFace
+([zhou-lab/methscope](https://huggingface.co/zhou-lab/methscope)) — too large for
+git. The [methscope_data](https://github.com/zhou-lab/methscope_data) repo holds
+the catalog, the query `.cg` test fixtures (`test/`), and the reproducibility
+archive.** This section defines the bundle *formats*.
 
 ## Build
 
@@ -39,125 +40,16 @@ make                             # or: make XGB_PREFIX=/path/to/env
 The binary records an rpath to `$XGB_PREFIX/lib`, so at runtime the conda env
 that provided `libxgboost` must be on the library path (activating it is enough).
 
-## Testing
+## Runnable examples
 
-The **models and the query `.cg` fixtures are both downloaded from the
-[methscope_data](https://github.com/zhou-lab/methscope_data) repo** (`models/` and
-`test/`). Ensure the conda env that provided `libxgboost` is active (or the binary's
-rpath points at it). Each test featurizes against the whole-genome human MRMP, so
-allow ~1–2 min per test.
+Runnable smoke tests — cell-type prediction (cross-atlas concordance),
+deconvolution (self-identity and a simulated whole-body mixture), and upscaling
+from ~0.1% coverage, each with fetch commands and expected outputs — are on the
+**docs page: <https://zhou-lab.github.io/methscope-cli/>**. Models are fetched from
+[HuggingFace](https://huggingface.co/zhou-lab/methscope); the query `.cg` fixtures
+from [methscope_data](https://github.com/zhou-lab/methscope_data) (`test/`).
 
-```sh
-MS=~/repo/methscope-cli/methscope   # the built binary  (`yame` must also be on PATH)
-
-mkdir -p ~/tmp/methscope-test && cd ~/tmp/methscope-test # scratch: everything below is fetched here
-
-# fetch models (~80 MB) + query .cg fixtures (~12 MB) from methscope_data
-MD=https://raw.githubusercontent.com/zhou-lab/methscope_data/main
-wget -q $MD/models/hg38_celltype.ubjx     # 62-cell-type human classifier (xgboost)
-wget -q $MD/models/hg38_65celltypes.refx  # 65-cell-type whole-body deconvolution reference
-wget -q $MD/models/hg38_10k1.updecx       # block-10k1 upscale decoder
-wget -q $MD/test/human_hg38_celltypes.cg $MD/test/human_hg38_celltypes.cg.idx  # 4 typed cells
-wget -q $MD/test/human_hg38_immune_mixture.cg     # simulated 70% macrophage / 30% monocyte
-wget -q $MD/test/human_hg38_test.cg $MD/test/human_hg38_test.truth.cg  # upscale input + truth
-CT=$PWD/hg38_celltype.ubjx
-DX=$PWD/hg38_65celltypes.refx
-UP=$PWD/hg38_10k1.updecx
-```
-
-Each model bundle carries its own MRMP, and any subcommand that wants a
-`<ref.mrmp>` also accepts a bundle in that slot — so the tests below feed the
-`.ubjx` directly, no `unbundle` needed. `methscope inspect $CT` shows its
-framework mark and labels.
-
-### Test 1 — cell-type prediction (cross-atlas concordance)
-
-The query is four Loyfer 2023 WGBS cells of known type; `predict` runs the human
-Zhou2025 classifier bundled with its MRMP (`.ubjx`). Each call names the correct
-cell *biology* even though the two atlases label cells differently:
-
-```sh
-$MS predict human_hg38_celltypes.cg $CT
-# cell             prediction_label  confidence
-# Oligodendrocyte  ODC               0.915134   # oligodendrocyte
-# Pancreas-Beta    Beta              0.930708   # pancreatic islet beta cell
-# Blood-NK         NK CD16           0.812749   # natural killer cell
-# Blood-Monocytes  Mono              0.835970   # monocyte
-# cell name = Loyfer ground truth, prediction = Zhou2025 label  ->  4/4 concordant
-```
-
-### Test 2 — deconvolution (self-identity)
-
-Treat each of the four cells as its own "cell type": build a `.refx` reference
-(signature + MRMP, self-contained) with `matrix --refx`, then each cell must
-deconvolve to itself. Show each cell's proportions as percentages, dropping 0%:
-
-```sh
-$MS matrix --refx -o self.refx human_hg38_celltypes.cg $CT   # signature + MRMP
-$MS deconv human_hg38_celltypes.cg self.refx \
-  | awk 'NR==1{for(j=2;j<=NF;j++)t[j]=$j; next}
-         {printf "%-16s", $1; for(j=2;j<=NF;j++) if($j+0>0) printf " %s=%.0f%%", t[j], $j*100; print ""}'
-# Oligodendrocyte  Oligodendrocyte=100%
-# Pancreas-Beta    Pancreas-Beta=100%
-# Blood-NK         Blood-NK=100%
-# Blood-Monocytes  Blood-Monocytes=100%
-```
-
-For a real deconvolution, build the reference from per-cell-type pseudobulks
-(`yame subset -l ids.txt x.cg | yame rowop -o musum -` per type) and run
-`matrix --refx -o panel.refx pseudobulks.cg ref.mrmp`.
-
-### Test 3 — cell-type deconvolution (simulated whole-body mixture)
-
-`human_hg38_immune_mixture.cg` (fetched above) is a simulated methylome — pooled single cells
-of **70% macrophage + 30% monocyte** (downsampled). Deconvolving it against the
-shipped 65-cell-type whole-body reference `hg38_65celltypes.refx` (58 Zhou
-single-cell + 7 Loyfer organ/blood types: liver, kidney tubular, kidney
-podocyte, adipose, neutrophil, erythroid, thyroid) recovers that composition — the other ~63 cell types get ~0:
-
-```sh
-$MS deconv human_hg38_immune_mixture.cg $DX \
-  | awk 'NR==1{for(j=2;j<=NF;j++)t[j]=$j; next}
-         {printf "%-8s", $1; for(j=2;j<=NF;j++) if($j+0>0.02) printf " %s=%.0f%%", t[j], $j*100; print ""}'
-# 1        Macrophage=70% Mono=29%       (truth: Macrophage 70%, Mono 30%)
-```
-
-`methscope inspect $DX` prints `kind refx` and the full 65-cell-type list. The
-reference uses a deterministic (reproducible) MRMP; build recipe in the MethScope
-lab journal (`20251216_methscope.org`, `hg38_65celltypes.refx`).
-
-### Test 4 — upscaling: recover dense methylation from sparse input
-
-A trained "upscale" block decoder reconstructs CpG-level methylation for one
-10k-CpG block from a sparse measurement:
-
-| file | what it is |
-|------|-----------|
-| `$UP` (`hg38_10k1.updecx`, downloaded above) | block-10k1 decoder + its MRMP + the imputed-CpG locations (`bundle -m mrmp100.cm -O outcpg.cm …`) |
-| `human_hg38_test.cg` | one hg38 cell, **downsampled to ~0.1% of CpGs** (`yame subset` one sample, then `yame dsample`) — the sparse input |
-| `human_hg38_test.truth.cg` | the same cell **un-downsampled** (ground truth) |
-
-`upscale` featurizes the sparse `.cg` against the bundled MRMP, runs the decoder,
-and — because the bundle carries the output-CpG locations (`outcpg.cm`) — writes a
-**whole-genome `.cg`** (format 6): the block's 10 000 CpGs called, the rest NA. So
-all three (truth, input, reconstruction) are whole-genome `.cg`s and line up.
-
-```sh
-# ($MS, $UP and the .cg fixtures are from the setup block above; `yame` on PATH)
-
-# upscale the 0.1% input -> whole-genome .cg (~1-2 min; genome-wide featurization)
-$MS upscale -o recon.cg $UP human_hg38_test.cg
-# -> stderr: [methscope] upscaled 1 sample(s) x 29401795 CpGs (genome .cg)
-
-# accuracy: block-10k1 calls vs ground truth (skip NA = 2)
-paste <(yame rowsub -I 1_10000 recon.cg                  | yame unpack -a - | cut -f4) \
-      <(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) \
-  | awk '$2!=2{t++; if($1==$2)c++} END{printf "Test 4 upscale accuracy: %d/%d (%.1f%%)\n",c,t,100*c/t}'
-# expected: Test 4 upscale accuracy: 9211/9794 (94.0%)
-```
-
-So from a measurement covering ~0.1% of CpGs, the decoder reconstructs block-10k1
-methylation at **94%** accuracy.
+## Training & internals
 
 ### Train the whole-genome upscale model
 
@@ -190,9 +82,8 @@ model still runs through the pure-C CPU inference path without CUDA or BLAS.
 
 Preparation and reference-index construction remain experimental internal
 tools under `methscope _upscale`; the Zhou 2018 evaluator is invoked by the
-non-public `analysis/zhou2018_upscale_eval.sh` script. See
-[`docs/upscale-train.md`](docs/upscale-train.md) and
-[`docs/upscale-unified-updec2.md`](docs/upscale-unified-updec2.md).
+non-public `analysis/zhou2018_upscale_eval.sh` script. See the MethScope lab journal (`20251216_methscope.org`) and the
+[docs page](https://zhou-lab.github.io/methscope-cli/).
 
 **Visualize it.** Because the tracks are all whole-genome `.cg`, just stack them,
 slice a 50-CpG window with one `rowsub -B <beg0>_<end1>` (genome rows; block 10k1
