@@ -290,40 +290,33 @@ void ms_matrix_write_tsv(const ms_matrix_t *m, FILE *out, int header) {
 /* ------------------------------------------------------------------ */
 /* `methscope matrix [-o out.tsv] <query.cg> <ref.mrmp>`               */
 /* ------------------------------------------------------------------ */
-static int matrix_usage(void) {
+static int build_reference_usage(void) {
   char buf[4096];
   snprintf(buf, sizeof(buf),
     "\n"
     "Usage:\n"
-    "  methscope matrix [options] <query.cg> <ref.mrmp>\n"
+    "  methscope build-reference [options] -o <out.refx> <celltypes.cg> <ref.mrmp>\n"
     "\n"
     "Purpose:\n"
-    "  Build the cell x pattern beta matrix -- the featurization step shared by\n"
-    "  predict/deconv/train -- summarizing each query record against every pattern.\n"
+    "  Build a .refx deconvolution reference: summarize each cell type against the\n"
+    "  MRMP and bundle the signature matrix + its MRMP into one self-contained file\n"
+    "  for `deconv mixture.cg out.refx`. Build it on per-cell-type pseudobulks so\n"
+    "  rows are cell types. The reference is imputed NaN-free: NA betas take the\n"
+    "  per-pattern median across cell types, and patterns >30%% NA are dropped.\n"
     "\n"
     "Arguments:\n"
-    "  <query.cg>   Query methylome(s); '-' reads a .cg stream from stdin\n"
-    "               (cells are then named 1,2,3,... as a stream has no index).\n"
-    "  <ref.mrmp>   MRMP pattern definition (a YAME .cm). A bundle (.ubjx/.updecx)\n"
-    "               is also accepted here; its attached MRMP is used automatically.\n"
+    "  <celltypes.cg>  One .cg record per cell type (e.g. pseudobulks); '-' reads a\n"
+    "                  stream from stdin (records named 1,2,3,... — no index).\n"
+    "  <ref.mrmp>      MRMP pattern definition (a YAME .cm). A bundle (.ubjx/.updecx)\n"
+    "                  is also accepted; its attached MRMP is used automatically.\n"
     "\n"
     "Options:\n"
-    "  -o <out>       Write output to a file instead of stdout.\n"
-    "  --refx         Bundle the matrix + this MRMP into a self-contained .refx\n"
-    "                 deconvolution reference (requires -o <out.refx>); use it as\n"
-    "                 `deconv mixture.cg out.refx`. Build it on per-cell-type\n"
-    "                 pseudobulks so rows are cell types. The reference is imputed\n"
-    "                 NaN-free: NA betas take the per-pattern median across cell\n"
-    "                 types, and patterns >30%% NA across cell types are dropped.\n"
-    "  --min-cov <k>  Blank (NA) any beta backed by < k covered CpGs (N_overlap),\n"
-    "                 reporting only well-covered patterns. Default 1 (off). Mirrors\n"
-    "                 deconv's --min-cov, but here it just NA-masks the output.\n"
-    "  --no-header    Suppress the header line (plain TSV output only).\n"
-    "  -h             Show this help message.\n"
-    "\n"
-    "Output:\n"
-    "  TSV: first column 'cell', then one column per pattern (NA where no overlap);\n"
-    "  or, with --refx, a .refx bundle (matrix + MRMP).\n"
+    "  -o <out.refx>  Output reference bundle (required unless --matrix).\n"
+    "  --matrix       Emit the raw record x pattern beta TSV instead of a .refx (the\n"
+    "                 featurization; also reachable with `yame summary`). '--tsv' too.\n"
+    "  --min-cov <k>  NA any beta backed by < k covered CpGs (N_overlap). Default 1.\n"
+    "  --no-header    Suppress the header line (--matrix TSV only).\n"
+    "  -h, --help     Show this help message.\n"
     "\n");
   ms_help(stderr, buf);
   return 1;
@@ -380,23 +373,27 @@ static void impute_col_median(ms_matrix_t *m, double max_na_frac) {
   m->M = nM; m->pattern_names = npn; m->n_patterns = nkeep; m->N = NULL;
 }
 
-int main_matrix(int argc, char *argv[]) {
+int main_build_reference(int argc, char *argv[]) {
   const char *out_path = NULL;
-  int no_header = 0, refx = 0, min_cov = 1;
+  /* Default output is a .refx deconvolution reference; --matrix emits the raw
+   * record x pattern beta TSV instead (the featurization also reachable via
+   * `yame summary`). --refx is accepted as a no-op for backward compatibility. */
+  int no_header = 0, refx = 1, min_cov = 1;
   int i = 1;
   for (; i < argc; ++i) {
     if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) out_path = argv[++i];
     else if (strcmp(argv[i], "--no-header") == 0) no_header = 1;
+    else if (strcmp(argv[i], "--matrix") == 0 || strcmp(argv[i], "--tsv") == 0) refx = 0;
     else if (strcmp(argv[i], "--refx") == 0) refx = 1;
     else if (strcmp(argv[i], "--min-cov") == 0 && i + 1 < argc) min_cov = atoi(argv[++i]);
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-      matrix_usage(); return 0;
+      build_reference_usage(); return 0;
     }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
       mdie("unrecognized or incomplete option", argv[i]);
     else break;
   }
-  if (argc - i != 2) return matrix_usage();
+  if (argc - i != 2) return build_reference_usage();
   const char *query_cg = argv[i];
   char *tmp_mrmp = NULL;
   const char *ref_mrmp = ms_mrmp_resolve(argv[i + 1], &tmp_mrmp);
@@ -414,7 +411,7 @@ int main_matrix(int argc, char *argv[]) {
   if (refx) {
     /* Bundle the signature matrix + its MRMP into a .refx (kind=refx). The TSV
      * needs its header (pattern names) so deconv can match patterns by name. */
-    if (!out_path) mdie("--refx requires -o <out.refx>", NULL);
+    if (!out_path) mdie("a .refx reference requires -o <out.refx> (use --matrix for a TSV)", NULL);
     /* impute the reference NaN-free at build time: per-pattern median across cell
      * types; drop patterns >30% NA. deconv then does per-sample complete-case. */
     impute_col_median(m, 0.30);

@@ -20,7 +20,7 @@ static int usage(void) {
   const char *B = tty ? "\033[1m"    : ""; /* section headers */
   const char *D = tty ? "\033[2m"    : ""; /* dim: version, hints */
   const char *R = tty ? "\033[0m"    : "";
-#define CMD(n, d) fprintf(stderr, "  %s%-13s%s %s\n", A, n, R, d)
+#define CMD(n, d) fprintf(stderr, "  %s%-15s%s %s\n", A, n, R, d)
   fprintf(stderr, "\n%smethscope%s %sv%s · built against YAME %s%s\n",
           A, R, D, METHSCOPE_VERSION, YAME_VERSION, R);
   fprintf(stderr, "%spure-C analysis of sparse DNA methylomes via MRMP encoding%s\n\n",
@@ -35,8 +35,8 @@ static int usage(void) {
   CMD("train",        "Fit a label classifier (xgboost / threshold / logistic)");
 
   fprintf(stderr, "\n%sDeconvolution%s\n", B, R);
-  CMD("deconv",       "Estimate cell-type proportions (NNLS) from a mixture");
-  CMD("matrix",       "Build a .refx deconv reference (or a record x pattern matrix)");
+  CMD("deconv",         "Estimate cell-type proportions (NNLS) from a mixture");
+  CMD("build-reference","Build a .refx deconvolution reference (--matrix for the raw matrix)");
 
   fprintf(stderr, "\n%sUpscaling%s %s(imputation)%s\n", B, R, D, R);
   CMD("upscale",      "Impute genome-wide CpG methylation from a sparse methylome");
@@ -64,7 +64,11 @@ int main(int argc, char *argv[]) {
     return 0;
   }
   if (strcmp(argv[1], "predict")    == 0) return main_predict(argc - 1, argv + 1);
-  if (strcmp(argv[1], "matrix")     == 0) return main_matrix(argc - 1, argv + 1);
+  if (strcmp(argv[1], "build-reference") == 0) return main_build_reference(argc - 1, argv + 1);
+  if (strcmp(argv[1], "matrix")     == 0) {   /* renamed 2026-07; alias kept */
+    fprintf(stderr, "[methscope] 'matrix' was renamed to 'build-reference'\n");
+    return main_build_reference(argc - 1, argv + 1);
+  }
   if (strcmp(argv[1], "deconv")     == 0) return main_deconv(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale")    == 0) return main_upscale(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-train") == 0) return main_upscale_train(argc - 1, argv + 1);

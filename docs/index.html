@@ -191,16 +191,17 @@ Blood-NK         NK CD16           0.8127</span>
   </section>
 
   <section class="card">
-    <h2>matrix <span class="m">— featurize to a beta matrix</span></h2>
-    <p>The featurization shared by predict/deconv/train: summarize each query record against every
-      MRMP pattern → a record&nbsp;×&nbsp;pattern beta TSV, or a
-      <code class="inl">.refx</code> deconvolution reference with <code class="inl">--refx</code>.</p>
-    <pre><code><span class="cm"># feature matrix (TSV to stdout)</span>
-methscope <span class="sub">matrix</span> query.cg panel.mrmp &gt; betas.tsv
+    <h2>build-reference <span class="m">— deconvolution reference</span></h2>
+    <p>Summarize per-cell-type pseudobulks against the MRMP and bundle the signature + its MRMP
+      into a self-contained <code class="inl">.refx</code> for <code class="inl">deconv</code>.
+      <code class="inl">--matrix</code> emits the raw record&nbsp;×&nbsp;pattern beta TSV instead
+      (the featurization, also reachable with <code class="inl">yame summary</code>).</p>
+    <pre><code><span class="cm"># a .refx deconvolution reference (default)</span>
+methscope <span class="sub">build-reference</span> -o panel.refx \
+  celltypes.cg panel.mrmp
 
-<span class="cm"># build a deconvolution reference</span>
-methscope <span class="sub">matrix</span> --refx -o panel.refx \
-  celltypes.cg panel.cm</code></pre>
+<span class="cm"># or the raw feature matrix (TSV)</span>
+methscope <span class="sub">build-reference</span> --matrix query.cg panel.mrmp</code></pre>
   </section>
 
   <section class="card">
@@ -277,7 +278,7 @@ Blood-Monocytes  Mono              0.8360   # monocyte</span>
     <div>
       <h3>2 — deconvolution, self-identity</h3>
       <pre><code><span class="cm"># build a per-cell .refx; each cell must deconvolve to itself</span>
-methscope <span class="sub">matrix</span> --refx -o self.refx \
+methscope <span class="sub">build-reference</span> -o self.refx \
   human_hg38_celltypes.cg hg38_celltype.ubjx
 methscope <span class="sub">deconv</span> human_hg38_celltypes.cg self.refx
 <span class="out"># Oligodendrocyte  Oligodendrocyte=100%
@@ -318,7 +319,7 @@ paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) \
     <div>
       <h3>Featurize once, reuse everywhere</h3>
       <pre><code><span class="cm"># the shared step behind predict/deconv/train</span>
-methscope <span class="sub">matrix</span> query.cg panel.mrmp
+methscope <span class="sub">build-reference</span> --matrix query.cg panel.mrmp
 <span class="out">cell   P1     P2     P3    …  Pna
 1      0.91   0.04   NA    …  0.62</span>
 <span class="cm"># Pna = background; NA = no observed CpG</span></code></pre>
