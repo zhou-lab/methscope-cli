@@ -419,12 +419,16 @@ static void mrmp_close(mrmp_reader_t *r) {
 /* ---------------- inspect ----------------------------------------------- */
 
 static int mrmp_inspect(int argc, char *argv[]) {
-  const char *path = NULL; int show_patterns = 0;
+  const char *path = NULL; int show_patterns = 0; uint32_t top_k = 20;
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-      ms_help(stderr, "Usage: methscope mrmp inspect FILE.mrmp [--patterns]\n");
+      ms_help(stderr, "Usage: methscope mrmp inspect FILE.mrmp [--patterns] [--top K]\n\n"
+        "  --patterns   list the top-ranked patterns after the header\n"
+        "  --top K      how many to list (default 20)\n");
       return 0;
     } else if (!strcmp(argv[i], "--patterns")) show_patterns = 1;
+    else if (!strcmp(argv[i], "--top") && i + 1 < argc)
+      top_k = (uint32_t)parse_u64(argv[++i], "--top");
     else if (argv[i][0] != '-') path = argv[i];
     else die("unrecognized option", argv[i]);
   }
@@ -437,7 +441,7 @@ static int mrmp_inspect(int argc, char *argv[]) {
   printf("pattern_length\t%u\n", h->n_samples);
   printf("cpgs\t%" PRIu64 "\n", h->n_cpg);
   printf("distinct_candidates\t%" PRIu64 "\n", h->n_candidates);
-  printf("selected_patterns\t%u\n", h->n_selected);
+  printf("selectable_patterns\t%u\n", h->n_selected);
   printf("include_homogeneous\t%s\n",
          (h->flags & MRMP_FLAG_INCLUDE_HOMOGENEOUS) ? "yes" : "no");
   printf("pna_cpgs\t%" PRIu64 "\t%.4f%%\n", h->pna_cpg,
@@ -449,8 +453,9 @@ static int mrmp_inspect(int argc, char *argv[]) {
   key_to_string(h->pna_key, h->n_samples, buf);
   printf("pna_pattern\t%s\n", buf);
   if (show_patterns) {
-    uint64_t lim = h->n_selected < h->n_candidates ? h->n_selected : h->n_candidates;
-    printf("#pattern\tlabel\tcount\n");
+    uint64_t lim = top_k < h->n_candidates ? top_k : h->n_candidates;
+    printf("#pattern\tlabel\tcount\t(top %" PRIu64 " of %" PRIu64 ")\n",
+           lim, h->n_candidates);
     for (uint64_t p = 0; p < lim; ++p) {
       key_to_string(r.pat[p].key, h->n_samples, buf);
       printf("%s\tP%" PRIu64 "\t%" PRIu64 "\n", buf, p + 1, r.pat[p].count);
