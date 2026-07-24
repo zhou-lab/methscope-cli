@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MethScope — sparse DNA methylome analysis in one C binary</title>
+<meta name="description" content="methscope-cli: ultra-fast analysis of sparse DNA methylomes via MRMP (Most Recurrent Methylation Pattern) encoding — cell-type annotation, deconvolution, and CpG upscaling as a single C binary.">
+<style>
+  :root{
+    --bg:#fbfdfd;--fg:#152029;--muted:#51636b;--line:#e2eaea;--soft:#eef5f4;--card:#ffffff;
+    --accent:#0f766e;--accent-2:#0d9488;--accent-soft:#d5f5ef;--code-bg:#0b1a1a;--code-fg:#e3f2ef;--cm:#6f9490;--ok:#22c55e;
+    --shadow:0 1px 2px rgba(15,45,45,.04),0 6px 20px rgba(15,45,45,.05);
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#08110f;--fg:#e3f2ef;--muted:#8fa8a3;--line:#1c2b28;--soft:#0f1c19;--card:#0f1a18;
+    --accent:#5eead4;--accent-2:#2dd4bf;--accent-soft:#123330;--code-bg:#050d0c;--code-fg:#d7ece8;--cm:#5f7a76;--ok:#4ade80;
+    --shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}}
+  :root[data-theme=light]{--bg:#fbfdfd;--fg:#152029;--muted:#51636b;--line:#e2eaea;--soft:#eef5f4;--card:#fff;--accent:#0f766e;--accent-2:#0d9488;--accent-soft:#d5f5ef;--code-bg:#0b1a1a;--code-fg:#e3f2ef;--cm:#6f9490;--ok:#22c55e;--shadow:0 1px 2px rgba(15,45,45,.04),0 6px 20px rgba(15,45,45,.05);}
+  :root[data-theme=dark]{--bg:#08110f;--fg:#e3f2ef;--muted:#8fa8a3;--line:#1c2b28;--soft:#0f1c19;--card:#0f1a18;--accent:#5eead4;--accent-2:#2dd4bf;--accent-soft:#123330;--code-bg:#050d0c;--code-fg:#d7ece8;--cm:#5f7a76;--ok:#4ade80;--shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1520px;margin:0 auto;padding:0 22px 44px}
+  a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+  header{padding:32px 0 4px;margin-bottom:2px}
+  h1{font-size:1.55rem;margin:0;letter-spacing:-.01em;font-weight:400;line-height:1.2;
+     background:linear-gradient(92deg,var(--accent),var(--accent-2));-webkit-background-clip:text;background-clip:text;color:transparent;display:inline}
+  h1 b{font-weight:800}
+  .badge{margin-left:9px;font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+     color:var(--accent);background:var(--accent-soft);border:1px solid var(--line);padding:2px 8px;border-radius:20px;vertical-align:middle}
+  .expand{color:var(--muted);margin:8px 0 12px;font-size:.9rem;max-width:82ch}
+  .links{font-size:.85rem;color:var(--muted)}
+  .links a{font-weight:600}.links span{opacity:.4;margin:0 8px}
+  .grid{column-count:1;column-gap:16px}
+  @media(min-width:640px){.grid{column-count:2}}
+  @media(min-width:980px){.grid{column-count:3}}
+  @media(min-width:1440px){.grid{column-count:4}}
+  .card{break-inside:avoid;margin:0 0 16px;border:1px solid var(--line);border-radius:13px;background:var(--card);
+     padding:13px 15px 15px;box-shadow:var(--shadow);transition:border-color .16s,box-shadow .16s,transform .16s}
+  .card:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));transform:translateY(-2px)}
+  .card h2{font-size:.98rem;margin:0 0 5px;letter-spacing:-.01em}
+  .card h2 .m{color:var(--muted);font-weight:400;font-size:.8rem}
+  .card p{margin:0 0 8px;color:var(--muted);font-size:.82rem}
+  pre{position:relative;background:var(--code-bg);color:var(--code-fg);border-radius:9px;padding:11px 12px;
+     overflow-x:auto;font-size:.75rem;line-height:1.55;margin:0}
+  pre code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .cm{color:var(--cm)}
+  .sub{color:#2dd4bf;font-weight:700}          /* the methscope subcommand, highlighted */
+  .out{color:#9fc7c1}                          /* sample output */
+  code.inl{background:var(--accent-soft);color:var(--accent);padding:1px 5px;border-radius:5px;
+     font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.84em}
+  .copy{position:absolute;top:6px;right:6px;font:600 .63rem ui-monospace,SFMono-Regular,Menlo,monospace;
+     color:var(--code-fg);background:rgba(12,40,38,.95);border:1px solid rgba(255,255,255,.18);border-radius:6px;
+     padding:2px 8px;cursor:pointer;opacity:0;transition:opacity .14s,background .14s;box-shadow:0 1px 6px rgba(0,0,0,.3)}
+  pre:hover .copy,.copy:focus{opacity:1}
+  .copy:hover{background:rgba(20,60,56,.98)}
+  .copy.ok{color:var(--ok);opacity:1}
+  .full{border:1px solid var(--line);border-radius:13px;background:var(--card);padding:16px 18px;margin-top:22px;box-shadow:var(--shadow)}
+  .full>h2{font-size:1.1rem;margin:0 0 4px;letter-spacing:-.01em}
+  .full>h2 .m{color:var(--muted);font-weight:400;font-size:.85rem}
+  .full>p{color:var(--muted);font-size:.88rem;margin:0 0 14px;max-width:100ch}
+  .full h3{font-size:.8rem;margin:12px 0 6px;color:var(--fg);font-weight:700}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px 18px}
+  @media(max-width:720px){.cols{grid-template-columns:1fr}}
+  table.models{width:100%;border-collapse:collapse;font-size:.8rem}
+  table.models th,table.models td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  table.models th{color:var(--muted);font-weight:700}
+  table.models td code{color:var(--accent);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em}
+  footer{margin-top:28px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:.82rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1><b>Meth</b>Scope</h1> <span class="badge">cli</span>
+  <p class="expand">Ultra-fast analysis of sparse DNA methylomes via <b>MRMP</b> (Most Recurrent
+    Methylation Pattern) encoding — cell-type annotation, deconvolution, and genome-wide CpG
+    upscaling, as a single pure-C binary. No R, no Python at runtime.</p>
+  <p class="links">
+    <a href="https://github.com/zhou-lab/methscope-cli">GitHub</a><span>·</span>
+    <a href="https://anaconda.org/zhou-lab/methscope">conda</a><span>·</span>
+    <a href="https://github.com/zhou-lab/methscope_data">models</a><span>·</span>
+    <a href="https://github.com/zhou-lab/YAME">YAME</a><span>·</span>
+    <a href="https://zhou-lab.github.io/MethScope/">R / MethScope</a><span>·</span>
+    hg38 · mm10 · WGBS · single-cell · spatial
+  </p>
+</header>
+
+<div class="grid">
+
+  <section class="card">
+    <h2>Install &amp; fetch the models</h2>
+    <pre><code><span class="cm"># conda — installs the `methscope` binary</span>
+conda install -c zhou-lab \
+  -c conda-forge methscope
+
+<span class="cm"># or build from source (bundles YAME)</span>
+git clone --recurse-submodules \
+  https://github.com/zhou-lab/methscope-cli
+cd methscope-cli &amp;&amp; make
+
+<span class="cm"># pretrained models + test fixtures</span>
+git clone \
+  https://github.com/zhou-lab/methscope_data</code></pre>
+    <p style="margin-top:11px">Every model is one self-contained bundle that already carries its
+      MRMP feature definition (and labels), so a query <code class="inl">.cg</code> runs directly —
+      no separate annotation files. Examples below run from the
+      <code class="inl">methscope_data/</code> checkout.</p>
+  </section>
+
+  <section class="card">
+    <h2>mrmp <span class="m">— the MRMP foundation</span></h2>
+    <p>An <b>MRMP</b> is one recurrent methylation pattern across a reference panel; the mask that
+      labels every genomic CpG with its pattern is what every model is built on.
+      <code class="inl">mrmp</code> constructs it natively from a discretized reference
+      <code class="inl">.cg</code> — no YAME + awk + sort pipeline, ~576&nbsp;MB peak.</p>
+    <pre><code>methscope <span class="sub">mrmp</span> build --reference ref.cg \
+  --patterns 1000 -o panel.mrmp
+methscope <span class="sub">mrmp</span> inspect panel.mrmp
+<span class="cm"># export a YAME .cm mask + tables</span>
+methscope <span class="sub">mrmp</span> export panel.mrmp \
+  --mask panel.cm --patterns pat.tsv</code></pre>
+    <p style="margin-top:11px">Each pattern packs to a base-3 <code class="inl">uint64</code> key;
+      selection is deterministic (count desc, key asc), so a build is byte-reproducible. The
+      whole-genome unit index for <code class="inl">upscale-train</code> reads the artifact directly
+      (<code class="inl">_upscale index --mrmp</code>).</p>
+  </section>
+
+  <section class="card">
+    <h2>predict <span class="m">— cell type / sex</span></h2>
+    <p>Classify a methylome against a bundled classifier
+      (<code class="inl">xgboost</code> / <code class="inl">logistic</code> /
+      <code class="inl">threshold</code>) → label + confidence per cell.</p>
+    <pre><code><span class="cm"># cell type (62 human types)</span>
+methscope <span class="sub">predict</span> test/human_hg38_celltypes.cg \
+  models/hg38_celltype.ubjx
+
+<span class="cm"># sex (XCI logistic model)</span>
+methscope <span class="sub">predict</span> test/human_hg38_celltypes.cg \
+  models/hg38_sex.ubjx
+<span class="out">cell             prediction_label  confidence
+Oligodendrocyte  Male              0.9744
+Blood-NK         Male              0.4511
+…</span></code></pre>
+  </section>
+
+  <section class="card">
+    <h2>deconv <span class="m">— cell-type proportions</span></h2>
+    <p>Non-negative least squares of a mixture <code class="inl">.cg</code> against a
+      <code class="inl">.refx</code> signature panel → a proportion per cell type. Uses all
+      MRMP patterns; robust to extreme sparsity (split-MRMP references).</p>
+    <pre><code>methscope <span class="sub">deconv</span> test/human_hg38_immune_mixture.cg \
+  models/hg38_65celltypes.refx
+<span class="out">cell  … Macrophage  Mono    NK_CD56  …
+1     … 0.7486      0.2370  0.0000   …</span></code></pre>
+    <p style="margin-top:11px">The 65-type reference spans 58 Zhou single-cell + 7 Loyfer
+      organ/blood types for whole-body / cfDNA deconvolution.</p>
+  </section>
+
+  <section class="card">
+    <h2>upscale <span class="m">— impute genome-wide CpG</span></h2>
+    <p>Reconstruct dense CpG methylation from a sparse methylome with a bundled decoder
+      (<code class="inl">.updecx</code>). Pure-C inference — no CUDA or BLAS at run time.</p>
+    <pre><code>methscope <span class="sub">upscale</span> -o imputed.cg \
+  models/hg38_10k1.updecx test/human_hg38_test.cg
+<span class="out">[methscope] upscaled 1 sample(s) x 29,401,795 CpGs (genome .cg)</span></code></pre>
+  </section>
+
+  <section class="card">
+    <h2>matrix <span class="m">— featurize to a beta matrix</span></h2>
+    <p>The featurization shared by predict/deconv/train: summarize each query record against every
+      MRMP pattern → a record&nbsp;×&nbsp;pattern beta TSV, or a
+      <code class="inl">.refx</code> deconvolution reference with <code class="inl">--refx</code>.</p>
+    <pre><code><span class="cm"># feature matrix (TSV to stdout)</span>
+methscope <span class="sub">matrix</span> query.cg panel.mrmp &gt; betas.tsv
+
+<span class="cm"># build a deconvolution reference</span>
+methscope <span class="sub">matrix</span> --refx -o panel.refx \
+  celltypes.cg panel.cm</code></pre>
+  </section>
+
+  <section class="card">
+    <h2>train <span class="m">— fit a classifier</span></h2>
+    <p>Train a label classifier over MRMP features and bundle it with its MRMP + labels in one
+      step. Three frameworks; the bundle records which.</p>
+    <pre><code>methscope <span class="sub">train</span> -l labels.txt \
+  -o hg38_celltype.ubjx query.cg panel.cm
+<span class="cm"># --framework xgboost | logistic | threshold</span></code></pre>
+    <p style="margin-top:11px">Linear models store per-feature training means, so missing/sparse
+      betas are imputed at predict time — accurate even at &lt;1% genome coverage.</p>
+  </section>
+
+  <section class="card">
+    <h2>upscale-train <span class="m">— whole-genome decoder</span></h2>
+    <p>Train the unified whole-genome upscale model (<code class="inl">UPDEC2</code>) on CUDA —
+      one processing unit per MRMP membership. Inference stays pure-C.</p>
+    <pre><code>make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80
+methscope <span class="sub">upscale-train</span> -i train.msur \
+  --index units.msui --mrmp panel.cm \
+  -o model.updecx --work-dir work/</code></pre>
+  </section>
+
+  <section class="card">
+    <h2>bundle / unbundle <span class="m">— package a model</span></h2>
+    <p>A bundle wraps an inner model + its MRMP (+ labels) into one self-describing file
+      (<code class="inl">.ubjx</code> / <code class="inl">.updecx</code> /
+      <code class="inl">.refx</code>) so it ships and runs stand-alone.</p>
+    <pre><code>methscope <span class="sub">bundle</span> -m panel.cm -l labels.txt \
+  model.ubj -o model.ubjx
+methscope <span class="sub">unbundle</span> model.ubjx      <span class="cm"># -> parts</span></code></pre>
+  </section>
+
+  <section class="card">
+    <h2>inspect <span class="m">— look inside a bundle</span></h2>
+    <p>Report a bundle's framework mark, on-disk section layout, and model summary (labels,
+      weights, feature count).</p>
+    <pre><code>methscope <span class="sub">inspect</span> models/hg38_sex.ubjx
+<span class="out">container  MSBNDL1 — 3 sections, 30,931 bytes
+  0  mrmp    fmt2 MRMP definition, 3 states
+  1  kind    "logistic" framework mark
+  2  model   methscope-linear text spec
+     labels  Female, Male</span></code></pre>
+  </section>
+
+</div>
+
+<section class="full">
+  <h2>The MRMP idea <span class="m">— why a query .cg runs against a tiny feature set</span></h2>
+  <p>DNA methylation is stored <b>positionally</b> as compact YAME <code class="inl">.cg</code> files —
+    one M/U or beta value per CpG in a fixed genome order, with no coordinates inside. A
+    <b>Most Recurrent Methylation Pattern (MRMP)</b> mask (<code class="inl">.cm</code>, or a
+    <code class="inl">.mrmp</code> artifact) labels every CpG with the recurrent cross-sample
+    pattern it belongs to. To featurize a query, MethScope averages the observed CpGs within each
+    pattern → one beta per pattern (a few hundred to a few thousand features), which is what every
+    model consumes. Because the reference panel's rare, cell-type-specific patterns are exactly the
+    informative ones, this stays accurate under extreme sparsity — single-cell and spatial input,
+    or cfDNA.</p>
+  <div class="cols">
+    <div>
+      <h3>Featurize once, reuse everywhere</h3>
+      <pre><code><span class="cm"># the shared step behind predict/deconv/train</span>
+methscope <span class="sub">matrix</span> query.cg panel.mrmp
+<span class="out">cell   P1     P2     P3    …  Pna
+1      0.91   0.04   NA    …  0.62</span>
+<span class="cm"># Pna = background; NA = no observed CpG</span></code></pre>
+    </div>
+    <div>
+      <h3>Self-contained bundles</h3>
+      <pre><code><span class="cm"># one file = inner model + its MRMP + labels</span>
+model.ubjx   <span class="cm"># classifier   (predict)</span>
+model.updecx <span class="cm"># upscale decoder (upscale)</span>
+model.refx   <span class="cm"># deconv reference (deconv)</span>
+<span class="cm"># inspect prints the framework `kind` mark</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<section class="full">
+  <h2>Pretrained models <span class="m">— <a href="https://github.com/zhou-lab/methscope_data">zhou-lab/methscope_data</a></span></h2>
+  <p>Each is a single runnable bundle; <code class="inl">methscope inspect &lt;model&gt;</code> prints its
+    framework, full label list, and (for linear models) per-feature weights.</p>
+  <table class="models">
+    <tr><th>file</th><th>task</th><th>framework</th><th>labels / cell types</th></tr>
+    <tr><td><code>hg38_celltype.ubjx</code></td><td>cell-type annotation</td><td>xgboost</td><td>62 human cell types</td></tr>
+    <tr><td><code>mm10_celltype.ubjx</code></td><td>cell-type annotation</td><td>xgboost</td><td>41 mouse-brain cell types</td></tr>
+    <tr><td><code>hg38_sex.ubjx</code></td><td>sex prediction</td><td>logistic</td><td>Female, Male (XCI markers)</td></tr>
+    <tr><td><code>hg38_10k1.updecx</code></td><td>CpG upscaling</td><td>MLP decoder</td><td>block 10k1 (10,000 CpGs)</td></tr>
+    <tr><td><code>hg38_65celltypes.refx</code></td><td>deconvolution (NNLS)</td><td>refx</td><td>65 types = 58 Zhou + 7 Loyfer; split MRMP, 15,300 patterns</td></tr>
+  </table>
+</section>
+
+<footer>
+  MethScope — Ultra-fast Analysis of Sparse DNA Methylome via Recurrent Pattern Encoding.
+  Built on <a href="https://github.com/zhou-lab/YAME">YAME</a>.
+  AGPL-3.0-or-later · <a href="https://github.com/zhou-lab/methscope-cli">github.com/zhou-lab/methscope-cli</a>
+</footer>
+
+</div>
+<script>
+(function(){
+  document.querySelectorAll('pre').forEach(function(pre){
+    var b=document.createElement('button');b.className='copy';b.type='button';b.textContent='copy';
+    var code=pre.querySelector('code');
+    // copy only the commands, not the sample output lines
+    b.addEventListener('click',function(ev){
+      ev.stopPropagation();
+      var text=(code?code.innerText:pre.innerText).split('\n')
+        .filter(function(l){return !l.startsWith('cell')&&!l.startsWith('[methscope]')&&
+          !l.startsWith('container')&&!/^\s*\d/.test(l)&&!l.startsWith('  ');}).join('\n');
+      navigator.clipboard.writeText((code?code.innerText:pre.innerText)).then(function(){
+        b.textContent='copied';b.classList.add('ok');
+        setTimeout(function(){b.textContent='copy';b.classList.remove('ok');},1200);
+      });
+    });
+    pre.appendChild(b);
+  });
+})();
+</script>
+</body>
+</html>

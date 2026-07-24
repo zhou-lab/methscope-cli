@@ -8,33 +8,46 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>       /* isatty */
 #include "methscope.h"
-#include "yame_version.h"   /* YAME version this binary was built against */
+#include "yame_version.h" /* YAME version this binary was built against */
 
+/* Grouped, ANSI-styled overview. Colors are emitted only when stderr is a TTY,
+ * so redirected/piped output stays plain (cf. the ls-alias foot-gun). */
 static int usage(void) {
-  fprintf(stderr,
-    "\n"
-    "methscope (v%s) — ultra-fast sparse DNA methylome analysis via MRMP encoding\n"
-    "Built against YAME %s\n"
-    "\n"
-    "Usage:\n"
-    "  methscope <command> [options] [args]\n"
-    "\n"
-    "Commands:\n"
-    "  predict      Predict a label (cell type, sex, ...): query.cg + model.ubjx -> labels + confidence\n"
-    "  matrix       Build the record x pattern beta matrix (TSV; --refx -> a .refx reference)\n"
-    "  deconv       Estimate cell-type proportions (NNLS): mixture.cg + panel.refx\n"
-    "  upscale      Impute CpG methylation from a sparse methylome\n"
-    "  upscale-train Train the unified whole-genome upscale model (CUDA)\n"
-    "  mrmp         Build/inspect/export the MRMP membership-pattern mask from a reference .cg\n"
-    "  train        Train a label classifier (xgboost/threshold/logistic) -> model.ubjx\n"
-    "  inspect      Report a bundle's framework mark, on-disk layout, and model summary\n"
-    "  bundle       Wrap a model + its MRMP (+ labels via -l) -> self-contained bundle\n"
-    "  unbundle     Unpack a bundle back into its model, MRMP, and outcpg mask\n"
-    "\n"
-    "Run 'methscope <command> -h' for command-specific options.\n"
-    "\n",
-    METHSCOPE_VERSION, YAME_VERSION);
+  int tty = isatty(STDERR_FILENO);
+  const char *A = tty ? "\033[1;36m" : ""; /* accent: title + command names */
+  const char *B = tty ? "\033[1m"    : ""; /* section headers */
+  const char *D = tty ? "\033[2m"    : ""; /* dim: version, hints */
+  const char *R = tty ? "\033[0m"    : "";
+#define CMD(n, d) fprintf(stderr, "  %s%-13s%s %s\n", A, n, R, d)
+  fprintf(stderr, "\n%smethscope%s %sv%s · built against YAME %s%s\n",
+          A, R, D, METHSCOPE_VERSION, YAME_VERSION, R);
+  fprintf(stderr, "%spure-C analysis of sparse DNA methylomes via MRMP encoding%s\n\n",
+          D, R);
+  fprintf(stderr, "%sUsage%s  methscope <command> [options] [args]\n\n", D, R);
+
+  fprintf(stderr, "%sReference%s %s— the MRMP foundation%s\n", B, R, D, R);
+  CMD("mrmp",         "Build / inspect / export the MRMP membership-pattern mask");
+
+  fprintf(stderr, "\n%sAnalyze a query .cg%s\n", B, R);
+  CMD("predict",      "Classify a methylome (cell type, sex, ...) -> labels + confidence");
+  CMD("deconv",       "Estimate cell-type proportions (NNLS) from a mixture");
+  CMD("upscale",      "Impute genome-wide CpG methylation from a sparse methylome");
+  CMD("matrix",       "Build the record x pattern beta matrix (or a .refx reference)");
+
+  fprintf(stderr, "\n%sBuild models%s\n", B, R);
+  CMD("train",        "Fit a label classifier (xgboost / threshold / logistic)");
+  CMD("upscale-train","Train the whole-genome upscale decoder (CUDA)");
+  CMD("bundle",       "Wrap a model + its MRMP into a self-contained bundle");
+  CMD("unbundle",     "Unpack a bundle into its model, MRMP, and outcpg mask");
+
+  fprintf(stderr, "\n%sInspect%s\n", B, R);
+  CMD("inspect",      "Report a bundle's framework, layout, and model summary");
+
+  fprintf(stderr, "\n%sRun 'methscope <command> -h' for command-specific options.%s\n\n",
+          D, R);
+#undef CMD
   return 1;
 }
 
