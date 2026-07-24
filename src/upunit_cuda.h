@@ -22,14 +22,6 @@ typedef struct {
   uint32_t mixed_bottleneck;
   uint32_t mixed_direct;
   uint32_t activation;
-  /* Simple homogeneity-aware per-unit rank. When adaptive_rank is set, a pure
-   * unit whose single MRMP pattern is all-0 or all-1 (constitutively un/
-   * methylated -> trivially predictable) uses homogeneous_rank; every other
-   * factor unit keeps its base pure/mixed bottleneck. This reclaims the wasted
-   * capacity on the homogeneous giants at no external-accuracy cost. Promoting
-   * variable units was tried and dropped: it overfits single-cohort training. */
-  uint32_t adaptive_rank;
-  uint32_t homogeneous_rank; /* rank for all-0/all-1 units (default 8) */
   uint32_t min_steps;
   uint32_t max_steps;
   uint32_t eval_every;

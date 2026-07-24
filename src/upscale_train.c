@@ -58,10 +58,7 @@ static int usage(void) {
     "  --pure-bottleneck N      one-membership unit dimension (default 16)\n"
     "  --mixed-bottleneck N     mixed/PNA unit dimension (default 32)\n"
     "  --mixed-mode MODE        factor or direct (default factor)\n"
-    "  --activation MODE        linear or leaky (default linear)\n"
-    "  --adaptive-rank          all-0/all-1 pure units use --homogeneous-rank;\n"
-    "                           every other unit keeps its base bottleneck\n"
-    "  --homogeneous-rank N     rank for all-0/all-1 units (default 8)\n\n"
+    "  --activation MODE        linear or leaky (default linear)\n\n"
     "Optimization:\n"
     "  --min-steps N            earliest stopping point (default 2000)\n"
     "  --max-steps N            maximum updates per unit (default 8000)\n"
@@ -103,7 +100,6 @@ int main_upscale_train(int argc, char **argv) {
   c.min_steps = 2000; c.max_steps = 8000; c.eval_every = 200;
   c.patience = 8; c.batch = 8192; c.eval_rows = 8;
   c.seed = 1; c.device = 0; c.learning_rate = 1e-3; c.weight_decay = 1e-5;
-  c.adaptive_rank = 0; c.homogeneous_rank = 8;
 
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
@@ -134,9 +130,7 @@ int main_upscale_train(int argc, char **argv) {
       if (!strcmp(x, "linear")) c.activation = MS_UPDEC2_LINEAR;
       else if (!strcmp(x, "leaky")) c.activation = MS_UPDEC2_LEAKY_RELU;
       else terr("--activation must be linear or leaky", x);
-    } else if (!strcmp(a, "--adaptive-rank")) c.adaptive_rank = 1;
-    else if (!strcmp(a, "--homogeneous-rank") && i + 1 < argc) c.homogeneous_rank = u32(argv[++i], a);
-    else if (!strcmp(a, "--min-steps") && i + 1 < argc) c.min_steps = u32(argv[++i], a);
+    } else if (!strcmp(a, "--min-steps") && i + 1 < argc) c.min_steps = u32(argv[++i], a);
     else if (!strcmp(a, "--max-steps") && i + 1 < argc) c.max_steps = u32(argv[++i], a);
     else if (!strcmp(a, "--eval-every") && i + 1 < argc) c.eval_every = u32(argv[++i], a);
     else if (!strcmp(a, "--patience") && i + 1 < argc) c.patience = u32(argv[++i], a);
@@ -157,8 +151,6 @@ int main_upscale_train(int argc, char **argv) {
       !c.patience || !c.batch || !c.eval_rows ||
       !(c.learning_rate > 0) || c.weight_decay < 0)
     terr("invalid training configuration", NULL);
-  if (c.adaptive_rank && !c.homogeneous_rank)
-    terr("invalid adaptive-rank configuration", NULL);
   if (!force && !access(out, F_OK)) terr("output exists (use --force)", out);
 
   char bare[4096], manifest[4096];
@@ -178,10 +170,6 @@ int main_upscale_train(int argc, char **argv) {
     c.pure_bottleneck, c.mixed_direct ? "direct" : "factor",
     c.mixed_bottleneck, c.activation ? "leaky" : "linear",
     c.min_steps, c.max_steps, c.eval_every, c.patience, c.batch, c.seed);
-  if (c.adaptive_rank)
-    fprintf(stderr,
-      "[methscope] upscale-train: adaptive rank: all-0/all-1 units -> %u, "
-      "every other unit keeps base\n", c.homogeneous_rank);
   if (dry) {
     fprintf(stderr, "[methscope] upscale-train: dry run complete\n");
     return 0;
@@ -206,7 +194,7 @@ int main_upscale_train(int argc, char **argv) {
     "patterns\t%u\ninput_dim\t%u\nfeatures\t%s\ntrunk\t%s\npure_bottleneck\t%u\nmixed_mode\t%s\n"
     "mixed_bottleneck\t%u\nactivation\t%s\nmin_steps\t%u\nmax_steps\t%u\n"
     "eval_every\t%u\npatience\t%u\nbatch\t%u\neval_rows\t%u\nseed\t%" PRIu64
-    "\nlearning_rate\t%.9g\nweight_decay\t%.9g\nadaptive_rank\t%u\nhomogeneous_rank\t%u\n",
+    "\nlearning_rate\t%.9g\nweight_decay\t%.9g\n",
     out, data, index, mrmp, work, c.patterns,
     (c.feature_mode == MS_UPFEATURE_BETA ? 1 : 2) * c.patterns,
     c.feature_mode == MS_UPFEATURE_COUNT ? "beta_log1p_count" :
@@ -215,8 +203,7 @@ int main_upscale_train(int argc, char **argv) {
     c.pure_bottleneck, c.mixed_direct ? "direct" : "factor",
     c.mixed_bottleneck, c.activation ? "leaky" : "linear",
     c.min_steps, c.max_steps, c.eval_every, c.patience, c.batch,
-    c.eval_rows, c.seed, c.learning_rate, c.weight_decay,
-    c.adaptive_rank, c.homogeneous_rank);
+    c.eval_rows, c.seed, c.learning_rate, c.weight_decay);
   if (fclose(mf)) terr("cannot close training manifest", manifest);
   fprintf(stderr, "[methscope] upscale-train: complete -> %s\n", out);
   return 0;
