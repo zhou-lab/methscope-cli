@@ -227,7 +227,7 @@ static int usage(void) {
     "Build the whole-genome processing-unit index used by UPDEC2. Real MRMP\n"
     "memberships are size-ranked and never split. PNA CpGs are implicit\n"
     "singleton memberships packed after all real memberships.\n\n"
-    "  --mrmp FILE           MRMPIDX1 artifact from `methscope mrmp build`\n"
+    "  --mrmp FILE           MRMPIDX1 artifact from `methscope mrmp-build`\n"
     "                        (preferred; replaces the two text inputs below)\n"
     "  --binstrings FILE     one 35-symbol 0/1/2 string per genomic CpG\n"
     "  --pattern-counts FILE full `uniq -c` pattern-count table\n"

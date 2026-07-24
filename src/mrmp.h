@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /* Native MRMP (methylation reference membership pattern) construction.
  *
- * `methscope mrmp build/inspect/export` replaces the YAME + awk + sort + text
- * pipeline that used to define the top-K MRMP mask. It reads a discretized
- * (pseudo-binary) reference .cg, reproduces YAME's `rowop -o binstring`
+ * `methscope mrmp-build` / `mrmp-inspect` / `mrmp-export` replace the YAME +
+ * awk + sort + text pipeline that used to define the MRMP mask. mrmp-build
+ * reads a discretized (pseudo-binary) reference .cg, reproduces `rowop -o binstring`
  * per-CpG resolution deterministically, counts exact membership patterns,
  * ranks them, and serializes a self-describing MRMPIDX1 artifact.
  *
@@ -60,7 +60,9 @@ typedef struct {
   uint64_t count;  /* CpGs carrying this exact pattern */
 } mrmp_pattern_t;
 
-int main_mrmp(int argc, char *argv[]);
+int main_mrmp_build(int argc, char *argv[]);
+int main_mrmp_inspect(int argc, char *argv[]);
+int main_mrmp_export(int argc, char *argv[]);
 
 /* The artifact is the build pipeline's currency: `_upscale prepare`, `_upscale
  * index`, and `upscale-train` all read it, so the per-CpG mask and the group

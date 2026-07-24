@@ -10,6 +10,7 @@
 #include <string.h>
 #include <unistd.h>       /* isatty */
 #include "methscope.h"
+#include "mrmp.h"
 #include "yame_version.h" /* YAME version this binary was built against */
 
 /* Grouped, ANSI-styled overview. Colors are emitted only when stderr is a TTY,
@@ -28,7 +29,9 @@ static int usage(void) {
   fprintf(stderr, "%sUsage%s  methscope <command> [options] [args]\n\n", D, R);
 
   fprintf(stderr, "%sMRMP construction%s %s— the feature foundation%s\n", B, R, D, R);
-  CMD("mrmp",         "Build / inspect / export the MRMP membership-pattern mask");
+  CMD("mrmp-build",   "Construct the MRMP artifact from a discretized reference .cg");
+  CMD("mrmp-inspect", "Report an artifact's dimensions, parameters, and top patterns");
+  CMD("mrmp-export",  "Emit the runtime .cm mask (and pattern / count tables)");
 
   fprintf(stderr, "\n%sClassification%s %s(cell type, sex, ...)%s\n", B, R, D, R);
   CMD("predict",      "Classify a methylome -> labels + confidence");
@@ -90,7 +93,9 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "[methscope] research evaluator moved to '_upscale eval'\n");
     return 1;
   }
-  if (strcmp(argv[1], "mrmp")       == 0) return main_mrmp(argc - 1, argv + 1);
+  if (strcmp(argv[1], "mrmp-build")   == 0) return main_mrmp_build(argc - 1, argv + 1);
+  if (strcmp(argv[1], "mrmp-inspect") == 0) return main_mrmp_inspect(argc - 1, argv + 1);
+  if (strcmp(argv[1], "mrmp-export")  == 0) return main_mrmp_export(argc - 1, argv + 1);
   if (strcmp(argv[1], "train")      == 0) return main_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "inspect")    == 0) return main_inspect(argc - 1, argv + 1);
   if (strcmp(argv[1], "bundle")     == 0) return main_bundle(argc - 1, argv + 1);

@@ -64,7 +64,7 @@ The `.mrmp` artifact is the build pipeline's currency: `_upscale prepare`,
 `_upscale index`, and `upscale-train` all read the same one, so the sidecar's
 per-CpG group map and the mask the model ships cannot drift apart. The `.cm` is
 the *runtime* form — `upscale-train` materializes it into `--work-dir` and packs
-it into the bundle. `mrmp export --mask` stays available for inspection and for
+it into the bundle. `mrmp-export` stays available for inspection and for
 feeding the `.cm`-based commands, but it is no longer a pipeline step. (An
 already-exported `.cm` is still accepted wherever a `.mrmp` is.)
 

@@ -148,18 +148,17 @@ git clone \
   </section>
 
   <section class="card">
-    <h2>mrmp <span class="m">— the MRMP foundation</span></h2>
+    <h2>mrmp-build / -inspect / -export <span class="m">— the MRMP foundation</span></h2>
     <p>An <b>MRMP</b> is one recurrent methylation pattern across a reference panel; the mask that
       labels every genomic CpG with its pattern is what every model is built on.
-      <code class="inl">mrmp</code> constructs it natively from a discretized reference
+      <code class="inl">mrmp-build</code> constructs it natively from a discretized reference
       <code class="inl">.cg</code> — no YAME + awk + sort pipeline, ~576&nbsp;MB peak.</p>
     <div class="tipwrap">
-      <pre><code>methscope <span class="sub">mrmp</span> build --reference ref.cg \
-  -o <span class="tip" tabindex="0">panel.mrmp</span>
-methscope <span class="sub">mrmp</span> inspect panel.mrmp
-<span class="cm"># inspection only — not a pipeline step</span>
-methscope <span class="sub">mrmp</span> export panel.mrmp \
-  --mask panel.cm --top 1000</code></pre>
+      <pre><code>methscope <span class="sub">mrmp-build</span> ref.cg <span class="tip" tabindex="0">panel.mrmp</span>
+methscope <span class="sub">mrmp-inspect</span> panel.mrmp --patterns
+<span class="cm"># runtime mask — inspection only, not a pipeline step</span>
+methscope <span class="sub">mrmp-export</span> --top 1000 \
+  panel.mrmp panel.cm</code></pre>
       <span class="tipbox">
         <b>MRMPIDX1</b> — a rank-complete artifact. No top-K is baked in: every candidate is
         ranked and every CpG keeps its exact rank, so consumers choose their own cut.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-/* Native MRMP construction: `methscope mrmp build/inspect/export`.
+/* Native MRMP construction: `methscope mrmp-build` / `mrmp-inspect` / `mrmp-export`.
  * See mrmp.h for the artifact format and the binstring semantics reproduced. */
 #include <errno.h>
 #include <inttypes.h>
@@ -23,9 +23,13 @@
 #define MRMP_DEF_MAX_AMBIG     1.0f   /* 1.0 == off */
 #define MRMP_DEF_MIN_FOLD      10.0f
 
+/* Message prefix: the running subcommand, or plain "mrmp" when the ms_mrmp_*
+ * entry points are called as a library from another command. */
+static const char *g_cmd = "mrmp";
+
 static void die(const char *msg, const char *arg) {
-  if (arg) fprintf(stderr, "[methscope] mrmp: %s: %s\n", msg, arg);
-  else fprintf(stderr, "[methscope] mrmp: %s\n", msg);
+  if (arg) fprintf(stderr, "[methscope] %s: %s: %s\n", g_cmd, msg, arg);
+  else fprintf(stderr, "[methscope] %s: %s\n", g_cmd, msg);
   exit(1);
 }
 
@@ -183,8 +187,10 @@ static void write_or_die(FILE *fp, const void *p, size_t n, const char *path) {
   if (n && fwrite(p, 1, n, fp) != n) die("write failed", path);
 }
 
-static int mrmp_build(int argc, char *argv[]) {
-  const char *ref = NULL, *out = NULL;
+int main_mrmp_build(int argc, char *argv[]) {
+  g_cmd = "mrmp-build";
+  const char *pos[2] = {NULL, NULL};
+  int npos = 0;
   uint32_t mincov = MRMP_DEF_MINCOV;
   float beta_thr = MRMP_DEF_BETA_THRESH, max_ambig = MRMP_DEF_MAX_AMBIG,
         min_fold = MRMP_DEF_MIN_FOLD;
@@ -193,13 +199,13 @@ static int mrmp_build(int argc, char *argv[]) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       ms_help(stderr,
-        "Usage: methscope mrmp build --reference REF.cg -o OUT.mrmp [options]\n\n"
+        "Usage: methscope mrmp-build [options] REF.cg OUT.mrmp\n\n"
         "Reproduce YAME `rowop -o binstring` per CpG over the reference samples,\n"
         "count exact membership patterns, and rank them (count desc, key asc).\n"
         "Every candidate is ranked and every CpG keeps its exact rank, so the\n"
         "top-K cut belongs to the consumer, not here. The all-'2' sentinel is PNA.\n\n"
-        "  --reference PATH   discretized format-3 reference .cg (needs <ref>.idx)\n"
-        "  -o PATH            output MRMPIDX1 artifact (required)\n"
+        "  REF.cg             discretized format-3 reference .cg (needs <ref>.idx)\n"
+        "  OUT.mrmp           output MRMPIDX1 artifact\n\n"
         "  --mincov N         binstring -c (default 1)\n"
         "  --beta-threshold X binstring -b (default 0.5)\n"
         "  --max-ambig-frac X binstring -m (default 1.0 = off)\n"
@@ -207,16 +213,17 @@ static int mrmp_build(int argc, char *argv[]) {
         "  --force            overwrite an existing output\n");
       return 0;
     }
-    else if (!strcmp(a, "--reference") && i + 1 < argc) ref = argv[++i];
-    else if (!strcmp(a, "-o") && i + 1 < argc) out = argv[++i];
     else if (!strcmp(a, "--mincov") && i + 1 < argc) mincov = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--beta-threshold") && i + 1 < argc) beta_thr = (float)atof(argv[++i]);
     else if (!strcmp(a, "--max-ambig-frac") && i + 1 < argc) max_ambig = (float)atof(argv[++i]);
     else if (!strcmp(a, "--min-major-fold") && i + 1 < argc) min_fold = (float)atof(argv[++i]);
     else if (!strcmp(a, "--force")) force = 1;
-    else die("unrecognized or incomplete option", a);
+    else if (a[0] == '-') die("unrecognized or incomplete option", a);
+    else if (npos < 2) pos[npos++] = a;
+    else die("too many arguments", a);
   }
-  if (!ref || !out) die("need --reference and -o (see mrmp build -h)", NULL);
+  if (npos != 2) die("need REF.cg and OUT.mrmp (see mrmp-build -h)", NULL);
+  const char *ref = pos[0], *out = pos[1];
   if (!force) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
 
   uint32_t ns = 0;
@@ -354,7 +361,7 @@ static int mrmp_build(int argc, char *argv[]) {
   if (fclose(fp)) die("error closing output", out);
 
   fprintf(stderr,
-    "[methscope] mrmp build: %s\n"
+    "[methscope] mrmp-build: %s\n"
     "  samples=%u  CpGs=%" PRIu64 "  distinct patterns=%" PRIu64
     " (+PNA)  candidates=%" PRIu64 "\n"
     "  PNA CpGs=%" PRIu64 " (%.2f%%)  checksum=%016" PRIx64 "\n",
@@ -418,19 +425,22 @@ static void mrmp_close(mrmp_reader_t *r) {
 
 /* ---------------- inspect ----------------------------------------------- */
 
-static int mrmp_inspect(int argc, char *argv[]) {
+int main_mrmp_inspect(int argc, char *argv[]) {
+  g_cmd = "mrmp-inspect";
   const char *path = NULL; int show_patterns = 0; uint32_t top_k = 20;
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-      ms_help(stderr, "Usage: methscope mrmp inspect FILE.mrmp [--patterns] [--top K]\n\n"
+      ms_help(stderr, "Usage: methscope mrmp-inspect [options] IN.mrmp\n\n"
+        "  IN.mrmp      MRMPIDX1 artifact to report on\n\n"
         "  --patterns   list the top-ranked patterns after the header\n"
         "  --top K      how many to list (default 20)\n");
       return 0;
     } else if (!strcmp(argv[i], "--patterns")) show_patterns = 1;
     else if (!strcmp(argv[i], "--top") && i + 1 < argc)
       top_k = (uint32_t)parse_u64(argv[++i], "--top");
-    else if (argv[i][0] != '-') path = argv[i];
-    else die("unrecognized option", argv[i]);
+    else if (argv[i][0] == '-') die("unrecognized option", argv[i]);
+    else if (!path) path = argv[i];
+    else die("too many arguments", argv[i]);
   }
   if (!path) die("need a FILE.mrmp", NULL);
   mrmp_reader_t r; mrmp_open(&r, path);
@@ -468,32 +478,34 @@ static int mrmp_inspect(int argc, char *argv[]) {
 
 /* ---------------- export ------------------------------------------------ */
 
-static int mrmp_export(int argc, char *argv[]) {
-  const char *path = NULL, *mask = NULL, *patterns = NULL, *counts = NULL,
+int main_mrmp_export(int argc, char *argv[]) {
+  g_cmd = "mrmp-export";
+  const char *pos[2] = {NULL, NULL}, *patterns = NULL, *counts = NULL,
              *pna_label = "Pna";
+  int npos = 0;
   uint32_t top_k = 1000;
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       ms_help(stderr,
-        "Usage: methscope mrmp export FILE.mrmp [--mask CM] [--patterns TSV]\n"
-        "                             [--counts TSV] [--top K] [--pna-label NAME]\n\n"
-        "  --mask CM        per-CpG P1..PK/Pna labels as a YAME format-2 .cm\n"
-        "  --patterns TSV   top-K patterns: string<tab>P<rank><tab>count\n"
-        "  --top K          rank cut for --mask and --patterns (default 1000)\n"
-        "  --counts TSV     every pattern (incl. PNA): count<tab>string\n"
-        "  --pna-label NAME background label in --mask (default Pna)\n");
+        "Usage: methscope mrmp-export [options] IN.mrmp OUT.cm\n\n"
+        "  IN.mrmp          MRMPIDX1 artifact\n"
+        "  OUT.cm           per-CpG P1..PK/Pna labels as a YAME format-2 mask\n\n"
+        "  --top K          rank cut for the mask and --patterns (default 1000)\n"
+        "  --patterns TSV   also write top-K patterns: string<tab>P<rank><tab>count\n"
+        "  --counts TSV     also write every pattern (incl. PNA): count<tab>string\n"
+        "  --pna-label NAME background label in the mask (default Pna)\n");
       return 0;
-    } else if (!strcmp(a, "--mask") && i + 1 < argc) mask = argv[++i];
-    else if (!strcmp(a, "--patterns") && i + 1 < argc) patterns = argv[++i];
+    } else if (!strcmp(a, "--patterns") && i + 1 < argc) patterns = argv[++i];
     else if (!strcmp(a, "--counts") && i + 1 < argc) counts = argv[++i];
     else if (!strcmp(a, "--top") && i + 1 < argc) top_k = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--pna-label") && i + 1 < argc) pna_label = argv[++i];
-    else if (a[0] != '-') path = a;
-    else die("unrecognized option", a);
+    else if (a[0] == '-') die("unrecognized option", a);
+    else if (npos < 2) pos[npos++] = a;
+    else die("too many arguments", a);
   }
-  if (!path) die("need a FILE.mrmp", NULL);
-  if (!mask && !patterns && !counts) die("nothing to export (see mrmp export -h)", NULL);
+  if (npos != 2) die("need IN.mrmp and OUT.cm (see mrmp-export -h)", NULL);
+  const char *path = pos[0], *mask = pos[1];
   mrmp_reader_t r; mrmp_open(&r, path);
   const mrmp_header_t *h = r.h;
   const uint32_t ns = h->n_samples;
@@ -634,20 +646,3 @@ void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
   mrmp_close(&r);
 }
 
-/* ---------------- dispatch ---------------------------------------------- */
-
-int main_mrmp(int argc, char *argv[]) {
-  if (argc < 2) {
-    ms_help(stderr,
-      "Usage: methscope mrmp <build|inspect|export> ...\n\n"
-      "  build    construct an MRMPIDX1 mask from a reference .cg\n"
-      "  inspect  report dimensions and selected patterns\n"
-      "  export   emit a YAME .cm mask and/or pattern/count TSVs\n");
-    return 1;
-  }
-  if (!strcmp(argv[1], "build"))   return mrmp_build(argc - 1, argv + 1);
-  if (!strcmp(argv[1], "inspect")) return mrmp_inspect(argc - 1, argv + 1);
-  if (!strcmp(argv[1], "export"))  return mrmp_export(argc - 1, argv + 1);
-  fprintf(stderr, "[methscope] mrmp: unknown subcommand '%s'\n", argv[1]);
-  return 1;
-}
