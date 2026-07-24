@@ -188,7 +188,7 @@ static int mrmp_build(int argc, char *argv[]) {
   uint32_t K = 1000, mincov = MRMP_DEF_MINCOV;
   float beta_thr = MRMP_DEF_BETA_THRESH, max_ambig = MRMP_DEF_MAX_AMBIG,
         min_fold = MRMP_DEF_MIN_FOLD;
-  int include_homogeneous = 1, force = 0;
+  int force = 0;
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
@@ -200,7 +200,6 @@ static int mrmp_build(int argc, char *argv[]) {
         "  --reference PATH   discretized format-3 reference .cg (needs <ref>.idx)\n"
         "  -o PATH            output MRMPIDX1 artifact (required)\n"
         "  --patterns K       encoder patterns to select (default 1000)\n"
-        "  --[no-]include-homogeneous  keep all-0/all-1 candidates (default on)\n"
         "  --mincov N         binstring -c (default 1)\n"
         "  --beta-threshold X binstring -b (default 0.5)\n"
         "  --max-ambig-frac X binstring -m (default 1.0 = off)\n"
@@ -211,8 +210,6 @@ static int mrmp_build(int argc, char *argv[]) {
     else if (!strcmp(a, "--reference") && i + 1 < argc) ref = argv[++i];
     else if (!strcmp(a, "-o") && i + 1 < argc) out = argv[++i];
     else if (!strcmp(a, "--patterns") && i + 1 < argc) K = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--include-homogeneous")) include_homogeneous = 1;
-    else if (!strcmp(a, "--no-include-homogeneous")) include_homogeneous = 0;
     else if (!strcmp(a, "--mincov") && i + 1 < argc) mincov = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--beta-threshold") && i + 1 < argc) beta_thr = (float)atof(argv[++i]);
     else if (!strcmp(a, "--max-ambig-frac") && i + 1 < argc) max_ambig = (float)atof(argv[++i]);
@@ -296,18 +293,12 @@ static int mrmp_build(int argc, char *argv[]) {
     checksum = (checksum ^ key) * 1099511628211ULL;
   }
 
-  /* Candidate set: all {0,1} patterns. Homogeneous all-0/all-1 are the two
-   * patterns with a single distinct digit; drop them when not included. */
-  uint64_t all0_key = 0, all1_key = 0;
-  for (uint32_t s = 0; s < ns; ++s) all1_key = all1_key * 3 + 1;
-  /* rank candidates */
+  /* Candidate set: every {0,1} pattern, homogeneous all-0/all-1 included.
+   * Those two are the largest units on hg38 (all-1 ~10.7M CpGs, all-0 ~2.2M);
+   * excluding them would strand ~44% of the genome in PNA. */
   uint32_t *order = xcalloc(n_pat, sizeof(uint32_t), "rank order");
   uint64_t n_cand = 0;
-  for (uint64_t p = 0; p < n_pat; ++p) {
-    if (!include_homogeneous &&
-        (pat[p].key == all0_key || pat[p].key == all1_key)) continue;
-    order[n_cand++] = (uint32_t)p;
-  }
+  for (uint64_t p = 0; p < n_pat; ++p) order[n_cand++] = (uint32_t)p;
   g_pat = pat;
   qsort(order, n_cand, sizeof(uint32_t), rank_cmp);
 
@@ -329,7 +320,7 @@ static int mrmp_build(int argc, char *argv[]) {
   if (sizeof(hd) != 128) die("MRMPIDX1 header is not 128 bytes", NULL);
   memcpy(hd.magic, MRMPIDX_MAGIC, 8);
   hd.version = MRMPIDX_VERSION; hd.n_samples = ns; hd.n_selected = K;
-  hd.flags = include_homogeneous ? MRMP_FLAG_INCLUDE_HOMOGENEOUS : 0;
+  hd.flags = MRMP_FLAG_INCLUDE_HOMOGENEOUS;   /* always: see the candidate loop */
   hd.n_cpg = n_cpg; hd.n_candidates = n_cand;
   hd.pna_key = pna_key; hd.pna_cpg = pna_cpg;
   hd.mincov = mincov; hd.beta_threshold = beta_thr;

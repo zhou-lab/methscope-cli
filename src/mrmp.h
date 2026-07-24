@@ -22,7 +22,9 @@
 #define MRMPIDX_VERSION 1u
 #define MRMP_PNA_MEMBERSHIP 0xFFFFFFFFu   /* per-CpG sentinel: all-'2' / PNA */
 
-#define MRMP_FLAG_INCLUDE_HOMOGENEOUS 1u  /* all-0 and all-1 are candidates */
+/* all-0 and all-1 are candidates. Always set now that --no-include-homogeneous
+ * is gone; kept in the header so older artifacts stay readable. */
+#define MRMP_FLAG_INCLUDE_HOMOGENEOUS 1u
 
 /* 128-byte fixed header; all little-endian, offsets are absolute file bytes. */
 typedef struct {
