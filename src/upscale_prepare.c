@@ -87,13 +87,13 @@ static int cmp_u32(const void *a, const void *b) {
 
 static int usage(void) {
   ms_help(stderr,
-    "Usage: methscope upscale-featurize -o OUT.msur --truth TRUTH.cg --mrmp MRMP.mrmp [options]\n\n"
+    "Usage: methscope upscale-featurize [options] TRUTH.cg IN.mrmp OUT.msur\n\n"
     "Create a compact exact-YAME sampling sidecar for global upscale training.\n"
     "The original TRUTH.cg remains the truth store and is never copied.\n\n"
+    "  TRUTH.cg         continuous format-3 YAME .cg truth store\n"
+    "  IN.mrmp          MRMPIDX1 artifact (preferred) or an exported .cm\n"
+    "  OUT.msur         output sidecar\n\n"
     "Options:\n"
-    "  -o PATH          output sidecar (.msur; required)\n"
-    "  --truth PATH     continuous format-3 YAME .cg truth store (required)\n"
-    "  --mrmp PATH      MRMPIDX1 artifact (preferred) or exported .cm (required)\n"
     "  --reps N         deterministic simulations, seeds 1..N (default 100)\n"
     "  --sample N       CpGs retained per cell/replicate (default 29000)\n"
     "  --patterns N     retain feature summaries P1..PN (default 1000)\n"
@@ -110,6 +110,8 @@ static void write_or_die(FILE *fp, const void *p, size_t n, const char *path) {
 
 int main_upscale_prepare(int argc, char *argv[]) {
   const char *out = NULL, *truth = NULL, *mrmp = NULL, *manifest = NULL;
+  const char *pos[3] = {NULL, NULL, NULL};
+  int npos = 0;
   uint32_t reps = 100, patterns = 1000, sample = 29000;
   int in_memory = 0, embed_truth = 0;
   for (int i = 1; i < argc; ++i) {
@@ -117,18 +119,22 @@ int main_upscale_prepare(int argc, char *argv[]) {
       usage();
       return 0;
     }
-    if (!strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
-    else if (!strcmp(argv[i], "--truth") && i + 1 < argc) truth = argv[++i];
-    else if (!strcmp(argv[i], "--mrmp") && i + 1 < argc) mrmp = argv[++i];
-    else if (!strcmp(argv[i], "--manifest") && i + 1 < argc) manifest = argv[++i];
+    if (!strcmp(argv[i], "--manifest") && i + 1 < argc) manifest = argv[++i];
     else if (!strcmp(argv[i], "--reps") && i + 1 < argc) reps = (uint32_t)parse_u64(argv[++i], "--reps");
     else if (!strcmp(argv[i], "--sample") && i + 1 < argc) sample = (uint32_t)parse_u64(argv[++i], "--sample");
     else if (!strcmp(argv[i], "--patterns") && i + 1 < argc) patterns = (uint32_t)parse_u64(argv[++i], "--patterns");
     else if (!strcmp(argv[i], "--in-memory")) in_memory = 1;
     else if (!strcmp(argv[i], "--embed-truth")) embed_truth = 1;
-    else { usage(); pdie("unrecognized or incomplete option", argv[i]); }
+    else if (argv[i][0] == '-') { usage(); pdie("unrecognized or incomplete option", argv[i]); }
+    else if (npos < 3) pos[npos++] = argv[i];
+    else pdie("too many arguments", argv[i]);
   }
-  if (!out || !truth || !mrmp || !reps || !sample || !patterns) return usage();
+  if (npos != 3) {
+    usage();
+    pdie("need TRUTH.cg, IN.mrmp, and OUT.msur", NULL);
+  }
+  if (!reps || !sample || !patterns) return usage();
+  truth = pos[0]; mrmp = pos[1]; out = pos[2];
   if (sizeof(msur_header_t) != 72) pdie("unexpected sidecar header layout", NULL);
   if (patterns > UINT16_MAX - 1) pdie("--patterns exceeds uint16 group format", NULL);
 

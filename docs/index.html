@@ -231,12 +231,12 @@ Blood-NK         NK CD16           0.8127</span>
       The three build steps all read the same <code class="inl">.mrmp</code>.</p>
     <div class="tipwrap">
       <pre><code><span class="cm"># 1. featurize the truth atlas -> sampling/truth sidecar</span>
-methscope <span class="sub">upscale-featurize</span> -o <span class="tip" data-tip="msur" tabindex="0">train.msur</span> \
-  --truth atlas.cg --mrmp panel.mrmp --embed-truth
+methscope <span class="sub">upscale-featurize</span> --embed-truth \
+  atlas.cg panel.mrmp <span class="tip" data-tip="msur" tabindex="0">train.msur</span>
 
 <span class="cm"># 2. group CpGs into processing units</span>
-methscope <span class="sub">upscale-set-units</span> --mrmp panel.mrmp \
-  --unit-cpgs 16384 -o <span class="tip" data-tip="msui" tabindex="0">units.msui</span>
+methscope <span class="sub">upscale-set-units</span> --unit-cpgs 16384 \
+  panel.mrmp <span class="tip" data-tip="msui" tabindex="0">units.msui</span>
 
 <span class="cm"># 3. train (CUDA); --split pins the exact held-out cells,
 #    else cells are cut 70/15/15 by --seed</span>

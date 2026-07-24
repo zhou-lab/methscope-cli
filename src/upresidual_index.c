@@ -222,16 +222,16 @@ static uint64_t file_size(const char *path) {
 
 static int usage(void) {
   ms_help(stderr,
-    "Usage: methscope upscale-set-units (--mrmp FILE | --binstrings FILE\n"
-    "       --pattern-counts FILE) -o UNITS.msui [--unit-cpgs 16384]\n\n"
+    "Usage: methscope upscale-set-units [options] IN.mrmp OUT.msui\n"
+    "       methscope upscale-set-units --binstrings F --pattern-counts F \\\n"
+    "                                   [options] OUT.msui\n\n"
     "Build the whole-genome processing-unit index used by UPDEC2. Real MRMP\n"
     "memberships are size-ranked and never split. PNA CpGs are implicit\n"
     "singleton memberships packed after all real memberships.\n\n"
-    "  --mrmp FILE           MRMPIDX1 artifact from `methscope mrmp-build`\n"
-    "                        (preferred; replaces the two text inputs below)\n"
-    "  --binstrings FILE     one 35-symbol 0/1/2 string per genomic CpG\n"
-    "  --pattern-counts FILE full `uniq -c` pattern-count table\n"
-    "  -o FILE               output MSUIDX1 index\n"
+    "  IN.mrmp               MRMPIDX1 artifact from `methscope mrmp-build`\n"
+    "  OUT.msui              output MSUIDX1 index\n\n"
+    "  --binstrings FILE     legacy: one 35-symbol 0/1/2 string per genomic CpG\n"
+    "  --pattern-counts FILE legacy: full `uniq -c` pattern-count table\n"
     "  --unit-cpgs N         target CpGs per unit (default 16384)\n"
     "  --bin-cpgs N          deprecated alias for --unit-cpgs\n"
     "  -h, --help            show this help\n");
@@ -240,19 +240,16 @@ static int usage(void) {
 
 int main_upscale_residual_index(int argc, char **argv) {
   const char *binstrings = NULL, *counts_path = NULL, *out_path = NULL;
-  const char *mrmp_path = NULL;
+  const char *mrmp_path = NULL, *pos[2] = {NULL, NULL};
+  int npos = 0;
   uint32_t target = 16384;
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
       usage(); return 0;
-    } else if (!strcmp(argv[i], "--mrmp") && i + 1 < argc) {
-      mrmp_path = argv[++i];
     } else if (!strcmp(argv[i], "--binstrings") && i + 1 < argc) {
       binstrings = argv[++i];
     } else if (!strcmp(argv[i], "--pattern-counts") && i + 1 < argc) {
       counts_path = argv[++i];
-    } else if (!strcmp(argv[i], "-o") && i + 1 < argc) {
-      out_path = argv[++i];
     } else if ((!strcmp(argv[i], "--unit-cpgs") || !strcmp(argv[i], "--bin-cpgs"))
                && i + 1 < argc) {
       const char *e; uint64_t x = parse_u64(argv[++i], &e, "--unit-cpgs");
@@ -260,15 +257,36 @@ int main_upscale_residual_index(int argc, char **argv) {
       target = (uint32_t)x;
     } else if (!strcmp(argv[i], "--top-patterns") && i + 1 < argc) {
       ++i; /* accepted temporarily so old scripts fail only on changed output semantics */
-    } else {
+    } else if (argv[i][0] == '-') {
       usage();
       fprintf(stderr, "[methscope] upscale-set-units: bad option: %s\n", argv[i]);
       return 1;
+    } else if (npos < 2) {
+      pos[npos++] = argv[i];
+    } else {
+      fail_path("too many arguments", argv[i]);
     }
   }
-  if (!out_path || (!mrmp_path && (!binstrings || !counts_path)) ||
-      (mrmp_path && (binstrings || counts_path)))
-    return usage();
+  /* The output is always the last positional; the artifact is the first, and
+   * is absent only in the legacy two-text-file mode. */
+  if (binstrings || counts_path) {
+    if (!binstrings || !counts_path) {
+      usage();
+      fail("legacy mode needs both --binstrings and --pattern-counts");
+    }
+    if (npos != 1) {
+      usage();
+      fail("legacy mode takes only OUT.msui (the artifact replaces it)");
+    }
+    out_path = pos[0];
+  } else {
+    if (npos != 2) {
+      usage();
+      fail("need IN.mrmp and OUT.msui");
+    }
+    mrmp_path = pos[0];
+    out_path = pos[1];
+  }
 
   groups_t groups = {0};
   hash_t hash = {0};

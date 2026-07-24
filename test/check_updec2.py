@@ -29,8 +29,7 @@ def main():
         (d / "binstrings").write_text("".join(p + "\n" for p in order))
         idx = d / "units.msui"
         run(exe, "upscale-set-units", "--binstrings", str(d / "binstrings"),
-            "--pattern-counts", str(d / "counts"), "--unit-cpgs", "4",
-            "-o", str(idx))
+            "--pattern-counts", str(d / "counts"), "--unit-cpgs", "4", str(idx))
         raw = idx.read_bytes()
         h = struct.unpack_from("<8s8I11Q", raw)
         assert h[0] == b"MSUIDX1\0" and h[1] == 1
