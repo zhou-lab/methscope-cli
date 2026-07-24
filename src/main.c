@@ -27,22 +27,24 @@ static int usage(void) {
           D, R);
   fprintf(stderr, "%sUsage%s  methscope <command> [options] [args]\n\n", D, R);
 
-  fprintf(stderr, "%sReference%s %s— the MRMP foundation%s\n", B, R, D, R);
+  fprintf(stderr, "%sMRMP construction%s %s— the feature foundation%s\n", B, R, D, R);
   CMD("mrmp",         "Build / inspect / export the MRMP membership-pattern mask");
 
-  fprintf(stderr, "\n%sAnalyze a query .cg%s\n", B, R);
-  CMD("predict",      "Classify a methylome (cell type, sex, ...) -> labels + confidence");
-  CMD("deconv",       "Estimate cell-type proportions (NNLS) from a mixture");
-  CMD("upscale",      "Impute genome-wide CpG methylation from a sparse methylome");
-  CMD("matrix",       "Build the record x pattern beta matrix (or a .refx reference)");
-
-  fprintf(stderr, "\n%sBuild models%s\n", B, R);
+  fprintf(stderr, "\n%sClassification%s %s(cell type, sex, ...)%s\n", B, R, D, R);
+  CMD("predict",      "Classify a methylome -> labels + confidence");
   CMD("train",        "Fit a label classifier (xgboost / threshold / logistic)");
+
+  fprintf(stderr, "\n%sDeconvolution%s\n", B, R);
+  CMD("deconv",       "Estimate cell-type proportions (NNLS) from a mixture");
+  CMD("matrix",       "Build a .refx deconv reference (or a record x pattern matrix)");
+
+  fprintf(stderr, "\n%sUpscaling%s %s(imputation)%s\n", B, R, D, R);
+  CMD("upscale",      "Impute genome-wide CpG methylation from a sparse methylome");
   CMD("upscale-train","Train the whole-genome upscale decoder (CUDA)");
+
+  fprintf(stderr, "\n%sModel bundles%s\n", B, R);
   CMD("bundle",       "Wrap a model + its MRMP into a self-contained bundle");
   CMD("unbundle",     "Unpack a bundle into its model, MRMP, and outcpg mask");
-
-  fprintf(stderr, "\n%sInspect%s\n", B, R);
   CMD("inspect",      "Report a bundle's framework, layout, and model summary");
 
   fprintf(stderr, "\n%sRun 'methscope <command> -h' for command-specific options.%s\n\n",
