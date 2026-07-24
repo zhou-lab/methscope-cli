@@ -189,7 +189,7 @@ static void stream_path(FILE *out, const char *path, uint64_t expected,
 /* bundle                                                             */
 /* ------------------------------------------------------------------ */
 static int bundle_usage(void) {
-  fprintf(stderr,
+  ms_help(stderr,
     "\n"
     "Usage:\n"
     "  methscope bundle -m <ref.mrmp> -o <out> <model>\n"
@@ -316,7 +316,7 @@ int main_bundle(int argc, char *argv[]) {
 /* unbundle                                                           */
 /* ------------------------------------------------------------------ */
 static int unbundle_usage(void) {
-  fprintf(stderr,
+  ms_help(stderr,
     "\n"
     "Usage:\n"
     "  methscope unbundle [-o <model_out>] [--mrmp <mrmp_out>] <bundle>\n"

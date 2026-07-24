@@ -80,7 +80,7 @@ static int bundle_model(const char *out, const char *kind, const char *inner_tmp
 }
 
 static int train_usage(void) {
-  fprintf(stderr,
+  ms_help(stderr,
     "\n"
     "Usage:\n"
     "  methscope train -l <labels.txt> -o <out.ubjx> [options] <query.cg> <ref.mrmp>\n"

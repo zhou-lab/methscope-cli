@@ -85,7 +85,7 @@ static int cmp_u32(const void *a, const void *b) {
 }
 
 static int usage(void) {
-  fprintf(stderr,
+  ms_help(stderr,
     "Usage: methscope _upscale prepare -o OUT.msur --truth TRUTH.cg --mrmp MRMP.cm [options]\n\n"
     "Create a compact exact-YAME sampling sidecar for global upscale training.\n"
     "The original TRUTH.cg remains the truth store and is never copied.\n\n"

@@ -166,7 +166,7 @@ static int solve_nnls(const double *A, int m, int n, const double *b,
 }
 
 static int deconv_usage(void) {
-  fprintf(stderr,
+  ms_help(stderr,
     "\n"
     "Usage:\n"
     "  methscope deconv [options] <mixture.cg> <panel.refx>\n"

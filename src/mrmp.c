@@ -191,7 +191,7 @@ static int mrmp_build(int argc, char *argv[]) {
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
-      fprintf(stderr,
+      ms_help(stderr,
         "Usage: methscope mrmp build --reference REF.cg -o OUT.mrmp [options]\n\n"
         "Reproduce YAME `rowop -o binstring` per CpG over the reference samples,\n"
         "count exact membership patterns, rank them (count desc, key asc), and\n"
@@ -437,7 +437,7 @@ static int mrmp_inspect(int argc, char *argv[]) {
   const char *path = NULL; int show_patterns = 0;
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-      fprintf(stderr, "Usage: methscope mrmp inspect FILE.mrmp [--patterns]\n");
+      ms_help(stderr, "Usage: methscope mrmp inspect FILE.mrmp [--patterns]\n");
       return 0;
     } else if (!strcmp(argv[i], "--patterns")) show_patterns = 1;
     else if (argv[i][0] != '-') path = argv[i];
@@ -484,7 +484,7 @@ static int mrmp_export(int argc, char *argv[]) {
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
-      fprintf(stderr,
+      ms_help(stderr,
         "Usage: methscope mrmp export FILE.mrmp [--mask CM] [--patterns TSV]\n"
         "                             [--counts TSV] [--pna-label NAME]\n\n"
         "  --mask CM        per-CpG P1..PK/Pna labels as a YAME format-2 .cm\n"
@@ -609,7 +609,7 @@ static int mrmp_export(int argc, char *argv[]) {
 
 int main_mrmp(int argc, char *argv[]) {
   if (argc < 2) {
-    fprintf(stderr,
+    ms_help(stderr,
       "Usage: methscope mrmp <build|inspect|export> ...\n\n"
       "  build    construct an MRMPIDX1 mask from a reference .cg\n"
       "  inspect  report dimensions and selected patterns\n"

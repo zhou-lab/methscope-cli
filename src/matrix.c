@@ -291,7 +291,8 @@ void ms_matrix_write_tsv(const ms_matrix_t *m, FILE *out, int header) {
 /* `methscope matrix [-o out.tsv] <query.cg> <ref.mrmp>`               */
 /* ------------------------------------------------------------------ */
 static int matrix_usage(void) {
-  fprintf(stderr,
+  char buf[4096];
+  snprintf(buf, sizeof(buf),
     "\n"
     "Usage:\n"
     "  methscope matrix [options] <query.cg> <ref.mrmp>\n"
@@ -324,6 +325,7 @@ static int matrix_usage(void) {
     "  TSV: first column 'cell', then one column per pattern (NA where no overlap);\n"
     "  or, with --refx, a .refx bundle (matrix + MRMP).\n"
     "\n");
+  ms_help(stderr, buf);
   return 1;
 }
 

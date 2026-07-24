@@ -218,7 +218,7 @@ static uint64_t file_size(const char *path) {
 }
 
 static int usage(void) {
-  fprintf(stderr,
+  ms_help(stderr,
     "Usage: methscope _upscale index (--mrmp FILE | --binstrings FILE\n"
     "       --pattern-counts FILE) -o UNITS.msui [--unit-cpgs 16384]\n\n"
     "Build the whole-genome processing-unit index used by UPDEC2. Real MRMP\n"

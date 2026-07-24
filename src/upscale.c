@@ -79,7 +79,7 @@ static int looks_like_header(const char *line) {
 }
 
 static int upscale_usage(void) {
-  fprintf(stderr,
+  ms_help(stderr,
     "\n"
     "Usage:\n"
     "  methscope upscale [options] <model.updec|.updecx> [input]\n"

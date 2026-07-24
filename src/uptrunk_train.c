@@ -8,9 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include "upfactor_cuda.h"
+#include "methscope.h"
 
 static int usage(void) {
-  fprintf(stderr,
+  ms_help(stderr,
     "Usage: methscope _upscale trunk-train -i DATA.msur -o TRUNK.upfac [options]\n\n"
     "  --features MODE   beta, missing, or count (default count)\n"
     "  --patterns N      MRMPs (default 1000)\n"

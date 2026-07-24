@@ -9,7 +9,7 @@
 #include "uphybrid_eval_cuda.h"
 
 static int usage(void) {
-  fprintf(stderr,
+  ms_help(stderr,
     "Usage: methscope _upscale eval -i DATA.msur --encoder BASE.upfac\n"
     "       --residual MODEL.upres -o METRICS.tsv [options]\n\n"
     "Evaluate a frozen UPFAC3 + UPRES1 hybrid on every finite truth value in\n"

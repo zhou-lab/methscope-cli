@@ -5,7 +5,7 @@
 #include "methscope.h"
 
 static int internal_usage(void) {
-  fprintf(stderr,
+  ms_help(stderr,
     "Usage: methscope _upscale <command> [options]\n\n"
     "Internal development tools; interfaces and file formats may change:\n"
     "  prepare   Build an MSURAW2 sampling/truth sidecar\n"

@@ -39,7 +39,7 @@ static double real(const char *s, const char *name) {
 }
 
 static int usage(void) {
-  fprintf(stderr,
+  ms_help(stderr,
     "Usage: methscope upscale-train -i DATA.msur --index UNITS.msui\n"
     "       --mrmp TOP1000.cm -o MODEL.updecx --work-dir DIR [options]\n\n"
     "Train whole-genome UPDEC2 processing units on CUDA. Each MRMP contributes\n"

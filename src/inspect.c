@@ -29,7 +29,7 @@ static void idie(const char *msg, const char *arg) {
 }
 
 static int inspect_usage(void) {
-  fprintf(stderr,
+  ms_help(stderr,
     "\n"
     "Usage:\n"
     "  methscope inspect <model.ubjx|.updecx|.refx>\n"

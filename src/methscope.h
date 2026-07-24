@@ -90,6 +90,9 @@ int  ms_linmodel_score(const linmodel_t *lm, const double *betas,
                        double *p1, double *conf);
 void ms_linmodel_free(linmodel_t *lm);
 
+/* Render subcommand help text, ANSI-styled on a TTY, plain when redirected. */
+void ms_help(FILE *out, const char *text);
+
 /* subcommand entry points */
 int main_matrix(int argc, char *argv[]);
 int main_inspect(int argc, char *argv[]);

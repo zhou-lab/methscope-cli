@@ -42,7 +42,7 @@ static double confidence_score(const float *p, int K) {
 }
 
 static int predict_usage(void) {
-  fprintf(stderr,
+  ms_help(stderr,
     "\n"
     "Usage:\n"
     "  methscope predict [options] <query.cg> <model.ubjx>\n"
