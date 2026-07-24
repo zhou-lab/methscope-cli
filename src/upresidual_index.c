@@ -8,13 +8,17 @@
  * placed after every real membership and packed in genomic order.
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include "methscope.h"
+#include "mrmp.h"
 
 #define MSUI_PATTERN_LEN 35u
 #define MSUI_UNIT_PURE 1u
@@ -215,11 +219,13 @@ static uint64_t file_size(const char *path) {
 
 static int usage(void) {
   fprintf(stderr,
-    "Usage: methscope _upscale index --binstrings FILE --pattern-counts FILE\n"
-    "       -o UNITS.msui [--unit-cpgs 16384]\n\n"
+    "Usage: methscope _upscale index (--mrmp FILE | --binstrings FILE\n"
+    "       --pattern-counts FILE) -o UNITS.msui [--unit-cpgs 16384]\n\n"
     "Build the whole-genome processing-unit index used by UPDEC2. Real MRMP\n"
     "memberships are size-ranked and never split. PNA CpGs are implicit\n"
     "singleton memberships packed after all real memberships.\n\n"
+    "  --mrmp FILE           MRMPIDX1 artifact from `methscope mrmp build`\n"
+    "                        (preferred; replaces the two text inputs below)\n"
     "  --binstrings FILE     one 35-symbol 0/1/2 string per genomic CpG\n"
     "  --pattern-counts FILE full `uniq -c` pattern-count table\n"
     "  -o FILE               output MSUIDX1 index\n"
@@ -231,10 +237,13 @@ static int usage(void) {
 
 int main_upscale_residual_index(int argc, char **argv) {
   const char *binstrings = NULL, *counts_path = NULL, *out_path = NULL;
+  const char *mrmp_path = NULL;
   uint32_t target = 16384;
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
       usage(); return 0;
+    } else if (!strcmp(argv[i], "--mrmp") && i + 1 < argc) {
+      mrmp_path = argv[++i];
     } else if (!strcmp(argv[i], "--binstrings") && i + 1 < argc) {
       binstrings = argv[++i];
     } else if (!strcmp(argv[i], "--pattern-counts") && i + 1 < argc) {
@@ -254,41 +263,95 @@ int main_upscale_residual_index(int argc, char **argv) {
       return 1;
     }
   }
-  if (!binstrings || !counts_path || !out_path) return usage();
+  if (!out_path || (!mrmp_path && (!binstrings || !counts_path)) ||
+      (mrmp_path && (binstrings || counts_path)))
+    return usage();
 
   groups_t groups = {0};
-  hash_t hash;
-  hash_init(&hash, 4096);
-  FILE *f = fopen(counts_path, "r");
-  if (!f) fail_path("cannot open pattern-count table", counts_path);
+  hash_t hash = {0};
+  FILE *f = NULL;
   char line[4096];
   uint64_t total = 0, checksum = 0, pk = pna_key();
   uint32_t pna_group = UINT32_MAX;
-  while (fgets(line, sizeof(line), f)) {
-    const char *p = line;
-    while (*p == ' ' || *p == '\t') ++p;
-    const char *e; uint64_t count = parse_u64(p, &e, "pattern count");
-    while (*e == ' ' || *e == '\t') ++e;
-    if (!count || count > UINT32_MAX) fail("membership count is outside uint32 range");
-    uint64_t key = encode_pattern(e);
-    group_t g = {key, 0, (uint32_t)count, 0, UINT32_MAX, key == pk};
-    groups_push(&groups, g);
-    hash_put(&hash, key, (uint32_t)(groups.n - 1));
-    if (key == pk) pna_group = (uint32_t)(groups.n - 1);
-    if (UINT64_MAX - total < count) fail("CpG count overflow");
-    total += count;
-    checksum = checksum_add(checksum, key, count);
-  }
-  if (ferror(f) || fclose(f)) fail_path("error reading pattern-count table", counts_path);
-  if (pna_group == UINT32_MAX) fail("pattern counts do not contain PNA (all-2)");
-  if (groups.n < 2) fail("no real MRMP memberships");
+  size_t n_real_groups = 0;
+  uint32_t *order = NULL;
 
-  const size_t n_real_groups = groups.n - 1;
-  uint32_t *order = xmalloc(n_real_groups * sizeof(*order));
-  size_t q = 0;
-  for (size_t i = 0; i < groups.n; ++i) if (!groups.a[i].pna) order[q++] = (uint32_t)i;
-  sort_ctx = &groups;
-  qsort(order, n_real_groups, sizeof(*order), group_cmp);
+  /* MRMPIDX1 artifact carries the candidate patterns already ranked (count
+   * desc, key asc) plus a per-CpG membership rank, so the group set, order,
+   * and CpG scatter are all read directly with no text parsing. */
+  const mrmp_header_t *mh = NULL;
+  const uint32_t *membership = NULL;
+  void *mmap_base = NULL; size_t mmap_bytes = 0; int mmap_fd = -1;
+  if (mrmp_path) {
+    mmap_fd = open(mrmp_path, O_RDONLY);
+    if (mmap_fd < 0) fail_path("cannot open MRMP artifact", mrmp_path);
+    struct stat st;
+    if (fstat(mmap_fd, &st) || (uint64_t)st.st_size < sizeof(mrmp_header_t))
+      fail_path("MRMP artifact is truncated", mrmp_path);
+    mmap_bytes = (size_t)st.st_size;
+    mmap_base = mmap(NULL, mmap_bytes, PROT_READ, MAP_SHARED, mmap_fd, 0);
+    if (mmap_base == MAP_FAILED) fail_path("cannot mmap MRMP artifact", mrmp_path);
+    mh = (const mrmp_header_t *)mmap_base;
+    if (memcmp(mh->magic, MRMPIDX_MAGIC, 8) || mh->version != MRMPIDX_VERSION)
+      fail_path("bad MRMPIDX1 magic or version", mrmp_path);
+    if (mh->n_samples != MSUI_PATTERN_LEN)
+      fail("MRMP sample count must be 35 for this index");
+    if (mh->n_cpg > UINT32_MAX) fail("genomic CpG index exceeds uint32");
+    if (mh->membership_offset + mh->n_cpg * sizeof(uint32_t) > mmap_bytes)
+      fail_path("MRMP artifact offsets out of bounds", mrmp_path);
+    const mrmp_pattern_t *pat =
+      (const mrmp_pattern_t *)((const char *)mmap_base + mh->patterns_offset);
+    membership =
+      (const uint32_t *)((const char *)mmap_base + mh->membership_offset);
+    for (uint64_t r = 0; r < mh->n_candidates; ++r) {
+      if (!pat[r].count || pat[r].count > UINT32_MAX)
+        fail("membership count is outside uint32 range");
+      group_t g = {pat[r].key, 0, (uint32_t)pat[r].count, 0, UINT32_MAX, 0};
+      groups_push(&groups, g);
+      total += pat[r].count;
+      checksum = checksum_add(checksum, pat[r].key, pat[r].count);
+    }
+    /* PNA (all-2) appended last: same group *set* as the file path, so the
+     * order-independent XOR checksum is identical. */
+    group_t pg = {pk, 0, (uint32_t)mh->pna_cpg, 0, UINT32_MAX, 1};
+    groups_push(&groups, pg);
+    pna_group = (uint32_t)(groups.n - 1);
+    total += mh->pna_cpg;
+    checksum = checksum_add(checksum, pk, mh->pna_cpg);
+    if (total != mh->n_cpg) fail("MRMP candidate counts do not cover all CpGs");
+    if (groups.n < 2) fail("no real MRMP memberships");
+    n_real_groups = groups.n - 1;                 /* candidates already ranked */
+    order = xmalloc(n_real_groups * sizeof(*order));
+    for (size_t i = 0; i < n_real_groups; ++i) order[i] = (uint32_t)i;
+  } else {
+    hash_init(&hash, 4096);
+    f = fopen(counts_path, "r");
+    if (!f) fail_path("cannot open pattern-count table", counts_path);
+    while (fgets(line, sizeof(line), f)) {
+      const char *p = line;
+      while (*p == ' ' || *p == '\t') ++p;
+      const char *e; uint64_t count = parse_u64(p, &e, "pattern count");
+      while (*e == ' ' || *e == '\t') ++e;
+      if (!count || count > UINT32_MAX) fail("membership count is outside uint32 range");
+      uint64_t key = encode_pattern(e);
+      group_t g = {key, 0, (uint32_t)count, 0, UINT32_MAX, key == pk};
+      groups_push(&groups, g);
+      hash_put(&hash, key, (uint32_t)(groups.n - 1));
+      if (key == pk) pna_group = (uint32_t)(groups.n - 1);
+      if (UINT64_MAX - total < count) fail("CpG count overflow");
+      total += count;
+      checksum = checksum_add(checksum, key, count);
+    }
+    if (ferror(f) || fclose(f)) fail_path("error reading pattern-count table", counts_path);
+    if (pna_group == UINT32_MAX) fail("pattern counts do not contain PNA (all-2)");
+    if (groups.n < 2) fail("no real MRMP memberships");
+    n_real_groups = groups.n - 1;
+    order = xmalloc(n_real_groups * sizeof(*order));
+    size_t q = 0;
+    for (size_t i = 0; i < groups.n; ++i) if (!groups.a[i].pna) order[q++] = (uint32_t)i;
+    sort_ctx = &groups;
+    qsort(order, n_real_groups, sizeof(*order), group_cmp);
+  }
 
   units_t units = {0};
   uint64_t output = 0;
@@ -331,21 +394,42 @@ int main_upscale_residual_index(int argc, char **argv) {
   if (units.n > UINT32_MAX) fail("too many processing units");
 
   uint32_t *cpg = xmalloc((size_t)total * sizeof(*cpg));
-  f = fopen(binstrings, "r");
-  if (!f) fail_path("cannot open binstring table", binstrings);
   uint64_t genomic = 0, pna_seen = 0;
-  while (fgets(line, sizeof(line), f)) {
-    if (genomic > UINT32_MAX) fail("genomic CpG index exceeds uint32");
-    uint64_t key = encode_pattern(line);
-    uint32_t gi = hash_get(&hash, key);
-    if (gi == UINT32_MAX) fail("binstring is absent from pattern-count table");
-    group_t *g = &groups.a[gi];
-    if (g->seen >= g->count) fail("binstring frequency exceeds count table");
-    uint64_t dest = g->pna ? n_real_cpg + pna_seen++ : g->output_offset + g->seen;
-    cpg[dest] = (uint32_t)genomic;
-    ++g->seen; ++genomic;
+  if (mrmp_path) {
+    /* membership rank is in genomic order, so CpGs land inside each unit in
+     * genomic order exactly as the binstring scan would place them. */
+    for (uint64_t i = 0; i < mh->n_cpg; ++i) {
+      uint32_t r = membership[i];
+      uint64_t dest;
+      if (r == MRMP_PNA_MEMBERSHIP) {
+        dest = n_real_cpg + pna_seen++;
+        ++groups.a[pna_group].seen;      /* keep PNA seen==count like file path */
+      } else {
+        if (r >= n_real_groups) fail("MRMP membership rank out of range");
+        group_t *g = &groups.a[r];              /* order is identity for --mrmp */
+        if (g->seen >= g->count) fail("MRMP membership frequency exceeds count");
+        dest = g->output_offset + g->seen;
+        ++g->seen;
+      }
+      cpg[dest] = (uint32_t)i;
+    }
+    genomic = mh->n_cpg;
+  } else {
+    f = fopen(binstrings, "r");
+    if (!f) fail_path("cannot open binstring table", binstrings);
+    while (fgets(line, sizeof(line), f)) {
+      if (genomic > UINT32_MAX) fail("genomic CpG index exceeds uint32");
+      uint64_t key = encode_pattern(line);
+      uint32_t gi = hash_get(&hash, key);
+      if (gi == UINT32_MAX) fail("binstring is absent from pattern-count table");
+      group_t *g = &groups.a[gi];
+      if (g->seen >= g->count) fail("binstring frequency exceeds count table");
+      uint64_t dest = g->pna ? n_real_cpg + pna_seen++ : g->output_offset + g->seen;
+      cpg[dest] = (uint32_t)genomic;
+      ++g->seen; ++genomic;
+    }
+    if (ferror(f) || fclose(f)) fail_path("error reading binstring table", binstrings);
   }
-  if (ferror(f) || fclose(f)) fail_path("error reading binstring table", binstrings);
   if (genomic != total || pna_seen != n_pna_cpg)
     fail("binstring and pattern-count totals disagree");
   for (size_t i = 0; i < groups.n; ++i)
@@ -396,7 +480,7 @@ int main_upscale_residual_index(int argc, char **argv) {
     oversized += !!(units.a[i].flags & MSUI_UNIT_OVERSIZED);
   }
   fprintf(f,
-    "format\tMSUIDX1\nbinstrings\t%s\npattern_counts\t%s\n"
+    "format\tMSUIDX1\nmrmp\t%s\nbinstrings\t%s\npattern_counts\t%s\n"
     "pattern_length\t%u\ntotal_cpgs\t%" PRIu64 "\nreal_cpgs\t%" PRIu64
     "\npna_cpgs\t%" PRIu64 "\nreal_memberships\t%zu\nunits\t%u\n"
     "real_units\t%u\nmembership_pure_units\t%u\nmixed_units\t%u\n"
@@ -405,7 +489,8 @@ int main_upscale_residual_index(int argc, char **argv) {
     "within_membership_order\tgenomic_cpg_index\n"
     "real_membership_split\tfalse\npna_semantics\timplicit_singletons\n"
     "pattern_checksum\t%016" PRIx64 "\nfile_bytes\t%" PRIu64 "\n",
-    binstrings, counts_path, MSUI_PATTERN_LEN, total, n_real_cpg, n_pna_cpg,
+    mrmp_path ? mrmp_path : "", binstrings ? binstrings : "",
+    counts_path ? counts_path : "", MSUI_PATTERN_LEN, total, n_real_cpg, n_pna_cpg,
     n_real_groups, h.n_units, n_real_units, pure, n_real_units - pure,
     h.n_pna_units, oversized, target, checksum, h.file_bytes);
   if (fclose(f)) fail_path("error closing manifest", manifest);
@@ -429,5 +514,7 @@ int main_upscale_residual_index(int argc, char **argv) {
 
   free(members); free(cpg); free(units.a); free(order);
   free(hash.keys); free(hash.values); free(groups.a);
+  if (mmap_base) munmap(mmap_base, mmap_bytes);
+  if (mmap_fd >= 0) close(mmap_fd);
   return 0;
 }
