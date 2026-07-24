@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /* Native CUDA/cuBLAS trainer for the global MRMP-factorized decoder.
  *
- * x (beta, log1p coverage, missing for each MRMP)
+ * x (beta plus either log1p coverage or missing for each MRMP)
  *   -> ReLU(W1 x + b1) -> ReLU(W2 h1 + b2) = h
  *   -> z_g = G_g h + gb_g                         (16 factors / MRMP)
  *   -> sigmoid(e_c . z_group(c) + bias_c)         (linear CpG decoder)
@@ -27,20 +27,20 @@
 static const int THREADS=256;
 
 static void die(const char *msg) {
-  std::fprintf(stderr,"[methscope] upscale-factor-train: %s\n",msg); std::exit(1);
+  std::fprintf(stderr,"[methscope] upscale-train/factor: %s\n",msg); std::exit(1);
 }
 static void die_path(const char *msg,const char *path) {
-  std::fprintf(stderr,"[methscope] upscale-factor-train: %s: %s\n",msg,path); std::exit(1);
+  std::fprintf(stderr,"[methscope] upscale-train/factor: %s: %s\n",msg,path); std::exit(1);
 }
 static void cuda_fail(const char *call,cudaError_t e,const char *file,int line) {
-  std::fprintf(stderr,"[methscope] upscale-factor-train CUDA: %s failed at %s:%d: %s\n",call,file,line,cudaGetErrorString(e)); std::exit(1);
+  std::fprintf(stderr,"[methscope] upscale-train/factor CUDA: %s failed at %s:%d: %s\n",call,file,line,cudaGetErrorString(e)); std::exit(1);
 }
 #define CUDA_OK(x) do { cudaError_t _e=(x); if(_e!=cudaSuccess) cuda_fail(#x,_e,__FILE__,__LINE__); } while(0)
 static const char *blas_msg(cublasStatus_t s) {
   switch(s){case CUBLAS_STATUS_SUCCESS:return "success";case CUBLAS_STATUS_NOT_INITIALIZED:return "not initialized";case CUBLAS_STATUS_ALLOC_FAILED:return "allocation failed";case CUBLAS_STATUS_INVALID_VALUE:return "invalid value";case CUBLAS_STATUS_ARCH_MISMATCH:return "architecture mismatch";case CUBLAS_STATUS_MAPPING_ERROR:return "mapping error";case CUBLAS_STATUS_EXECUTION_FAILED:return "execution failed";case CUBLAS_STATUS_INTERNAL_ERROR:return "internal error";case CUBLAS_STATUS_NOT_SUPPORTED:return "not supported";default:return "unknown";}
 }
 static void blas_fail(const char *call,cublasStatus_t s,const char *file,int line) {
-  std::fprintf(stderr,"[methscope] upscale-factor-train cuBLAS: %s failed at %s:%d: %s\n",call,file,line,blas_msg(s)); std::exit(1);
+  std::fprintf(stderr,"[methscope] upscale-train/factor cuBLAS: %s failed at %s:%d: %s\n",call,file,line,blas_msg(s)); std::exit(1);
 }
 #define BLAS_OK(x) do { cublasStatus_t _s=(x); if(_s!=CUBLAS_STATUS_SUCCESS) blas_fail(#x,_s,__FILE__,__LINE__); } while(0)
 
@@ -184,12 +184,13 @@ extern "C" int ms_upfactor_train_cuda(const ms_upfactor_config_t*cfg){
   uint32_t nt=(uint32_t)(h->n_cells*.70),nv=(uint32_t)(h->n_cells*.15);if(!nt)nt=1;if(!nv)nv=1;if(nt+nv>=h->n_cells)die("not enough cells for train/validation/test");
   std::vector<uint32_t>train(order.begin(),order.begin()+nt),val(order.begin()+nt,order.begin()+nt+nv),test(order.begin()+nt+nv,order.end());std::vector<uint8_t>split(h->n_cells,2);for(uint32_t c:train)split[c]=0;for(uint32_t c:val)split[c]=1;
 
-  int I=(int)(3*G),H=(int)cfg->hidden,R=(int)cfg->rank;size_t rows=(size_t)h->n_cells*h->n_reps;
-  std::fprintf(stderr,"[methscope] upscale-factor-train: data cells=%u reps=%u CpGs=%llu active=%zu patterns=%u\n",h->n_cells,h->n_reps,(unsigned long long)h->n_cpg,active.size(),G);
-  if(!easy_pool.empty())std::fprintf(stderr,"[methscope] upscale-factor-train: stratified targets homogeneous=%zu variable=%zu homogeneous_fraction=%.3f\n",easy_pool.size(),variable_pool.size(),cfg->homogeneous_fraction);
-  std::fprintf(stderr,"[methscope] upscale-factor-train: split cells train=%zu val=%zu test=%zu; input=%d hidden=%d rank=%d\n",train.size(),val.size(),test.size(),I,H,R);
+  if(cfg->feature_mode>MS_UPFEATURE_BETA)die("invalid feature mode");
+  int I=(int)(cfg->feature_mode==MS_UPFEATURE_BETA?G:2*G),H=(int)cfg->hidden,R=(int)cfg->rank;size_t rows=(size_t)h->n_cells*h->n_reps;
+  std::fprintf(stderr,"[methscope] upscale-train/factor: data cells=%u reps=%u CpGs=%llu active=%zu patterns=%u\n",h->n_cells,h->n_reps,(unsigned long long)h->n_cpg,active.size(),G);
+  if(!easy_pool.empty())std::fprintf(stderr,"[methscope] upscale-train/factor: stratified targets homogeneous=%zu variable=%zu homogeneous_fraction=%.3f\n",easy_pool.size(),variable_pool.size(),cfg->homogeneous_fraction);
+  std::fprintf(stderr,"[methscope] upscale-train/factor: split cells train=%zu val=%zu test=%zu; input=%d hidden=%d rank=%d\n",train.size(),val.size(),test.size(),I,H,R);
   std::vector<float>feat(checked_mul(rows,(size_t)I,"feature size overflow"));
-  for(size_t row=0;row<rows;++row){const uint8_t*rec=map.base+h->records_offset+row*h->record_bytes;const float*b=(const float*)rec;const uint32_t*c=(const uint32_t*)(rec+(size_t)h->n_patterns*sizeof(float));float*out=feat.data()+row*I;for(uint32_t g=0;g<G;++g){out[3*g]=b[g];out[3*g+1]=std::log1p((float)c[g]);out[3*g+2]=std::isnan(b[g])?1.0f:0.0f;}}
+  for(size_t row=0;row<rows;++row){const uint8_t*rec=map.base+h->records_offset+row*h->record_bytes;const float*b=(const float*)rec;const uint32_t*c=(const uint32_t*)(rec+(size_t)h->n_patterns*sizeof(float));float*out=feat.data()+row*I;for(uint32_t g=0;g<G;++g){if(cfg->feature_mode==MS_UPFEATURE_BETA)out[g]=b[g];else{out[2*g]=b[g];out[2*g+1]=cfg->feature_mode==MS_UPFEATURE_COUNT?std::log1p((float)c[g]):(std::isnan(b[g])?1.0f:0.0f);}}}
   std::vector<float>imp(I,0),mean(I,0),scale(I,1);std::vector<uint64_t>cnt(I,0);uint64_t train_rows=(uint64_t)train.size()*h->n_reps;
   for(uint32_t rep=0;rep<h->n_reps;++rep)for(uint32_t cell:train){const float*x=feat.data()+((size_t)rep*h->n_cells+cell)*I;for(int j=0;j<I;++j)if(!std::isnan(x[j])){imp[j]+=x[j];cnt[j]++;}}
   for(int j=0;j<I;++j)if(cnt[j])imp[j]/=(float)cnt[j];
@@ -204,13 +205,13 @@ extern "C" int ms_upfactor_train_cuda(const ms_upfactor_config_t*cfg){
   for(size_t q=0;q<active.size();++q){float p=bcnt[q]?bsum[q]/bcnt[q]:.5f;p=std::max(.01f,std::min(.99f,p));bias[q]=std::log(p/(1-p));}
   bsum.clear();bcnt.clear();bsum.shrink_to_fit();bcnt.shrink_to_fit();
 
-  CUDA_OK(cudaSetDevice(cfg->device));cudaDeviceProp prop;CUDA_OK(cudaGetDeviceProperties(&prop,cfg->device));std::fprintf(stderr,"[methscope] upscale-factor-train: CUDA device %d: %s (%.0f MiB, cc %d.%d)\n",cfg->device,prop.name,(double)prop.totalGlobalMem/(1024*1024),prop.major,prop.minor);
+  CUDA_OK(cudaSetDevice(cfg->device));cudaDeviceProp prop;CUDA_OK(cudaGetDeviceProperties(&prop,cfg->device));std::fprintf(stderr,"[methscope] upscale-train/factor: CUDA device %d: %s (%.0f MiB, cc %d.%d)\n",cfg->device,prop.name,(double)prop.totalGlobalMem/(1024*1024),prop.major,prop.minor);
   Pcg init;pcg_seed(&init,cfg->seed^UINT64_C(0xa0761d6478bd642f));std::vector<float>w1((size_t)H*I),b1(H,0),w2((size_t)H*H),b2(H,0),gw((size_t)G*R*H),gb((size_t)G*R,0),e(active.size()*R);
   float a1=std::sqrt(6.0f/(I+H)),a2=std::sqrt(6.0f/(2*H)),agw=std::sqrt(6.0f/(H+R));for(float&x:w1)x=rand_sym(&init,a1);for(float&x:w2)x=rand_sym(&init,a2);for(float&x:gw)x=rand_sym(&init,agw);for(float&x:e)x=rand_sym(&init,.02f);
   Net net={param(w1.size(),w1),param(b1.size(),b1),param(w2.size(),w2),param(b2.size(),b2),param(gw.size(),gw),param(gb.size(),gb),param(e.size(),e),param(bias.size(),bias),I,H,(int)G,R};w1.clear();w2.clear();gw.clear();e.clear();bias.clear();
   Work w={df(I),df(H),df(H),df((size_t)G*R),df(H),df(H),df(H),df((size_t)G*R),df(cfg->batch),du32(cfg->batch),du16(cfg->batch),NULL};CUDA_OK(cudaMalloc((void**)&w.met,sizeof(Metrics)));
   cublasHandle_t bh;BLAS_OK(cublasCreate(&bh));std::vector<uint32_t>bid(cfg->batch);std::vector<uint16_t>bg(cfg->batch);std::vector<float>by(cfg->batch);Pcg rng;pcg_seed(&rng,cfg->seed^UINT64_C(0xe7037ed1a0b428db));
-  Score v0=evaluate(bh,net,w,h,map.base,active,ag,NULL,val,feat,cfg->eval_batches,cfg->batch,cfg->seed+101);std::fprintf(stderr,"[methscope] upscale-factor-train: step 0 val_rmse=%.6f val_mae=%.6f n=%llu\n",v0.rmse,v0.mae,(unsigned long long)v0.n);double t0=now();Score vs=v0;
+  Score v0=evaluate(bh,net,w,h,map.base,active,ag,NULL,val,feat,cfg->eval_batches,cfg->batch,cfg->seed+101);std::fprintf(stderr,"[methscope] upscale-train/factor: step 0 val_rmse=%.6f val_mae=%.6f n=%llu\n",v0.rmse,v0.mae,(unsigned long long)v0.n);double t0=now();Score vs=v0;
   for(uint32_t step=1;step<=cfg->steps;++step){uint32_t cell=train[pcg32(&rng)%train.size()],rep=pcg32(&rng)%h->n_reps;uint32_t B=0;if(easy_pool.empty()){B=fill_batch(h,map.base,active,ag,NULL,cell,rep,pcg32(&rng),cfg->batch,0,bid,bg,by);}else{uint32_t ne=(uint32_t)llround(cfg->batch*cfg->homogeneous_fraction);if(ne>cfg->batch)ne=cfg->batch;uint32_t nv=cfg->batch-ne;B=fill_batch(h,map.base,active,ag,&variable_pool,cell,rep,pcg32(&rng),nv,0,bid,bg,by);B+=fill_batch(h,map.base,active,ag,&easy_pool,cell,rep,pcg32(&rng),ne,B,bid,bg,by);}if(!B)die("could not form training batch");size_t row=(size_t)rep*h->n_cells+cell;
     CUDA_OK(cudaMemcpy(w.x,feat.data()+row*I,I*sizeof(float),cudaMemcpyHostToDevice));CUDA_OK(cudaMemcpy(w.id,bid.data(),B*sizeof(uint32_t),cudaMemcpyHostToDevice));CUDA_OK(cudaMemcpy(w.g,bg.data(),B*sizeof(uint16_t),cudaMemcpyHostToDevice));CUDA_OK(cudaMemcpy(w.y,by.data(),B*sizeof(float),cudaMemcpyHostToDevice));forward(bh,net,w);CUDA_OK(cudaMemset(w.dz,0,(size_t)G*R*sizeof(float)));
     float ib1=1.0f/(1.0f-std::pow(.9f,(float)step)),ib2=1.0f/(1.0f-std::pow(.999f,(float)step)),lr=(float)cfg->learning_rate,wd=(float)cfg->weight_decay;
@@ -220,9 +221,9 @@ extern "C" int ms_upfactor_train_cuda(const ms_upfactor_config_t*cfg){
     adam_outer<<<blocks(net.gw.n),THREADS>>>(net.gw.t,net.gw.m,net.gw.v,w.dz,w.h2,G*R,H,lr,wd,ib1,ib2);adam_vec<<<blocks(net.gb.n),THREADS>>>(net.gb.t,net.gb.m,net.gb.v,w.dz,net.gb.n,lr,0,ib1,ib2);
     adam_outer<<<blocks(net.w2.n),THREADS>>>(net.w2.t,net.w2.m,net.w2.v,w.dh2,w.h1,H,H,lr,wd,ib1,ib2);adam_vec<<<blocks(net.b2.n),THREADS>>>(net.b2.t,net.b2.m,net.b2.v,w.dh2,H,lr,0,ib1,ib2);
     adam_outer<<<blocks(net.w1.n),THREADS>>>(net.w1.t,net.w1.m,net.w1.v,w.dh1,w.x,H,I,lr,wd,ib1,ib2);adam_vec<<<blocks(net.b1.n),THREADS>>>(net.b1.t,net.b1.m,net.b1.v,w.dh1,H,lr,0,ib1,ib2);
-    if(step%cfg->log_every==0||step==cfg->steps){vs=evaluate(bh,net,w,h,map.base,active,ag,NULL,val,feat,cfg->eval_batches,cfg->batch,cfg->seed+101);double elapsed=now()-t0;std::fprintf(stderr,"[methscope] upscale-factor-train: step %u/%u val_rmse=%.6f val_mae=%.6f elapsed=%.1fs steps/s=%.2f\n",step,cfg->steps,vs.rmse,vs.mae,elapsed,step/elapsed);}
+    if(step%cfg->log_every==0||step==cfg->steps){vs=evaluate(bh,net,w,h,map.base,active,ag,NULL,val,feat,cfg->eval_batches,cfg->batch,cfg->seed+101);double elapsed=now()-t0;std::fprintf(stderr,"[methscope] upscale-train/factor: step %u/%u val_rmse=%.6f val_mae=%.6f elapsed=%.1fs steps/s=%.2f\n",step,cfg->steps,vs.rmse,vs.mae,elapsed,step/elapsed);}
   }
-  Score ts=evaluate(bh,net,w,h,map.base,active,ag,NULL,test,feat,cfg->eval_batches,cfg->batch,cfg->seed+202);Score te={NAN,NAN,0},tv={NAN,NAN,0};if(!easy_pool.empty()){te=evaluate(bh,net,w,h,map.base,active,ag,&easy_pool,test,feat,cfg->eval_batches,cfg->batch,cfg->seed+303);tv=evaluate(bh,net,w,h,map.base,active,ag,&variable_pool,test,feat,cfg->eval_batches,cfg->batch,cfg->seed+404);}double elapsed=now()-t0;std::fprintf(stderr,"[methscope] upscale-factor-train: test_rmse=%.6f test_mae=%.6f n=%llu training_seconds=%.1f\n",ts.rmse,ts.mae,(unsigned long long)ts.n,elapsed);if(!easy_pool.empty())std::fprintf(stderr,"[methscope] upscale-factor-train: test_homogeneous_rmse=%.6f mae=%.6f; test_variable_rmse=%.6f mae=%.6f\n",te.rmse,te.mae,tv.rmse,tv.mae);
+  Score ts=evaluate(bh,net,w,h,map.base,active,ag,NULL,test,feat,cfg->eval_batches,cfg->batch,cfg->seed+202);Score te={NAN,NAN,0},tv={NAN,NAN,0};if(!easy_pool.empty()){te=evaluate(bh,net,w,h,map.base,active,ag,&easy_pool,test,feat,cfg->eval_batches,cfg->batch,cfg->seed+303);tv=evaluate(bh,net,w,h,map.base,active,ag,&variable_pool,test,feat,cfg->eval_batches,cfg->batch,cfg->seed+404);}double elapsed=now()-t0;std::fprintf(stderr,"[methscope] upscale-train/factor: test_rmse=%.6f test_mae=%.6f n=%llu training_seconds=%.1f\n",ts.rmse,ts.mae,(unsigned long long)ts.n,elapsed);if(!easy_pool.empty())std::fprintf(stderr,"[methscope] upscale-train/factor: test_homogeneous_rmse=%.6f mae=%.6f; test_variable_rmse=%.6f mae=%.6f\n",te.rmse,te.mae,tv.rmse,tv.mae);
 
   ModelHeader mh={};std::memcpy(mh.magic,"UPFAC3\0\0",8);mh.version=3;mh.patterns=G;mh.rank=R;mh.hidden=H;mh.n_input=I;mh.n_active=(uint32_t)active.size();mh.n_cells=h->n_cells;mh.n_train=train.size();mh.n_val=val.size();mh.n_test=test.size();mh.steps=cfg->steps;mh.batch=cfg->batch;mh.n_cpg=h->n_cpg;mh.seed=cfg->seed;mh.val_rmse=(float)vs.rmse;mh.val_mae=(float)vs.mae;mh.test_rmse=(float)ts.rmse;mh.test_mae=(float)ts.mae;
   mh.split_offset=sizeof(mh);mh.prep_offset=mh.split_offset+split.size();mh.active_offset=mh.prep_offset+(uint64_t)3*I*sizeof(float);mh.param_offset=mh.active_offset+(uint64_t)active.size()*(sizeof(uint32_t)+sizeof(uint16_t));mh.file_bytes=mh.param_offset+(uint64_t)(net.w1.n+net.b1.n+net.w2.n+net.b2.n+net.gw.n+net.gb.n+net.e.n+net.eb.n)*sizeof(float);
@@ -230,7 +231,7 @@ extern "C" int ms_upfactor_train_cuda(const ms_upfactor_config_t*cfg){
   write_device(f,net.w1.t,net.w1.n,cfg->model_path);write_device(f,net.b1.t,net.b1.n,cfg->model_path);write_device(f,net.w2.t,net.w2.n,cfg->model_path);write_device(f,net.b2.t,net.b2.n,cfg->model_path);write_device(f,net.gw.t,net.gw.n,cfg->model_path);write_device(f,net.gb.t,net.gb.n,cfg->model_path);write_device(f,net.e.t,net.e.n,cfg->model_path);write_device(f,net.eb.t,net.eb.n,cfg->model_path);if(std::fclose(f))die_path("error closing model",cfg->model_path);
   char mp[4096];if(std::snprintf(mp,sizeof(mp),"%s.tsv",cfg->model_path)>=(int)sizeof(mp))die("model path too long");f=std::fopen(mp,"w");if(!f)die_path("cannot create model manifest",mp);
   std::fprintf(f,
-    "format\tUPFAC3\nactivation\tleaky_relu_0.01_residual_block\nsidecar\t%s\npatterns\t%u\nrank\t%d\nhidden\t%d\n"
+    "format\tUPFAC3\nactivation\tleaky_relu_0.01_residual_block\nfeature_mode\t%s\nsidecar\t%s\npatterns\t%u\nrank\t%d\nhidden\t%d\n"
     "input_features\t%d\nactive_cpgs\t%zu\ntrain_cells\t%zu\n"
     "validation_cells\t%zu\ntest_cells\t%zu\nsteps\t%u\nbatch\t%u\n"
     "seed\t%llu\nhomogeneous_groups\t%s\nhomogeneous_fraction\t%.9g\n"
@@ -241,12 +242,14 @@ extern "C" int ms_upfactor_train_cuda(const ms_upfactor_config_t*cfg){
     "test_variable_rmse\t%.9g\ntest_variable_mae\t%.9g\n"
     "training_seconds\t%.3f\n"
     "parameter_order\tW1,b1,W2,b2,group_W,group_b,cpg_embedding,cpg_bias\n",
+    cfg->feature_mode==MS_UPFEATURE_COUNT?"beta_log1p_count":
+      cfg->feature_mode==MS_UPFEATURE_MISSING?"beta_missing":"beta_only",
     cfg->data_path,G,R,H,I,active.size(),train.size(),val.size(),test.size(),
     cfg->steps,cfg->batch,(unsigned long long)cfg->seed,
     cfg->homogeneous_groups?cfg->homogeneous_groups:"",
     cfg->homogeneous_fraction,easy_pool.size(),variable_pool.size(),
     vs.rmse,vs.mae,ts.rmse,ts.mae,te.rmse,te.mae,tv.rmse,tv.mae,elapsed);
   std::fclose(f);
-  std::fprintf(stderr,"[methscope] upscale-factor-train: wrote %s (%llu bytes) and %s\n",cfg->model_path,(unsigned long long)mh.file_bytes,mp);
+  std::fprintf(stderr,"[methscope] upscale-train/factor: wrote %s (%llu bytes) and %s\n",cfg->model_path,(unsigned long long)mh.file_bytes,mp);
   BLAS_OK(cublasDestroy(bh));free_param(&net.w1);free_param(&net.b1);free_param(&net.w2);free_param(&net.b2);free_param(&net.gw);free_param(&net.gb);free_param(&net.e);free_param(&net.eb);cudaFree(w.x);cudaFree(w.h1);cudaFree(w.h2);cudaFree(w.z);cudaFree(w.dh2);cudaFree(w.dh1);cudaFree(w.dskip);cudaFree(w.dz);cudaFree(w.y);cudaFree(w.id);cudaFree(w.g);cudaFree(w.met);unmap_read(&map);return 0;
 }

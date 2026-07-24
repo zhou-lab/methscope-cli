@@ -62,6 +62,11 @@ typedef struct { char name[16]; uint64_t offset, length; } ms_bundle_entry_t;
  * entries; caller frees). Exits on a bad/truncated bundle. */
 ms_bundle_entry_t *ms_bundle_list(const char *path, int *n_out);
 
+/* Locate one section without reading its contents. Returns 1 when found and
+ * fills `out`, or 0 when absent. The bundle directory is validated with
+ * 64-bit file offsets, so callers can mmap/stream multi-gigabyte models. */
+int ms_bundle_find(const char *path, const char *name, ms_bundle_entry_t *out);
+
 /* 1 if `path` is a bundle (its trailing footer points at the MSBNDL1 magic), else 0. */
 int ms_bundle_is(const char *path);
 

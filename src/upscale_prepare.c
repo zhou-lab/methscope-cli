@@ -32,8 +32,8 @@ typedef struct {
 } msur_header_t;
 
 static void pdie(const char *msg, const char *arg) {
-  if (arg) fprintf(stderr, "[methscope] upscale-prepare: %s: %s\n", msg, arg);
-  else fprintf(stderr, "[methscope] upscale-prepare: %s\n", msg);
+  if (arg) fprintf(stderr, "[methscope] _upscale prepare: %s: %s\n", msg, arg);
+  else fprintf(stderr, "[methscope] _upscale prepare: %s\n", msg);
   exit(1);
 }
 
@@ -86,7 +86,7 @@ static int cmp_u32(const void *a, const void *b) {
 
 static int usage(void) {
   fprintf(stderr,
-    "Usage: methscope upscale-prepare -o OUT.msur --truth TRUTH.cg --mrmp MRMP.cm [options]\n\n"
+    "Usage: methscope _upscale prepare -o OUT.msur --truth TRUTH.cg --mrmp MRMP.cm [options]\n\n"
     "Create a compact exact-YAME sampling sidecar for global upscale training.\n"
     "The original TRUTH.cg remains the truth store and is never copied.\n\n"
     "Options:\n"
@@ -112,7 +112,10 @@ int main_upscale_prepare(int argc, char *argv[]) {
   uint32_t reps = 100, patterns = 1000, sample = 29000;
   int in_memory = 0, embed_truth = 0;
   for (int i = 1; i < argc; ++i) {
-    if ((!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help"))) return usage();
+    if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+      usage();
+      return 0;
+    }
     if (!strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
     else if (!strcmp(argv[i], "--truth") && i + 1 < argc) truth = argv[++i];
     else if (!strcmp(argv[i], "--mrmp") && i + 1 < argc) mrmp = argv[++i];
@@ -168,7 +171,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
   uint32_t **memory_eligible = NULL;
   uint64_t *memory_n_eligible = NULL;
   if (in_memory) {
-    fprintf(stderr, "[methscope] upscale-prepare: inflating %u truth cells in memory\n", n_cells);
+    fprintf(stderr, "[methscope] _upscale prepare: inflating %u truth cells in memory\n", n_cells);
     memory_cells = calloc(n_cells, sizeof(*memory_cells));
     memory_eligible = calloc(n_cells, sizeof(*memory_eligible));
     memory_n_eligible = calloc(n_cells, sizeof(*memory_n_eligible));
@@ -209,7 +212,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
   write_or_die(fp, group, (size_t)n_cpg * sizeof(*group), out);
 
   if (embed_truth) {
-    fprintf(stderr, "[methscope] upscale-prepare: writing quantized truth matrix\n");
+    fprintf(stderr, "[methscope] _upscale prepare: writing quantized truth matrix\n");
     uint16_t *truth_row = xmalloc((size_t)n_cpg * sizeof(*truth_row), "truth u16 row");
     cfile_t tcf = {0}; if (!memory_cells) tcf = open_cfile((char *)truth);
     for (uint32_t cell = 0; cell < n_cells; ++cell) {
@@ -234,7 +237,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
   uint32_t *swap_j = xmalloc((size_t)sample * sizeof(*swap_j), "sampling swaps");
 
   for (uint32_t rep = 0; rep < reps; ++rep) {
-    fprintf(stderr, "[methscope] upscale-prepare: simulation %u/%u\n", rep + 1, reps);
+    fprintf(stderr, "[methscope] _upscale prepare: simulation %u/%u\n", rep + 1, reps);
     srand(rep + 1); /* exact historical convention: --seed 1..N */
     cfile_t cf = {0};
     if (!memory_cells) cf = open_cfile((char *)truth);
@@ -286,6 +289,6 @@ int main_upscale_prepare(int argc, char *argv[]) {
     free(memory_eligible); free(memory_n_eligible);
   }
   free(group); free(eligible); free(sum); free(count); free(beta); free(selected); free(swap_j);
-  fprintf(stderr, "[methscope] upscale-prepare: wrote %s and %s\n", out, manifest);
+  fprintf(stderr, "[methscope] _upscale prepare: wrote %s and %s\n", out, manifest);
   return 0;
 }

@@ -30,15 +30,15 @@
 static const int THREADS = 256;
 
 static void die(const char *msg) {
-  std::fprintf(stderr, "[methscope] upscale-residual-train: %s\n", msg);
+  std::fprintf(stderr, "[methscope] upscale-train/residual: %s\n", msg);
   std::exit(1);
 }
 static void die_path(const char *msg, const char *path) {
-  std::fprintf(stderr, "[methscope] upscale-residual-train: %s: %s\n", msg, path);
+  std::fprintf(stderr, "[methscope] upscale-train/residual: %s: %s\n", msg, path);
   std::exit(1);
 }
 static void cuda_fail(const char *call, cudaError_t e, const char *file, int line) {
-  std::fprintf(stderr, "[methscope] upscale-residual-train CUDA: %s failed at %s:%d: %s\n",
+  std::fprintf(stderr, "[methscope] upscale-train/residual CUDA: %s failed at %s:%d: %s\n",
                call, file, line, cudaGetErrorString(e));
   std::exit(1);
 }
@@ -59,7 +59,7 @@ static const char *blas_msg(cublasStatus_t s) {
   }
 }
 static void blas_fail(const char *call, cublasStatus_t s, const char *file, int line) {
-  std::fprintf(stderr, "[methscope] upscale-residual-train cuBLAS: %s failed at %s:%d: %s\n",
+  std::fprintf(stderr, "[methscope] upscale-train/residual cuBLAS: %s failed at %s:%d: %s\n",
                call, file, line, blas_msg(s));
   std::exit(1);
 }
@@ -425,15 +425,15 @@ extern "C" int ms_upresidual_train_cuda(const ms_upresidual_config_t *cfg) {
   int I=(int)eh->n_input,H=(int)eh->hidden,R=(int)cfg->rank;
   size_t rows=(size_t)dh->n_cells*dh->n_reps;
   std::fprintf(stderr,
-    "[methscope] upscale-residual-train: data cells=%u reps=%u CpGs=%llu residual=%llu memberships=%u heads=%u\n"
-    "[methscope] upscale-residual-train: frozen encoder input=%d hidden=%d; local rank=%d; split=%zu/%zu/%zu\n",
+    "[methscope] upscale-train/residual: data cells=%u reps=%u CpGs=%llu residual=%llu memberships=%u heads=%u\n"
+    "[methscope] upscale-train/residual: frozen encoder input=%d hidden=%d; local rank=%d; split=%zu/%zu/%zu\n",
     dh->n_cells,dh->n_reps,(unsigned long long)dh->n_cpg,
     (unsigned long long)ih->n_residual,ih->n_memberships,ih->n_bins,
     I,H,R,train.size(),val.size(),test.size());
 
   CUDA_OK(cudaSetDevice(cfg->device));
   cudaDeviceProp prop;CUDA_OK(cudaGetDeviceProperties(&prop,cfg->device));
-  std::fprintf(stderr,"[methscope] upscale-residual-train: CUDA device %d: %s (%.0f MiB, cc %d.%d)\n",
+  std::fprintf(stderr,"[methscope] upscale-train/residual: CUDA device %d: %s (%.0f MiB, cc %d.%d)\n",
                cfg->device,prop.name,(double)prop.totalGlobalMem/(1024*1024),prop.major,prop.minor);
   cublasHandle_t bh;BLAS_OK(cublasCreate(&bh));
 
@@ -493,7 +493,7 @@ extern "C" int ms_upresidual_train_cuda(const ms_upresidual_config_t *cfg) {
   CUDA_OK(cudaDeviceSynchronize());
   double prep_seconds=now()-prep0;
   std::fprintf(stderr,
-    "[methscope] upscale-residual-train: prepared %zu frozen representations and CpG biases in %.1fs; trainable parameters=%.3f billion\n",
+    "[methscope] upscale-train/residual: prepared %zu frozen representations and CpG biases in %.1fs; trainable parameters=%.3f billion\n",
     rows,prep_seconds,(double)(an+abn+en+ih->n_residual)/1e9);
 
   std::vector<uint32_t> bid(cfg->batch),head_order(ih->n_bins),head_steps(ih->n_bins,0);
@@ -502,7 +502,7 @@ extern "C" int ms_upresidual_train_cuda(const ms_upresidual_config_t *cfg) {
   Pcg rng;pcg_seed(&rng,seed^UINT64_C(0x8ebc6af09c88c6e3));
   Score vs=evaluate(bh,net,w,d_repr,dh,data.base,bo,cpg,val,cfg->eval_rows_per_head,cfg->batch,seed+101);
   std::fprintf(stderr,
-    "[methscope] upscale-residual-train: step 0 val_rmse=%.6f val_mae=%.6f macro_rmse=%.6f macro_mae=%.6f n=%llu heads=%u\n",
+    "[methscope] upscale-train/residual: step 0 val_rmse=%.6f val_mae=%.6f macro_rmse=%.6f macro_mae=%.6f n=%llu heads=%u\n",
     vs.rmse,vs.mae,vs.macro_rmse,vs.macro_mae,(unsigned long long)vs.n,vs.heads);
   double t0=now();
   for(uint32_t step=1;step<=cfg->steps;++step) {
@@ -530,14 +530,14 @@ extern "C" int ms_upresidual_train_cuda(const ms_upresidual_config_t *cfg) {
       vs=evaluate(bh,net,w,d_repr,dh,data.base,bo,cpg,val,cfg->eval_rows_per_head,cfg->batch,seed+101);
       double elapsed=now()-t0;
       std::fprintf(stderr,
-        "[methscope] upscale-residual-train: step %u/%u val_rmse=%.6f val_mae=%.6f macro_rmse=%.6f macro_mae=%.6f elapsed=%.1fs steps/s=%.2f\n",
+        "[methscope] upscale-train/residual: step %u/%u val_rmse=%.6f val_mae=%.6f macro_rmse=%.6f macro_mae=%.6f elapsed=%.1fs steps/s=%.2f\n",
         step,cfg->steps,vs.rmse,vs.mae,vs.macro_rmse,vs.macro_mae,elapsed,step/elapsed);
     }
   }
   Score ts=evaluate(bh,net,w,d_repr,dh,data.base,bo,cpg,test,cfg->eval_rows_per_head,cfg->batch,seed+202);
   double train_seconds=now()-t0;
   std::fprintf(stderr,
-    "[methscope] upscale-residual-train: test_rmse=%.6f test_mae=%.6f macro_rmse=%.6f macro_mae=%.6f n=%llu heads=%u training_seconds=%.1f\n",
+    "[methscope] upscale-train/residual: test_rmse=%.6f test_mae=%.6f macro_rmse=%.6f macro_mae=%.6f n=%llu heads=%u training_seconds=%.1f\n",
     ts.rmse,ts.mae,ts.macro_rmse,ts.macro_mae,(unsigned long long)ts.n,ts.heads,train_seconds);
 
   uint64_t encoder_checksum=UINT64_C(1469598103934665603);
@@ -592,7 +592,7 @@ extern "C" int ms_upresidual_train_cuda(const ms_upresidual_config_t *cfg) {
     prep_seconds,train_seconds,(unsigned long long)encoder_checksum,(unsigned long long)index_checksum,
     (unsigned long long)oh.file_bytes);
   if(std::fclose(f))die_path("error closing manifest",mp);
-  std::fprintf(stderr,"[methscope] upscale-residual-train: wrote %s (%llu bytes) and %s\n",
+  std::fprintf(stderr,"[methscope] upscale-train/residual: wrote %s (%llu bytes) and %s\n",
                cfg->model_path,(unsigned long long)oh.file_bytes,mp);
 
   free_param(&net.a);free_param(&net.ab);free_param(&net.e);free_param(&net.eb);

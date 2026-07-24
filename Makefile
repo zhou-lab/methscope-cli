@@ -2,6 +2,7 @@
 CC ?= gcc
 CFLAGS ?= -W -Wall -O3 -std=gnu99
 PROG = methscope
+PYTHON ?= python3
 
 # Optional native CUDA backend (`make CUDA=1`). The normal build remains
 # CPU-only and has no CUDA runtime dependency.
@@ -34,28 +35,19 @@ OBJ = $(SRC:.c=.o)
 CUDA_OBJ =
 
 ifeq ($(CUDA),1)
-  CUDA_OBJ = src/updec_cuda.o src/upfactor_cuda.o src/upresidual_cuda.o src/uphybrid_eval_cuda.o
+  CUDA_OBJ = src/upfactor_cuda.o src/upresidual_cuda.o src/uphybrid_eval_cuda.o src/upunit_cuda.o
   LDFLAGS += -L$(CUDA_HOME)/lib -Wl,-rpath,$(CUDA_HOME)/lib
   LIBS += -lcublas -lcudart -lstdc++
 endif
 
 OBJ += $(CUDA_OBJ)
 
-.PHONY: all clean clean-all dist yame-lib check-xgb check check-upscale-grad regen-upscale-grad force-link
+.PHONY: all clean clean-all dist yame-lib check-xgb check-updec2 force-link
 
 all: $(PROG)
 
-check: check-upscale-grad
-
-test/upscale_grad_check: test/upscale_grad_check.c src/updec_nn.c src/updec_nn.h
-	$(CC) $(CFLAGS) -Isrc test/upscale_grad_check.c src/updec_nn.c -lm -o $@
-
-check-upscale-grad: test/upscale_grad_check test/upscale_grad_reference.bin
-	./test/upscale_grad_check test/upscale_grad_reference.bin
-
-PYTORCH_PYTHON ?= python3
-regen-upscale-grad:
-	$(PYTORCH_PYTHON) test/make_upscale_grad_reference.py -o test/upscale_grad_reference.bin
+check-updec2: $(PROG)
+	$(PYTHON) test/check_updec2.py ./$(PROG)
 
 # Always (incrementally) rebuild libyame.a from the pinned submodule so the
 # static lib can never go stale relative to the checked-out YAME source.
@@ -67,9 +59,6 @@ $(YAME_LIB) $(HTSLIB): yame-lib
 src/%.o: src/%.c | check-xgb
 	$(CC) $(CFLAGS) -c $< -o $@
 
-src/updec_cuda.o: src/updec_cuda.cu src/updec_cuda.h src/updec.h | check-xgb
-	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
-
 src/upfactor_cuda.o: src/upfactor_cuda.cu src/upfactor_cuda.h | check-xgb
 	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
 
@@ -77,6 +66,9 @@ src/upresidual_cuda.o: src/upresidual_cuda.cu src/upresidual_cuda.h | check-xgb
 	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
 
 src/uphybrid_eval_cuda.o: src/uphybrid_eval_cuda.cu src/uphybrid_eval_cuda.h | check-xgb
+	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
+
+src/upunit_cuda.o: src/upunit_cuda.cu src/upunit_cuda.h src/updec2.h | check-xgb
 	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
 
 # Vendored f2c-translated Lawson-Hanson NNLS: K&R style, compile warnings off.
@@ -124,7 +116,9 @@ dist:
 	@sha256sum $(DIST_TARBALL) 2>/dev/null || shasum -a 256 $(DIST_TARBALL)
 
 clean:
-	rm -f $(OBJ) src/updec_cuda.o src/upfactor_cuda.o src/upresidual_cuda.o src/uphybrid_eval_cuda.o $(PROG) test/upscale_grad_check
+	rm -f $(OBJ) src/upfactor_cuda.o src/upresidual_cuda.o src/uphybrid_eval_cuda.o src/upunit_cuda.o \
+	      src/updec_cuda.o src/updec_nn.o src/updec_train.o \
+	      src/upfactor_train.o src/upresidual_train.o $(PROG)
 
 # Also clean the YAME submodule build artifacts.
 clean-all: clean

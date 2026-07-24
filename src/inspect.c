@@ -14,9 +14,11 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include "methscope.h"
 #include "bundle.h"
 #include "bmeta.h"
+#include "updec2.h"
 #include "cfile.h"     /* open_cfile, read_cdata1, decompress, fmt2_get_keys_n */
 #include <xgboost/c_api.h>
 
@@ -103,7 +105,44 @@ int main_inspect(int argc, char *argv[]) {
     idie("not a methscope bundle (.ubjx/.updecx/.refx)", path);
 
   char  *kind = ms_bundle_kind(path);               /* NULL if unmarked */
-  size_t mlen; void *mbuf = ms_bundle_section(path, "model", &mlen);
+  ms_bundle_entry_t me;
+  if (!ms_bundle_find(path, "model", &me)) idie("model section not found", path);
+  unsigned char prefix[sizeof(ms_updec2_header_t)] = {0};
+  int pfd = open(path, O_RDONLY);
+  if (pfd < 0 || pread(pfd, prefix, sizeof(prefix), (off_t)me.offset) < 8)
+    idie("cannot read model header", path);
+  int is_updec2 = me.length >= sizeof(ms_updec2_header_t) &&
+                  memcmp(prefix, MS_UPDEC2_MAGIC, 8) == 0;
+  ms_updec2_header_t u2 = {0};
+  if (is_updec2) memcpy(&u2, prefix, sizeof(u2));
+  uint32_t u2_pure = 0, u2_mixed = 0, u2_pna = 0, u2_factor = 0, u2_direct = 0;
+  uint32_t u2_min_rank = UINT32_MAX, u2_max_rank = 0;
+  if (is_updec2) {
+    if (!u2.n_units || u2.unit_offset > me.length ||
+        (uint64_t)u2.n_units * sizeof(ms_updec2_unit_t) >
+          me.length - u2.unit_offset)
+      idie("invalid UPDEC2 unit directory", path);
+    ms_updec2_unit_t *uu = malloc((size_t)u2.n_units * sizeof(*uu));
+    if (!uu || pread(pfd, uu, (size_t)u2.n_units * sizeof(*uu),
+                     (off_t)(me.offset + u2.unit_offset)) !=
+               (ssize_t)((size_t)u2.n_units * sizeof(*uu)))
+      idie("cannot read UPDEC2 unit directory", path);
+    for (uint32_t j = 0; j < u2.n_units; ++j) {
+      if (uu[j].flags & 2) ++u2_pna;
+      else if (uu[j].flags & 1) ++u2_pure;
+      else ++u2_mixed;
+      if (uu[j].mode == MS_UPDEC2_DIRECT) ++u2_direct;
+      else {
+        ++u2_factor;
+        if (uu[j].bottleneck_dim < u2_min_rank) u2_min_rank = uu[j].bottleneck_dim;
+        if (uu[j].bottleneck_dim > u2_max_rank) u2_max_rank = uu[j].bottleneck_dim;
+      }
+    }
+    free(uu);
+  }
+  close(pfd);
+  size_t mlen = 0; void *mbuf = NULL;
+  if (!is_updec2) mbuf = ms_bundle_section(path, "model", &mlen);
   int is_updec  = (mlen >= 6  && memcmp(mbuf, "UPDEC1", 6) == 0);
   int is_linear = (mlen >= 16 && memcmp(mbuf, "methscope-linear", 16) == 0);
   int is_refx   = (kind && strcmp(kind, "refx") == 0) ||
@@ -129,14 +168,16 @@ int main_inspect(int argc, char *argv[]) {
 
   /* short "content" for the section table = the model section's inner type */
   char mdesc[160];
-  if      (is_updec)  snprintf(mdesc, sizeof mdesc, "UPDEC1 MLP decoder (%d->%d->%d)", ud[0], ud[1], ud[2]);
+  if      (is_updec2) snprintf(mdesc, sizeof mdesc, "UPDEC2 whole-genome unit decoder (%u units)", u2.n_units);
+  else if (is_updec)  snprintf(mdesc, sizeof mdesc, "UPDEC1 MLP decoder (%d->%d->%d)", ud[0], ud[1], ud[2]);
   else if (is_refx)   snprintf(mdesc, sizeof mdesc, "refx signature TSV (%d cell types x %d patterns)", refx_cells, refx_pat);
   else if (is_linear) snprintf(mdesc, sizeof mdesc, "methscope-linear text spec");
   else                snprintf(mdesc, sizeof mdesc, "xgboost booster (UBJ binary)");
 
   /* role = how the whole bundle is used (its framework mark applies bundle-wide) */
   char role[160];
-  if      (is_updec)  snprintf(role, sizeof role, "upscale decoder - run via `upscale`");
+  if      (is_updec2) snprintf(role, sizeof role, "whole-genome upscale decoder - run via `upscale`");
+  else if (is_updec)  snprintf(role, sizeof role, "upscale decoder - run via `upscale`");
   else if (is_refx)   snprintf(role, sizeof role, "deconvolution reference - run via `deconv`");
   else if (is_linear) snprintf(role, sizeof role, "%s linear classifier - run via `predict`", kind ? kind : "linear");
   else                snprintf(role, sizeof role, "xgboost classifier - run via `predict`");
@@ -185,7 +226,46 @@ int main_inspect(int argc, char *argv[]) {
     /* detail fields: "      <name padded to 10> <value>" so every value (and the
        role in the header above) lines up in the same column across all sections */
     if (strcmp(nm, "model") == 0) {
-      if (is_updec) {
+      if (is_updec2) {
+        char nc[32], fb[32];
+        printf("      %-14s UPDEC2/v%u\n", "format", u2.version);
+        printf("      %-14s %u\n", "patterns", u2.patterns);
+        printf("      %-14s %u\n", "input_dim", u2.input_dim);
+        printf("      %-14s %s\n", "features",
+               u2.version >= 3 && (u2.flags & MS_UPDEC2_FLAG_BETA_ONLY)
+                 ? "standardized beta only"
+                 : u2.version >= 3 && (u2.flags & MS_UPDEC2_FLAG_COUNT)
+                   ? "standardized beta + log1p count"
+                   : "standardized beta + missing indicator");
+        printf("      %-14s %s\n", "missing",
+               u2.version >= 3 && (u2.flags & MS_UPDEC2_FLAG_BETA_ONLY)
+                 ? "beta mean-imputed"
+                 : u2.version >= 3 && (u2.flags & MS_UPDEC2_FLAG_COUNT)
+                   ? "count 0; beta mean-imputed" : "NaN -> beta 0, indicator 1");
+        printf("      %-14s %s\n", "shared trunk",
+               u2.version >= 3 && (u2.flags & MS_UPDEC2_FLAG_TRUNK)
+                 ? "two-layer residual LeakyReLU" : "none");
+        if (u2.version >= 3 && (u2.flags & MS_UPDEC2_FLAG_TRUNK))
+          printf("      %-14s %u\n", "trunk_dim", (uint32_t)u2.reserved0);
+        printf("      %-14s %s\n", "activation",
+               u2.activation == MS_UPDEC2_LEAKY_RELU ? "leaky_relu_0.01" : "linear");
+        printf("      %-14s %u\n", "units", u2.n_units);
+        printf("      %-14s %u / %u / %u\n", "pure/mixed/PNA",
+               u2_pure, u2_mixed, u2_pna);
+        printf("      %-14s %u / %u\n", "factor/direct",
+               u2_factor, u2_direct);
+        if (u2_factor)
+          printf("      %-14s %u..%u\n", "bottleneck_dim",
+                 u2_min_rank, u2_max_rank);
+        printf("      %-14s %u\n", "memberships", u2.n_memberships);
+        printf("      %-14s %s\n", "CpGs", commafmt(u2.n_cpg, nc));
+        printf("      %-14s %u\n", "target/unit", u2.target_unit_cpgs);
+        printf("      %-14s %s\n", "model bytes", commafmt(u2.file_bytes, fb));
+        printf("      %-14s %016llx\n", "index checksum",
+               (unsigned long long)u2.index_checksum);
+        printf("      %-14s %016llx\n", "parameter sum",
+               (unsigned long long)u2.parameter_checksum);
+      } else if (is_updec) {
         printf("      %-10s %d\n", "n_in",     ud[0]);
         printf("      %-10s %d\n", "n_hidden", ud[1]);
         printf("      %-10s %d\n", "n_out",    ud[2]);
@@ -239,7 +319,7 @@ int main_inspect(int argc, char *argv[]) {
     }
   }
 
-  if (!kind && !is_updec)
+  if (!kind && !is_updec && !is_updec2)
     printf("\n  note  no `kind` section -> `predict` will reject this bundle; "
            "stamp one with `bundle -k`\n");
 

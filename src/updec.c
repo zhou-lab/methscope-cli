@@ -6,7 +6,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include "updec.h"
 
 static void xdie(const char *msg, const char *arg) {
@@ -116,50 +115,6 @@ ms_updec_t *ms_updec_load_buf(const void *buf, size_t len) {
   ms_updec_t *m = updec_read(fp);
   fclose(fp);
   return m;
-}
-
-static void write_u32(FILE *fp, uint32_t u, const char *path) {
-  unsigned char b[4] = {(unsigned char)u, (unsigned char)(u >> 8),
-                        (unsigned char)(u >> 16), (unsigned char)(u >> 24)};
-  if (fwrite(b, 1, 4, fp) != 4) xdie("error writing .updec", path);
-}
-
-static void write_f32_1(FILE *fp, float f, const char *path) {
-  uint32_t u; memcpy(&u, &f, sizeof(u)); write_u32(fp, u, path);
-}
-
-static void write_f32(FILE *fp, const float *a, size_t n, const char *path) {
-  for (size_t i = 0; i < n; ++i) write_f32_1(fp, a[i], path);
-}
-
-void ms_updec_write(const char *path, const ms_updec_t *m) {
-  size_t L = strlen(path) + 48;
-  char *tmp = malloc(L);
-  if (!tmp) xdie("out of memory creating output path", NULL);
-  snprintf(tmp, L, "%s.tmp.%ld", path, (long)getpid());
-  FILE *fp = fopen(tmp, "wb");
-  if (!fp) xdie("cannot create .updec", tmp);
-  if (fwrite("UPDEC1\0\0", 1, 8, fp) != 8) xdie("error writing .updec", tmp);
-  write_u32(fp, (uint32_t)m->n_in, tmp);
-  write_u32(fp, (uint32_t)m->n_hidden, tmp);
-  write_u32(fp, (uint32_t)m->n_out, tmp);
-  write_f32_1(fp, m->bn_eps, tmp);
-  size_t I = m->n_in, H = m->n_hidden, O = m->n_out;
-  write_f32(fp, m->imp_mean, I, tmp);
-  write_f32(fp, m->sc_mean, I, tmp);
-  write_f32(fp, m->sc_scale, I, tmp);
-  write_f32(fp, m->W1, checked_mul(H, I, "W1"), tmp);
-  write_f32(fp, m->b1, H, tmp);
-  write_f32(fp, m->bn_g, H, tmp); write_f32(fp, m->bn_b, H, tmp);
-  write_f32(fp, m->bn_m, H, tmp); write_f32(fp, m->bn_v, H, tmp);
-  write_f32(fp, m->W2, checked_mul(O, H, "W2"), tmp);
-  write_f32(fp, m->b2, O, tmp);
-  int bad = fflush(fp);
-  if (!bad) bad = fsync(fileno(fp));
-  if (fclose(fp)) bad = 1;
-  if (bad) xdie("error closing .updec", tmp);
-  if (rename(tmp, path)) xdie("cannot install .updec output", path);
-  free(tmp);
 }
 
 void ms_updec_standardize(const ms_updec_t *m, const double *feat, double *xs) {

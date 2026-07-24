@@ -10,7 +10,7 @@
 
 static int usage(void) {
   fprintf(stderr,
-    "Usage: methscope upscale-hybrid-eval -i DATA.msur --encoder BASE.upfac\\\n"
+    "Usage: methscope _upscale eval -i DATA.msur --encoder BASE.upfac\n"
     "       --residual MODEL.upres -o METRICS.tsv [options]\n\n"
     "Evaluate a frozen UPFAC3 + UPRES1 hybrid on every finite truth value in\n"
     "an external MSURAW2 cohort. Observed input CpGs are included, matching\n"
@@ -30,7 +30,7 @@ static int usage(void) {
 
 static uint64_t u64(const char *s, const char *what) {
   errno=0;char *e=NULL;unsigned long long v=strtoull(s,&e,10);
-  if(errno||e==s||*e){fprintf(stderr,"[methscope] upscale-hybrid-eval: invalid %s: %s\n",what,s);exit(1);}
+  if(errno||e==s||*e){fprintf(stderr,"[methscope] _upscale eval: invalid %s: %s\n",what,s);exit(1);}
   return (uint64_t)v;
 }
 
@@ -46,11 +46,11 @@ int main_upscale_hybrid_eval(int argc,char **argv) {
     else if(!strcmp(argv[i],"--max-reps")&&i+1<argc)c.max_reps=(uint32_t)u64(argv[++i],"--max-reps");
     else if(!strcmp(argv[i],"--log-every-cells")&&i+1<argc)c.log_every_cells=(uint32_t)u64(argv[++i],"--log-every-cells");
     else if(!strcmp(argv[i],"--device")&&i+1<argc)c.device=(int)u64(argv[++i],"--device");
-    else {usage();fprintf(stderr,"[methscope] upscale-hybrid-eval: bad option: %s\n",argv[i]);return 1;}
+    else {usage();fprintf(stderr,"[methscope] _upscale eval: bad option: %s\n",argv[i]);return 1;}
   }
   if(!c.data_path||!c.encoder_path||!c.residual_path||!c.metrics_path||!c.log_every_cells)return usage();
   if(!ms_uphybrid_eval_cuda_available()){
-    fprintf(stderr,"[methscope] upscale-hybrid-eval: native CUDA backend unavailable; rebuild with make CUDA=1\n");
+    fprintf(stderr,"[methscope] _upscale eval: native CUDA backend unavailable; rebuild with make CUDA=1\n");
     return 1;
   }
   return ms_uphybrid_eval_cuda(&c);

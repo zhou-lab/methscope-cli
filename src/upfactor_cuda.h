@@ -8,6 +8,10 @@
 extern "C" {
 #endif
 
+#define MS_UPFEATURE_MISSING 0u
+#define MS_UPFEATURE_COUNT 1u
+#define MS_UPFEATURE_BETA 2u
+
 typedef struct {
   const char *data_path;
   const char *model_path;
@@ -24,6 +28,7 @@ typedef struct {
   double weight_decay;
   const char *homogeneous_groups;
   double homogeneous_fraction;
+  uint32_t feature_mode;
 } ms_upfactor_config_t;
 
 int ms_upfactor_cuda_available(void);

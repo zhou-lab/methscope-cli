@@ -4,8 +4,8 @@
 
 #include <stddef.h>
 
-/* Portable upscale decoder shared by `upscale` inference and
- * `upscale-train`. Arrays are float32 exactly as stored in UPDEC1. */
+/* Portable legacy block decoder retained for UPDEC1/UPDECX inference.
+ * Training this superseded 10k-bin architecture is no longer supported. */
 typedef struct ms_updec_t {
   int     n_in, n_hidden, n_out;
   float   bn_eps;
@@ -19,7 +19,6 @@ typedef struct ms_updec_t {
 ms_updec_t *ms_updec_alloc(int n_in, int n_hidden, int n_out);
 ms_updec_t *ms_updec_load(const char *path);
 ms_updec_t *ms_updec_load_buf(const void *buf, size_t len);
-void        ms_updec_write(const char *path, const ms_updec_t *m);
 void        ms_updec_free(ms_updec_t *m);
 
 void ms_updec_standardize(const ms_updec_t *m, const double *feat, double *xs);

@@ -100,11 +100,11 @@ int main_deconv(int argc, char *argv[]);
 void ms_annotate_booster(const char *in_ubj, const char *meta_tsv, const char *out_ubj);
 int main_upscale(int argc, char *argv[]);
 int main_upscale_train(int argc, char *argv[]);
+int main_upscale_internal(int argc, char *argv[]);
 int main_upscale_prepare(int argc, char *argv[]);
-int main_upscale_factor_train(int argc, char *argv[]);
 int main_upscale_residual_index(int argc, char *argv[]);
-int main_upscale_residual_train(int argc, char *argv[]);
 int main_upscale_hybrid_eval(int argc, char *argv[]);
+int main_upscale_trunk_train(int argc, char *argv[]);
 int main_bundle(int argc, char *argv[]);
 int main_unbundle(int argc, char *argv[]);
 

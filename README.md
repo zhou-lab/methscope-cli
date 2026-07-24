@@ -50,7 +50,7 @@ allow ~1–2 min per test.
 ```sh
 MS=~/repo/methscope-cli/methscope   # the built binary  (`yame` must also be on PATH)
 
-mkdir -p /tmp/methscope-test && cd /tmp/methscope-test   # scratch dir: everything below is fetched here
+mkdir -p ~/tmp/methscope-test && cd ~/tmp/methscope-test # scratch: everything below is fetched here
 
 # fetch models (~80 MB) + query .cg fixtures (~12 MB) from methscope_data
 MD=https://raw.githubusercontent.com/zhou-lab/methscope_data/main
@@ -158,6 +158,41 @@ paste <(yame rowsub -I 1_10000 recon.cg                  | yame unpack -a - | cu
 
 So from a measurement covering ~0.1% of CpGs, the decoder reconstructs block-10k1
 methylation at **94%** accuracy.
+
+### Train the whole-genome upscale model
+
+`upscale-train` trains one unified whole-genome `UPDEC2` model. The top 1,000
+MRMP averages are deterministic inputs. An optional learned 512-dimensional
+decoder trunk can be shared by every membership-first processing unit; it is
+downstream of MRMP aggregation, not a CpG-to-MRMP encoder. Beta-only,
+beta-plus-missing, and beta-plus-count inputs are supported. PyTorch is not
+used.
+
+```sh
+$MS upscale-train \
+  -i training.msur \
+  --index whole_genome_membership_16k.msui \
+  --mrmp mrmp1000.cm \
+  -o hg38_upscale.updecx \
+  --work-dir ~/tmp/hg38_upscale_train \
+  --features beta \
+  --pure-bottleneck 16 \
+  --mixed-bottleneck 32 \
+  --activation leaky \
+  --device 0
+# -> one self-contained .updecx plus a training manifest
+```
+
+Build training support with
+`make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80`. Each unit is checkpointed
+under `--work-dir`, so interrupted runs resume completed units. The distributed
+model still runs through the pure-C CPU inference path without CUDA or BLAS.
+
+Preparation and reference-index construction remain experimental internal
+tools under `methscope _upscale`; the Zhou 2018 evaluator is invoked by the
+non-public `analysis/zhou2018_upscale_eval.sh` script. See
+[`docs/upscale-train.md`](docs/upscale-train.md) and
+[`docs/upscale-unified-updec2.md`](docs/upscale-unified-updec2.md).
 
 **Visualize it.** Because the tracks are all whole-genome `.cg`, just stack them,
 slice a 50-CpG window with one `rowsub -B <beg0>_<end1>` (genome rows; block 10k1

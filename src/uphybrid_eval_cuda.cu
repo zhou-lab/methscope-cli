@@ -22,14 +22,14 @@
 static const int THREADS=256;
 static const int METRIC_BLOCKS=128;
 
-static void die(const char *msg){std::fprintf(stderr,"[methscope] upscale-hybrid-eval: %s\n",msg);std::exit(1);}
-static void die_path(const char *msg,const char *path){std::fprintf(stderr,"[methscope] upscale-hybrid-eval: %s: %s\n",msg,path);std::exit(1);}
-static void cuda_fail(const char *call,cudaError_t e,const char *file,int line){std::fprintf(stderr,"[methscope] upscale-hybrid-eval CUDA: %s failed at %s:%d: %s\n",call,file,line,cudaGetErrorString(e));std::exit(1);}
+static void die(const char *msg){std::fprintf(stderr,"[methscope] _upscale eval: %s\n",msg);std::exit(1);}
+static void die_path(const char *msg,const char *path){std::fprintf(stderr,"[methscope] _upscale eval: %s: %s\n",msg,path);std::exit(1);}
+static void cuda_fail(const char *call,cudaError_t e,const char *file,int line){std::fprintf(stderr,"[methscope] _upscale eval CUDA: %s failed at %s:%d: %s\n",call,file,line,cudaGetErrorString(e));std::exit(1);}
 #define CUDA_OK(x) do{cudaError_t _e=(x);if(_e!=cudaSuccess)cuda_fail(#x,_e,__FILE__,__LINE__);}while(0)
 static const char *blas_msg(cublasStatus_t s){
   switch(s){case CUBLAS_STATUS_SUCCESS:return"success";case CUBLAS_STATUS_NOT_INITIALIZED:return"not initialized";case CUBLAS_STATUS_ALLOC_FAILED:return"allocation failed";case CUBLAS_STATUS_INVALID_VALUE:return"invalid value";case CUBLAS_STATUS_ARCH_MISMATCH:return"architecture mismatch";case CUBLAS_STATUS_MAPPING_ERROR:return"mapping error";case CUBLAS_STATUS_EXECUTION_FAILED:return"execution failed";case CUBLAS_STATUS_INTERNAL_ERROR:return"internal error";case CUBLAS_STATUS_NOT_SUPPORTED:return"not supported";default:return"unknown";}
 }
-static void blas_fail(const char *call,cublasStatus_t s,const char *file,int line){std::fprintf(stderr,"[methscope] upscale-hybrid-eval cuBLAS: %s failed at %s:%d: %s\n",call,file,line,blas_msg(s));std::exit(1);}
+static void blas_fail(const char *call,cublasStatus_t s,const char *file,int line){std::fprintf(stderr,"[methscope] _upscale eval cuBLAS: %s failed at %s:%d: %s\n",call,file,line,blas_msg(s));std::exit(1);}
 #define BLAS_OK(x) do{cublasStatus_t _s=(x);if(_s!=CUBLAS_STATUS_SUCCESS)blas_fail(#x,_s,__FILE__,__LINE__);}while(0)
 
 static size_t checked_mul(size_t a,size_t b,const char *what){if(a&&b>SIZE_MAX/a)die(what);return a*b;}
@@ -165,10 +165,10 @@ extern "C" int ms_uphybrid_eval_cuda(const ms_uphybrid_eval_config_t*cfg){
   if(encoder_checksum!=rh->encoder_checksum)die("UPRES1 was trained against a different encoder");
 
   std::fprintf(stderr,
-    "[methscope] upscale-hybrid-eval: external cells=%u/%u reps=%u/%u CpGs=%llu; top=%u residual=%llu\n",
+    "[methscope] _upscale eval: external cells=%u/%u reps=%u/%u CpGs=%llu; top=%u residual=%llu\n",
     cells,dh->n_cells,reps,dh->n_reps,(unsigned long long)dh->n_cpg,eh->n_active,(unsigned long long)rh->n_residual);
   CUDA_OK(cudaSetDevice(cfg->device));cudaDeviceProp prop;CUDA_OK(cudaGetDeviceProperties(&prop,cfg->device));
-  std::fprintf(stderr,"[methscope] upscale-hybrid-eval: CUDA device %d: %s (%.0f MiB)\n",cfg->device,prop.name,(double)prop.totalGlobalMem/(1024*1024));
+  std::fprintf(stderr,"[methscope] _upscale eval: CUDA device %d: %s (%.0f MiB)\n",cfg->device,prop.name,(double)prop.totalGlobalMem/(1024*1024));
   cublasHandle_t bh;BLAS_OK(cublasCreate(&bh));double t0=now();
 
   size_t rows=(size_t)dh->n_cells*reps;
@@ -231,14 +231,14 @@ extern "C" int ms_uphybrid_eval_cuda(const ms_uphybrid_eval_config_t*cfg){
       gemv(bh,d_ra,h,d_rz,rh->n_bins*RR,H);add_leaky_bias<<<blocks(rabn),THREADS>>>(d_rz,d_rab,rabn);
       score_targets<true><<<METRIC_BLOCKS,THREADS>>>(d_rz,d_re,d_reb,d_res_actual,d_res_bin,d_truth,rh->n_residual,RR,d_rm);
     }
-    if((cell+1)%cfg->log_every_cells==0||cell+1==cells){CUDA_OK(cudaDeviceSynchronize());double elapsed=now()-eval0;std::fprintf(stderr,"[methscope] upscale-hybrid-eval: cells %u/%u elapsed=%.1fs rows/s=%.2f\n",cell+1,cells,elapsed,(double)(cell+1)*reps/elapsed);}
+    if((cell+1)%cfg->log_every_cells==0||cell+1==cells){CUDA_OK(cudaDeviceSynchronize());double elapsed=now()-eval0;std::fprintf(stderr,"[methscope] _upscale eval: cells %u/%u elapsed=%.1fs rows/s=%.2f\n",cell+1,cells,elapsed,(double)(cell+1)*reps/elapsed);}
   }
   Metrics tm,rm;CUDA_OK(cudaMemcpy(&tm,d_tm,sizeof(tm),cudaMemcpyDeviceToHost));CUDA_OK(cudaMemcpy(&rm,d_rm,sizeof(rm),cudaMemcpyDeviceToHost));
   Metrics cm=plus(tm,rm);Score ts=score(tm),rs=score(rm),cs=score(cm);double eval_seconds=now()-eval0;
   std::fprintf(stderr,
-    "[methscope] upscale-hybrid-eval: top MAE=%.6f RMSE=%.6f n=%llu\n"
-    "[methscope] upscale-hybrid-eval: residual MAE=%.6f RMSE=%.6f n=%llu\n"
-    "[methscope] upscale-hybrid-eval: combined MAE=%.6f RMSE=%.6f corr=%.6f n=%llu\n",
+    "[methscope] _upscale eval: top MAE=%.6f RMSE=%.6f n=%llu\n"
+    "[methscope] _upscale eval: residual MAE=%.6f RMSE=%.6f n=%llu\n"
+    "[methscope] _upscale eval: combined MAE=%.6f RMSE=%.6f corr=%.6f n=%llu\n",
     ts.mae,ts.rmse,ts.n,rs.mae,rs.rmse,rs.n,cs.mae,cs.rmse,cs.corr,cs.n);
   FILE*f=std::fopen(cfg->metrics_path,"w");if(!f)die_path("cannot create metrics",cfg->metrics_path);
   std::fprintf(f,
@@ -254,7 +254,7 @@ extern "C" int ms_uphybrid_eval_cuda(const ms_uphybrid_eval_config_t*cfg){
     rs.n,rs.mae,rs.mse,rs.rmse,rs.corr,rs.within,
     cs.n,cs.mae,cs.mse,cs.rmse,cs.corr,cs.within);
   if(std::fclose(f))die_path("error closing metrics",cfg->metrics_path);
-  std::fprintf(stderr,"[methscope] upscale-hybrid-eval: wrote %s\n",cfg->metrics_path);
+  std::fprintf(stderr,"[methscope] _upscale eval: wrote %s\n",cfg->metrics_path);
 
   cudaFree(d_tm);cudaFree(d_rm);cudaFree(d_truth);cudaFree(d_repr);
   cudaFree(d_top_actual);cudaFree(d_top_group);cudaFree(d_gw);cudaFree(d_gb);cudaFree(d_ge);cudaFree(d_geb);cudaFree(d_gz);

@@ -65,3 +65,7 @@ CLAUDE.md
 
 # release tarballs (bioconda upload assets)
 dist/
+
+# Python caches (analysis/ helper scripts)
+__pycache__/
+*.pyc
