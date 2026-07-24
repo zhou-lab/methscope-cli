@@ -23,7 +23,7 @@ void ms_help(FILE *out, const char *text) {
       /* column-0 line: bold a leading "<Words>:" header token */
       size_t c = 0;
       while (c < len && p[c] != ':') ++c;
-      int header = c < len && c <= 24;
+      int header = c < len && c <= 24; /* max header-label width */
       for (size_t i = 0; header && i < c; ++i) {
         char ch = p[i];
         if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||

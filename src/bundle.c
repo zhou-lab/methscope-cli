@@ -14,6 +14,8 @@
 #include "methscope.h"    /* ms_annotate_booster (for bundle -l) */
 
 #define NAMELEN 16
+#define FOOTER_BYTES 8         /* trailing uint64 container-header offset */
+#define CONTAINER_HDR_BYTES 12 /* MSBNDL1 magic (8) + section count (4) */
 
 typedef struct { char name[NAMELEN]; uint64_t offset, length; } entry_t;
 
@@ -28,21 +30,24 @@ static entry_t *bundle_directory(FILE *fp, const char *path, uint64_t *total_out
                                  uint64_t *container_out, uint32_t *n_out) {
   if (fseeko(fp, 0, SEEK_END)) bdie("cannot seek", path);
   off_t end = ftello(fp);
-  if (end < 20) bdie("not a methscope bundle (too short)", path);
-  uint64_t total = (uint64_t)end, M;
-  if (fseeko(fp, (off_t)(total - 8), SEEK_SET) ||
-      fread(&M, sizeof(M), 1, fp) != 1)
+  if (end < FOOTER_BYTES + CONTAINER_HDR_BYTES) /* 20 = smallest possible */
+    bdie("not a methscope bundle (too short)", path);
+  uint64_t total = (uint64_t)end, container_off;
+  if (fseeko(fp, (off_t)(total - FOOTER_BYTES), SEEK_SET) ||
+      fread(&container_off, sizeof(container_off), 1, fp) != 1)
     bdie("cannot read bundle footer", path);
-  if (M > total - 8 || total - 8 - M < 12)
+  if (container_off > total - FOOTER_BYTES ||
+      total - FOOTER_BYTES - container_off < CONTAINER_HDR_BYTES)
     bdie("not a methscope bundle (bad footer)", path);
   char magic[8];
   uint32_t n;
-  if (fseeko(fp, (off_t)M, SEEK_SET) || fread(magic, 1, 8, fp) != 8 ||
+  if (fseeko(fp, (off_t)container_off, SEEK_SET) || fread(magic, 1, 8, fp) != 8 ||
       fread(&n, sizeof(n), 1, fp) != 1 ||
       memcmp(magic, MS_BUNDLE_MAGIC, 8))
     bdie("not a methscope bundle (no MSBNDL1 footer)", path);
   uint64_t table_bytes = (uint64_t)n * sizeof(entry_t);
-  if (table_bytes > total - 8 - M - 12 || table_bytes > SIZE_MAX)
+  if (table_bytes > total - FOOTER_BYTES - container_off - CONTAINER_HDR_BYTES ||
+      table_bytes > SIZE_MAX)
     bdie("truncated bundle section table", path);
   entry_t *entries = malloc(n ? (size_t)table_bytes : 1);
   if (!entries) bdie("out of memory reading bundle directory", path);
@@ -54,7 +59,7 @@ static entry_t *bundle_directory(FILE *fp, const char *path, uint64_t *total_out
         entries[i].length > total - entries[i].offset)
       bdie("section out of bounds", entries[i].name);
   }
-  *total_out = total; *container_out = M; *n_out = n;
+  *total_out = total; *container_out = container_off; *n_out = n;
   return entries;
 }
 
@@ -64,11 +69,14 @@ int ms_bundle_is(const char *path) {
   int ok = 0;
   if (fseek(fp, 0, SEEK_END) == 0) {
     long total = ftell(fp);
-    uint64_t M;
-    if (total >= 20 && fseek(fp, total - 8, SEEK_SET) == 0 && fread(&M, 8, 1, fp) == 1
-        && M <= (uint64_t)total - 8 && (uint64_t)total - 8 - M >= 12) {
+    uint64_t container_off;
+    if (total >= FOOTER_BYTES + CONTAINER_HDR_BYTES &&
+        fseek(fp, total - FOOTER_BYTES, SEEK_SET) == 0 &&
+        fread(&container_off, 8, 1, fp) == 1 &&
+        container_off <= (uint64_t)total - FOOTER_BYTES &&
+        (uint64_t)total - FOOTER_BYTES - container_off >= CONTAINER_HDR_BYTES) {
       char m[8];
-      if (fseek(fp, (long)M, SEEK_SET) == 0 && fread(m, 1, 8, fp) == 8)
+      if (fseek(fp, (long)container_off, SEEK_SET) == 0 && fread(m, 1, 8, fp) == 8)
         ok = (memcmp(m, MS_BUNDLE_MAGIC, 8) == 0);
     }
   }
@@ -79,9 +87,9 @@ int ms_bundle_is(const char *path) {
 void *ms_bundle_section_opt(const char *path, const char *name, size_t *len_out) {
   FILE *fp = fopen(path, "rb");
   if (!fp) bdie("cannot open", path);
-  uint64_t total, M; uint32_t n;
-  entry_t *entries = bundle_directory(fp, path, &total, &M, &n);
-  (void)total; (void)M;
+  uint64_t total, container_off; uint32_t n;
+  entry_t *entries = bundle_directory(fp, path, &total, &container_off, &n);
+  (void)total; (void)container_off;
   for (uint32_t i = 0; i < n; ++i) {
     entry_t e = entries[i];
     if (strcmp(e.name, name) == 0) {
@@ -109,9 +117,9 @@ void *ms_bundle_section(const char *path, const char *name, size_t *len_out) {
 ms_bundle_entry_t *ms_bundle_list(const char *path, int *n_out) {
   FILE *fp = fopen(path, "rb");
   if (!fp) bdie("cannot open", path);
-  uint64_t total, M; uint32_t n;
-  entry_t *entries = bundle_directory(fp, path, &total, &M, &n);
-  (void)total; (void)M;
+  uint64_t total, container_off; uint32_t n;
+  entry_t *entries = bundle_directory(fp, path, &total, &container_off, &n);
+  (void)total; (void)container_off;
   ms_bundle_entry_t *arr = malloc((n ? n : 1) * sizeof(*arr));
   if (!arr) bdie("out of memory", path);
   for (uint32_t i = 0; i < n; ++i) {
@@ -130,9 +138,9 @@ ms_bundle_entry_t *ms_bundle_list(const char *path, int *n_out) {
 int ms_bundle_find(const char *path, const char *name, ms_bundle_entry_t *out) {
   FILE *fp = fopen(path, "rb");
   if (!fp) return 0;
-  uint64_t total, M; uint32_t n;
-  entry_t *entries = bundle_directory(fp, path, &total, &M, &n);
-  (void)total; (void)M;
+  uint64_t total, container_off; uint32_t n;
+  entry_t *entries = bundle_directory(fp, path, &total, &container_off, &n);
+  (void)total; (void)container_off;
   int found = 0;
   for (uint32_t i = 0; i < n; ++i) {
     if (!strcmp(entries[i].name, name)) {
@@ -222,15 +230,15 @@ void ms_bundle_pack(const char *out, const char *kind, const char *model_path,
   uint64_t rlen = path_bytes(mrmp_path), mlen = path_bytes(model_path);
   uint64_t olen = outcpg_path ? path_bytes(outcpg_path) : 0;
   int nsec = 2 + !!kind + !!outcpg_path; /* mrmp + optional kind/outcpg + model */
-  uint64_t M = rlen;
-  uint64_t hdr = 12 + (uint64_t)nsec * sizeof(entry_t);
+  uint64_t container_off = rlen;
+  uint64_t hdr = CONTAINER_HDR_BYTES + (uint64_t)nsec * sizeof(entry_t);
   FILE *fp = !strcmp(out, "-") ? stdout : fopen(out, "wb");
   if (!fp) bdie("cannot open output", out);
   stream_path(fp, mrmp_path, rlen, out);
   if (fwrite(MS_BUNDLE_MAGIC, 1, 8, fp) != 8) bdie("write error", out);
   uint32_t nn = (uint32_t)nsec;
   if (fwrite(&nn, sizeof(nn), 1, fp) != 1) bdie("write error", out);
-  uint64_t off = M + hdr;
+  uint64_t off = container_off + hdr;
   entry_t e;
   memset(&e, 0, sizeof(e)); strncpy(e.name, "mrmp", NAMELEN - 1);
   e.offset = 0; e.length = rlen;
@@ -252,7 +260,7 @@ void ms_bundle_pack(const char *out, const char *kind, const char *model_path,
     bdie("write error", out);
   if (outcpg_path) stream_path(fp, outcpg_path, olen, out);
   stream_path(fp, model_path, mlen, out);
-  if (fwrite(&M, sizeof(M), 1, fp) != 1) bdie("write error", out);
+  if (fwrite(&container_off, sizeof(container_off), 1, fp) != 1) bdie("write error", out);
   if (fp != stdout && fclose(fp)) bdie("write error", out);
 }
 

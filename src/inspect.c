@@ -76,10 +76,12 @@ static const char *commafmt(unsigned long long v, char *buf) {
   char tmp[24]; int n = snprintf(tmp, sizeof tmp, "%llu", v);
   int commas = (n - 1) / 3, len = n + commas;
   buf[len] = '\0';
-  int bi = len - 1, ti = n - 1, cnt = 0;
-  while (ti >= 0) {
-    buf[bi--] = tmp[ti--];
-    if (++cnt % 3 == 0 && ti >= 0) buf[bi--] = ',';
+  /* fill buf from the right: copy digits back-to-front, inserting a comma
+     after every third digit */
+  int buf_i = len - 1, out_i = n - 1, cnt = 0;
+  while (out_i >= 0) {
+    buf[buf_i--] = tmp[out_i--];
+    if (++cnt % 3 == 0 && out_i >= 0) buf[buf_i--] = ',';
   }
   return buf;
 }
@@ -131,6 +133,7 @@ int main_inspect(int argc, char *argv[]) {
                (ssize_t)((size_t)u2.n_units * sizeof(*uu)))
       idie("cannot read UPDEC2 unit directory", path);
     for (uint32_t j = 0; j < u2.n_units; ++j) {
+      /* unit flag bits (see MSUI_UNIT_* in upresidual_index.c): 2=PNA, 1=pure */
       if (uu[j].flags & 2) ++u2_pna;
       else if (uu[j].flags & 1) ++u2_pure;
       else ++u2_mixed;
@@ -249,7 +252,7 @@ int main_inspect(int argc, char *argv[]) {
                u2.version >= 3 && (u2.flags & MS_UPDEC2_FLAG_TRUNK)
                  ? "two-layer residual LeakyReLU" : "none");
         if (u2.version >= 3 && (u2.flags & MS_UPDEC2_FLAG_TRUNK))
-          printf("      %-14s %u\n", "trunk_dim", (uint32_t)u2.reserved0);
+          printf("      %-14s %u\n", "trunk_dim", (uint32_t)u2.trunk_dim);
         printf("      %-14s %s\n", "activation",
                u2.activation == MS_UPDEC2_LEAKY_RELU ? "leaky_relu_0.01" : "linear");
         printf("      %-14s %u\n", "units", u2.n_units);

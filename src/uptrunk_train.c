@@ -56,7 +56,7 @@ int main_upscale_trunk_train(int argc, char **argv) {
   c.homogeneous_fraction = 0.1; c.feature_mode = MS_UPFEATURE_COUNT;
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
-    if (!strcmp(a, "-h") || !strcmp(a, "--help")) return usage();
+    if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(); return 0; }
     else if (!strcmp(a, "-i") && i + 1 < argc) c.data_path = argv[++i];
     else if (!strcmp(a, "-o") && i + 1 < argc) c.model_path = argv[++i];
     else if (!strcmp(a, "--features") && i + 1 < argc) {

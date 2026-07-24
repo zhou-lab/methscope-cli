@@ -102,6 +102,7 @@ static void *xrealloc(void *p, size_t n) {
   return q;
 }
 
+// splitmix64
 static uint64_t mix64(uint64_t x) {
   x ^= x >> 30; x *= UINT64_C(0xbf58476d1ce4e5b9);
   x ^= x >> 27; x *= UINT64_C(0x94d049bb133111eb);
@@ -109,7 +110,8 @@ static uint64_t mix64(uint64_t x) {
 }
 
 static uint64_t checksum_add(uint64_t h, uint64_t key, uint64_t count) {
-  return h ^ mix64(key + UINT64_C(0x9e3779b97f4a7c15) * (count + 1));
+  return h ^ mix64(key + UINT64_C(0x9e3779b97f4a7c15) /* golden ratio */
+                   * (count + 1));
 }
 
 static uint64_t encode_pattern(const char *s) {
@@ -183,7 +185,8 @@ static void hash_rebuild(hash_t *h, size_t cap) {
 }
 
 static void hash_put(hash_t *h, uint64_t key, uint32_t value) {
-  if ((h->used + 1) * 10 >= h->cap * 7) hash_rebuild(h, h->cap * 2);
+  if ((h->used + 1) * 10 >= h->cap * 7) /* grow at 70% load factor */
+    hash_rebuild(h, h->cap * 2);
   size_t q = hash_slot(h, key);
   if (h->values[q]) fail("duplicate pattern in count table");
   h->keys[q] = key; h->values[q] = value + 1; ++h->used;
@@ -306,14 +309,18 @@ int main_upscale_residual_index(int argc, char **argv) {
     for (uint64_t r = 0; r < mh->n_candidates; ++r) {
       if (!pat[r].count || pat[r].count > UINT32_MAX)
         fail("membership count is outside uint32 range");
-      group_t g = {pat[r].key, 0, (uint32_t)pat[r].count, 0, UINT32_MAX, 0};
+      group_t g = {.key = pat[r].key, .output_offset = 0,
+                   .count = (uint32_t)pat[r].count, .seen = 0,
+                   .unit = UINT32_MAX, .pna = 0};
       groups_push(&groups, g);
       total += pat[r].count;
       checksum = checksum_add(checksum, pat[r].key, pat[r].count);
     }
     /* PNA (all-2) appended last: same group *set* as the file path, so the
      * order-independent XOR checksum is identical. */
-    group_t pg = {pk, 0, (uint32_t)mh->pna_cpg, 0, UINT32_MAX, 1};
+    group_t pg = {.key = pk, .output_offset = 0,
+                  .count = (uint32_t)mh->pna_cpg, .seen = 0,
+                  .unit = UINT32_MAX, .pna = 1};
     groups_push(&groups, pg);
     pna_group = (uint32_t)(groups.n - 1);
     total += mh->pna_cpg;
@@ -334,7 +341,8 @@ int main_upscale_residual_index(int argc, char **argv) {
       while (*e == ' ' || *e == '\t') ++e;
       if (!count || count > UINT32_MAX) fail("membership count is outside uint32 range");
       uint64_t key = encode_pattern(e);
-      group_t g = {key, 0, (uint32_t)count, 0, UINT32_MAX, key == pk};
+      group_t g = {.key = key, .output_offset = 0, .count = (uint32_t)count,
+                   .seen = 0, .unit = UINT32_MAX, .pna = key == pk};
       groups_push(&groups, g);
       hash_put(&hash, key, (uint32_t)(groups.n - 1));
       if (key == pk) pna_group = (uint32_t)(groups.n - 1);
@@ -359,9 +367,12 @@ int main_upscale_residual_index(int argc, char **argv) {
   uint32_t unit_members = 0, unit_cpgs = 0;
   for (size_t oi = 0; oi < n_real_groups; ++oi) {
     group_t *g = &groups.a[order[oi]];
+    /* adding this membership would exceed the target unit size -> flush */
     if (unit_members && (uint64_t)unit_cpgs + g->count > target) {
-      msui_unit_t u = {output - unit_cpgs, (uint32_t)unit_first,
-                       unit_members, unit_cpgs, unit_members == 1 ? MSUI_UNIT_PURE : 0};
+      msui_unit_t u = {.output_offset = output - unit_cpgs,
+                       .first_membership = (uint32_t)unit_first,
+                       .membership_count = unit_members, .cpg_count = unit_cpgs,
+                       .flags = unit_members == 1 ? MSUI_UNIT_PURE : 0};
       units_push(&units, u);
       unit_first = oi; unit_members = 0; unit_cpgs = 0;
     }
@@ -370,16 +381,22 @@ int main_upscale_residual_index(int argc, char **argv) {
     output += g->count;
     unit_cpgs += g->count;
     ++unit_members;
+    /* this single membership is itself larger than target -> its own
+       oversized unit */
     if (g->count > target) {
-      msui_unit_t u = {output - unit_cpgs, (uint32_t)unit_first, 1, unit_cpgs,
-                       MSUI_UNIT_PURE | MSUI_UNIT_OVERSIZED};
+      msui_unit_t u = {.output_offset = output - unit_cpgs,
+                       .first_membership = (uint32_t)unit_first,
+                       .membership_count = 1, .cpg_count = unit_cpgs,
+                       .flags = MSUI_UNIT_PURE | MSUI_UNIT_OVERSIZED};
       units_push(&units, u);
       unit_first = oi + 1; unit_members = 0; unit_cpgs = 0;
     }
   }
   if (unit_members) {
-    msui_unit_t u = {output - unit_cpgs, (uint32_t)unit_first,
-                     unit_members, unit_cpgs, unit_members == 1 ? MSUI_UNIT_PURE : 0};
+    msui_unit_t u = {.output_offset = output - unit_cpgs,
+                     .first_membership = (uint32_t)unit_first,
+                     .membership_count = unit_members, .cpg_count = unit_cpgs,
+                     .flags = unit_members == 1 ? MSUI_UNIT_PURE : 0};
     units_push(&units, u);
   }
   const uint32_t n_real_units = (uint32_t)units.n;
@@ -387,7 +404,9 @@ int main_upscale_residual_index(int argc, char **argv) {
   const uint64_t n_pna_cpg = groups.a[pna_group].count;
   for (uint64_t done = 0; done < n_pna_cpg;) {
     uint32_t z = (uint32_t)((n_pna_cpg - done) > target ? target : n_pna_cpg - done);
-    msui_unit_t u = {n_real_cpg + done, UINT32_MAX, z, z, MSUI_UNIT_PNA};
+    msui_unit_t u = {.output_offset = n_real_cpg + done,
+                     .first_membership = UINT32_MAX, .membership_count = z,
+                     .cpg_count = z, .flags = MSUI_UNIT_PNA};
     units_push(&units, u);
     done += z;
   }

@@ -10,11 +10,14 @@
 #include <stdlib.h>
 #include "updec2.h"
 
+#define UPDEC2_LEAKY_SLOPE 0.01 /* LeakyReLU negative-side slope */
+
 static int uerr(char *dst, size_t cap, const char *msg) {
   if (cap) snprintf(dst, cap, "%s", msg);
   return 0;
 }
 
+/* true iff off + count*size <= limit, computed without overflow */
 static int span(uint64_t off, uint64_t count, uint64_t size, uint64_t limit) {
   return off <= limit && (!size || count <= (limit - off) / size);
 }
@@ -22,7 +25,10 @@ static int span(uint64_t off, uint64_t count, uint64_t size, uint64_t limit) {
 int ms_updec2_open(ms_updec2_t *m, const char *path,
                    uint64_t offset, uint64_t length,
                    char *error, size_t error_cap) {
+  /* Validates every offset/size in the mmapped section before use, then fills
+   * *m. Structured as a linear sequence of phases; each bails with an error. */
   memset(m, 0, sizeof(*m)); m->fd = -1;
+  /* --- phase 1: open + mmap the whole file (the section is [offset,+length)) --- */
   int fd = open(path, O_RDONLY);
   if (fd < 0) return uerr(error, error_cap, "cannot open UPDEC2");
   struct stat st;
@@ -44,6 +50,7 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
   }
   const unsigned char *base = (const unsigned char *)map + offset;
   const ms_updec2_header_t *h = (const ms_updec2_header_t *)base;
+  /* --- phase 2: header magic, version, and struct ABI --- */
   if (memcmp(h->magic, MS_UPDEC2_MAGIC, 8) ||
       (h->version != 2 && h->version != 3)) {
     munmap(map, (size_t)file_bytes); close(fd);
@@ -54,10 +61,11 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
     munmap(map, (size_t)file_bytes); close(fd);
     return uerr(error, error_cap, "UPDEC2 ABI layout mismatch");
   }
+  /* --- phase 3: header fields, section offsets, and flag consistency --- */
   uint64_t prep_count = h->version == 2 ? h->patterns : h->input_dim;
   uint32_t trunk_dim =
     h->version == 3 && (h->flags & MS_UPDEC2_FLAG_TRUNK)
-      ? (uint32_t)h->reserved0 : 0;
+      ? (uint32_t)h->trunk_dim : 0;
   uint32_t expected_input =
     h->version == 3 && (h->flags & MS_UPDEC2_FLAG_BETA_ONLY)
       ? h->patterns : 2 * h->patterns;
@@ -78,7 +86,7 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
       ((h->flags & MS_UPDEC2_FLAG_COUNT) &&
        (h->flags & MS_UPDEC2_FLAG_BETA_ONLY)) ||
       ((h->flags & MS_UPDEC2_FLAG_TRUNK) && !trunk_dim) ||
-      (!(h->flags & MS_UPDEC2_FLAG_TRUNK) && h->reserved0)) {
+      (!(h->flags & MS_UPDEC2_FLAG_TRUNK) && h->trunk_dim)) {
     munmap(map, (size_t)file_bytes); close(fd);
     return uerr(error, error_cap, "invalid UPDEC2 header offsets");
   }
@@ -90,6 +98,7 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
       return uerr(error, error_cap, "invalid UPDEC2 preprocessing");
     }
   }
+  /* --- phase 4: preprocessing (done above) + optional shared-trunk params --- */
   uint64_t trunk_floats = 0, unit_input = h->input_dim;
   if (trunk_dim) {
     uint64_t I = h->input_dim, H = trunk_dim;
@@ -97,13 +106,14 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
       munmap(map, (size_t)file_bytes); close(fd);
       return uerr(error, error_cap, "UPDEC2 trunk dimensions overflow");
     }
-    trunk_floats = H * I + H + H * H + H;
+    trunk_floats = H * I + H + H * H + H; /* W1(H×I) + b1(H) + W2(H×H) + b2(H) */
     if (!span(h->param_offset, trunk_floats, sizeof(float), length)) {
       munmap(map, (size_t)file_bytes); close(fd);
       return uerr(error, error_cap, "UPDEC2 trunk is out of bounds");
     }
     unit_input = H;
   }
+  /* --- phase 5: unit directory — contiguous outputs, in-bounds & exact params --- */
   uint64_t first_unit_param = h->param_offset + trunk_floats * sizeof(float);
   const ms_updec2_unit_t *u = (const ms_updec2_unit_t *)(base + h->unit_offset);
   uint64_t expected = 0;
@@ -123,8 +133,9 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
     uint64_t floats;
     if (u[k].mode == MS_UPDEC2_FACTOR) {
       uint64_t r = u[k].bottleneck_dim, I = unit_input, O = u[k].cpg_count;
-      floats = r * I + r + O * r + O;
+      floats = r * I + r + O * r + O; /* A(r×I) + a(r) + E(O×r) + b(O) */
     } else {
+      /* W(O×I) + b(O) */
       floats = (uint64_t)u[k].cpg_count * unit_input + u[k].cpg_count;
     }
     if (floats > UINT64_MAX / sizeof(float) ||
@@ -138,6 +149,7 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
     munmap(map, (size_t)file_bytes); close(fd);
     return uerr(error, error_cap, "UPDEC2 coverage or activation is invalid");
   }
+  /* --- phase 6: the CpG scatter map must be a permutation of [0, n_cpg) --- */
   const uint32_t *cpg = (const uint32_t *)(base + h->cpg_offset);
   size_t seen_bytes = (size_t)((h->n_cpg + 7) >> 3);
   unsigned char *seen = calloc(seen_bytes ? seen_bytes : 1, 1);
@@ -154,6 +166,7 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
     seen[pos >> 3] |= (unsigned char)(1u << (pos & 7));
   }
   free(seen);
+  /* --- phase 7: each membership descriptor stays within its unit's output range --- */
   const ms_updec2_membership_t *members =
     (const ms_updec2_membership_t *)(base + h->membership_offset);
   for (uint32_t q = 0; q < h->n_memberships; ++q) {
@@ -249,14 +262,14 @@ int ms_updec2_forward(const ms_updec2_t *m, const float *x, float *prob,
       double acc = m->trunk_b1[r];
       const float *w = m->trunk_w1 + (uint64_t)r * I;
       for (uint32_t j = 0; j < I; ++j) acc += (double)w[j] * x[j];
-      if (acc < 0.0) acc *= 0.01;
+      if (acc < 0.0) acc *= UPDEC2_LEAKY_SLOPE;
       h1[r] = (float)acc;
     }
     for (uint32_t r = 0; r < H; ++r) {
       double acc = m->trunk_b2[r];
       const float *w = m->trunk_w2 + (uint64_t)r * H;
       for (uint32_t j = 0; j < H; ++j) acc += (double)w[j] * h1[j];
-      if (acc < 0.0) acc *= 0.01;
+      if (acc < 0.0) acc *= UPDEC2_LEAKY_SLOPE;
       h2[r] = h1[r] + (float)acc;
     }
     unit_x = h2; I = H; z = work + 2 * H; zcap = workcap - 2 * H;
@@ -268,6 +281,7 @@ int ms_updec2_forward(const ms_updec2_t *m, const float *x, float *prob,
     if (u->mode == MS_UPDEC2_FACTOR) {
       const uint32_t R = u->bottleneck_dim;
       if (zcap < R) return 0;
+      /* A: R×I down-projection, a: R bias, E: O×R up-projection, b: O bias */
       const float *A = par;
       const float *a = A + (uint64_t)R * I;
       const float *E = a + R;
@@ -276,7 +290,8 @@ int ms_updec2_forward(const ms_updec2_t *m, const float *x, float *prob,
         double acc = a[r];
         const float *w = A + (uint64_t)r * I;
         for (uint32_t j = 0; j < I; ++j) acc += (double)w[j] * unit_x[j];
-        if (h->activation == MS_UPDEC2_LEAKY_RELU && acc < 0.0) acc *= 0.01;
+        if (h->activation == MS_UPDEC2_LEAKY_RELU && acc < 0.0)
+          acc *= UPDEC2_LEAKY_SLOPE;
         z[r] = (float)acc;
       }
       for (uint32_t o = 0; o < O; ++o) {

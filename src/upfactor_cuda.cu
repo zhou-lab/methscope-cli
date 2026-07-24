@@ -141,7 +141,7 @@ static uint32_t fill_batch(const MsurHeader*h,const uint8_t*base,const std::vect
   const uint16_t*truth=(const uint16_t*)(base+h->truth_offset)+(size_t)cell*h->n_cpg;
   size_t available=pool?pool->size():active.size();if(!available||!want)return 0;
   uint64_t scanned=0,q=start%available;uint32_t n=0;
-  while(n<want&&scanned<available){uint32_t local=pool?(*pool)[q]:(uint32_t)q;uint32_t pos=active[local],v=truth[pos];if(v!=UINT16_MAX&&!selected_has(sel,h->sampled_per_cell,pos)){id[out0+n]=local;group[out0+n]=ag[local];y[out0+n]=(float)v/65534.0f;++n;}q++;if(q==available)q=0;++scanned;}
+  while(n<want&&scanned<available){uint32_t local=pool?(*pool)[q]:(uint32_t)q;uint32_t pos=active[local],v=truth[pos];if(v!=UINT16_MAX&&!selected_has(sel,h->sampled_per_cell,pos)){id[out0+n]=local;group[out0+n]=ag[local];y[out0+n]=(float)v/65534.0f/* u16 code / 65534; 65535 (UINT16_MAX) = missing */;++n;}q++;if(q==available)q=0;++scanned;}
   return n;
 }
 

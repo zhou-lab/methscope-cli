@@ -38,8 +38,8 @@ static char **read_labels(const char *path, int *n_out) {
   if (!fp) tdie("cannot open labels file", path);
   int   cap = 256, n = 0;
   char **v = malloc(cap * sizeof(char *));
-  char  *line = NULL; size_t cap2 = 0; ssize_t len;
-  while ((len = getline(&line, &cap2, fp)) != -1) {
+  char  *line = NULL; size_t line_cap = 0; ssize_t len;
+  while ((len = getline(&line, &line_cap, fp)) != -1) {
     while (len && (line[len-1] == '\n' || line[len-1] == '\r' || line[len-1] == ' ' || line[len-1] == '\t'))
       line[--len] = '\0';
     char *s = line; while (*s == ' ' || *s == '\t') s++;
@@ -190,9 +190,15 @@ int main_train(int argc, char *argv[]) {
   /* per-record class index (0..K-1) = position in the sorted unique set */
   int *yidx = malloc((size_t)m->n_cells * sizeof(int));
   for (int r = 0; r < m->n_cells; ++r) {
+    /* binary search into the sorted class set */
     int lo = 0, hi = K - 1, idx = -1;
-    while (lo <= hi) { int mid = (lo+hi)/2; int cmp = strcmp(lab[r], uniq[mid]);
-      if (cmp == 0) { idx = mid; break; } else if (cmp < 0) hi = mid-1; else lo = mid+1; }
+    while (lo <= hi) {
+      int mid = (lo + hi) / 2;
+      int cmp = strcmp(lab[r], uniq[mid]);
+      if (cmp == 0) { idx = mid; break; }
+      else if (cmp < 0) hi = mid - 1;
+      else lo = mid + 1;
+    }
     if (idx < 0) tdie("label not found in class set (internal)", lab[r]);
     yidx[r] = idx;
   }

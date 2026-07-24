@@ -220,6 +220,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
       if (!memory_cells) { decompress_in_situ(&c); if (c.fmt != '3' || c.n != n_cpg) pdie("inconsistent truth record", truth); }
       for (uint64_t i = 0; i < n_cpg; ++i) {
         uint64_t mu = f3_get_mu(&c, i);
+        /* u16 code = beta*65534; 65535 (UINT16_MAX) = missing */
         truth_row[i] = mu ? (uint16_t)llround(MU2beta(mu) * 65534.0) : UINT16_MAX;
       }
       write_or_die(fp, truth_row, (size_t)n_cpg * sizeof(*truth_row), out);

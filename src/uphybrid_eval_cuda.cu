@@ -98,7 +98,7 @@ __global__ static void score_targets(const float*z,const float*e,const float*eb,
     uint16_t tv=truth[actual[q]];if(tv==UINT16_MAX)continue;
     size_t g=(size_t)group_or_bin[q];float s=eb[q];
     for(int r=0;r<rank;++r)s+=e[q*(size_t)rank+r]*z[g*(size_t)rank+r];
-    float p=sigmoid(s),y=(float)tv/65534.0f,d=p-y,ad=fabsf(d);
+    float p=sigmoid(s),y=(float)tv/65534.0f/* u16 code / 65534; 65535 (UINT16_MAX) = missing */,d=p-y,ad=fabsf(d);
     ab+=ad;sq+=(double)d*d;gs+=y;ps+=p;gq+=(double)y*y;pq+=(double)p*p;cr+=(double)y*p;++nn;if(ad<=.05f)++wi;
   }
   __shared__ double sab[THREADS],ssq[THREADS],sgs[THREADS],sps[THREADS],sgq[THREADS],spq[THREADS],scr[THREADS];
@@ -246,10 +246,11 @@ extern "C" int ms_uphybrid_eval_cuda(const ms_uphybrid_eval_config_t*cfg){
     "# cells\t%u\n# reps\t%u\n# observed_targets\tincluded\n"
     "# preparation_seconds\t%.6f\n# evaluation_seconds\t%.6f\n"
     "target_set\tn_valid\tmae\tmse\trmse\tpearson_corr\twithin_abs_error_le_0.05\n"
-    "top1000\t%llu\t%.12g\t%.12g\t%.12g\t%.12g\t%.12g\n"
+    "top%u\t%llu\t%.12g\t%.12g\t%.12g\t%.12g\t%.12g\n" /* actual active-target count */
     "residual\t%llu\t%.12g\t%.12g\t%.12g\t%.12g\t%.12g\n"
     "combined\t%llu\t%.12g\t%.12g\t%.12g\t%.12g\t%.12g\n",
     cfg->data_path,cfg->encoder_path,cfg->residual_path,cells,reps,prep_seconds,eval_seconds,
+    eh->n_active,
     ts.n,ts.mae,ts.mse,ts.rmse,ts.corr,ts.within,
     rs.n,rs.mae,rs.mse,rs.rmse,rs.corr,rs.within,
     cs.n,cs.mae,cs.mse,cs.rmse,cs.corr,cs.within);

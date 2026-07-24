@@ -124,7 +124,8 @@ static char **read_sample_names(const char *ref, uint32_t *n_out) {
   }
   free(line); fclose(f);
   if (!n) die("reference index is empty", idx);
-  if (n > 40) die("more than 40 samples exceeds the base-3 uint64 key", idx);
+  if (n > 40) /* 3^40 < 2^64 < 3^41 */
+    die("more than 40 samples exceeds the base-3 uint64 key", idx);
   *n_out = (uint32_t)n;
   return names;
 }

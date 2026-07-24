@@ -755,7 +755,8 @@ doublereal *x, *y;
 
 
 /* The following subroutine was added after the f2c translation */
-int nnls_c(double* a, const int* mda, const int* m, const int* n, double* b, 
+/* not thread-safe: static scratch */
+int nnls_c(double* a, const int* mda, const int* m, const int* n, double* b,
 	 double* x, double* rnorm, double* w, double* zz, int* index, 
 	 int* mode)
 {

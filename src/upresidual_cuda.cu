@@ -199,7 +199,7 @@ __global__ static void accumulate_bias(const uint16_t *truth,const uint32_t *cpg
                                        float *sum,uint32_t *count,size_t n) {
   for(size_t q=(size_t)blockIdx.x*blockDim.x+threadIdx.x;q<n;q+=(size_t)blockDim.x*gridDim.x) {
     uint16_t v=truth[cpg[q]];
-    if(v!=UINT16_MAX){sum[q]+=(float)v/65534.0f;count[q]++;}
+    if(v!=UINT16_MAX){sum[q]+=(float)v/65534.0f/* u16 code / 65534; 65535 (UINT16_MAX) = missing */;count[q]++;}
   }
 }
 __global__ static void finalize_bias(const float *sum,const uint32_t *count,float *bias,size_t n) {

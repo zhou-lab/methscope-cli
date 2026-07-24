@@ -23,7 +23,7 @@ typedef struct {
   uint64_t n_cpg;
   uint64_t mean_offset, scale_offset, unit_offset, cpg_offset;
   uint64_t membership_offset, param_offset, file_bytes;
-  uint64_t index_checksum, parameter_checksum, reserved0;
+  uint64_t index_checksum, parameter_checksum, trunk_dim;
 } ms_updec2_header_t;
 
 typedef struct {
