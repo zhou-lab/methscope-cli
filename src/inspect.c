@@ -23,8 +23,8 @@
 #include <xgboost/c_api.h>
 
 static void idie(const char *msg, const char *arg) {
-  if (arg) fprintf(stderr, "[methscope] %s: %s\n", msg, arg);
-  else     fprintf(stderr, "[methscope] %s\n", msg);
+  if (arg) fprintf(stderr, "[methscope] inspect: %s: %s\n", msg, arg);
+  else     fprintf(stderr, "[methscope] inspect: %s\n", msg);
   exit(1);
 }
 
@@ -99,7 +99,10 @@ static void print_labels(char *const *labels, int K) {
 }
 
 int main_inspect(int argc, char *argv[]) {
-  if (argc != 2 || strcmp(argv[1], "-h") == 0) return inspect_usage();
+  if (argc == 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
+    inspect_usage(); return 0;
+  }
+  if (argc != 2) return inspect_usage();
   const char *path = argv[1];
   if (!ms_bundle_is(path))
     idie("not a methscope bundle (.ubjx/.updecx/.refx)", path);

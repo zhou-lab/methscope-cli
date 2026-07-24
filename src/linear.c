@@ -29,8 +29,8 @@
 #include "methscope.h"
 
 static void ldie(const char *msg, const char *arg) {
-  if (arg) fprintf(stderr, "[methscope] %s: %s\n", msg, arg);
-  else     fprintf(stderr, "[methscope] %s\n", msg);
+  if (arg) fprintf(stderr, "[methscope] linear: %s: %s\n", msg, arg);
+  else     fprintf(stderr, "[methscope] linear: %s\n", msg);
   exit(1);
 }
 

@@ -32,8 +32,8 @@
 #include "bundle.h"    /* ms_mrmp_resolve + .refx bundle sections */
 
 static void ddie(const char *msg, const char *arg) {
-  if (arg) fprintf(stderr, "[methscope] %s: %s\n", msg, arg);
-  else     fprintf(stderr, "[methscope] %s\n", msg);
+  if (arg) fprintf(stderr, "[methscope] deconv: %s: %s\n", msg, arg);
+  else     fprintf(stderr, "[methscope] deconv: %s\n", msg);
   exit(1);
 }
 
@@ -222,7 +222,11 @@ int main_deconv(int argc, char *argv[]) {
     if      (strcmp(argv[i], "-o") == 0 && i+1 < argc) out_path = argv[++i];
     else if (strcmp(argv[i], "--no-header") == 0) no_header = 1;
     else if (strcmp(argv[i], "--min-cov") == 0 && i+1 < argc) min_cov = atoi(argv[++i]);
-    else if (strcmp(argv[i], "-h") == 0) return deconv_usage();
+    else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+      deconv_usage(); return 0;
+    }
+    else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
+      ddie("unrecognized or incomplete option", argv[i]);
     else break;
   }
   if (argc - i != 2) return deconv_usage();

@@ -155,7 +155,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
   for (;;) { cdata_t c = read_cdata1(&check); if (!c.n) { free_cdata(&c); break; } ++n_cells; free_cdata(&c); }
   ++n_cells; /* account for first record */
   bgzf_close(check.fh);
-  if (n_cpg > UINT32_MAX) pdie("sidecar v1 supports at most 2^32-1 CpGs", truth);
+  if (n_cpg > UINT32_MAX) pdie("sidecar supports at most 2^32-1 CpGs", truth);
 
   uint16_t *group = xmalloc((size_t)n_cpg * sizeof(*group), "MRMP group map");
   for (uint64_t i = 0; i < n_cpg; ++i) {

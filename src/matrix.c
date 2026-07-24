@@ -22,8 +22,8 @@
 #include "bundle.h"    /* ms_mrmp_resolve: accept a bundle where a .mrmp fits */
 
 static void mdie(const char *msg, const char *arg) {
-  if (arg) fprintf(stderr, "[methscope] %s: %s\n", msg, arg);
-  else     fprintf(stderr, "[methscope] %s\n", msg);
+  if (arg) fprintf(stderr, "[methscope] matrix: %s: %s\n", msg, arg);
+  else     fprintf(stderr, "[methscope] matrix: %s\n", msg);
   exit(1);
 }
 
@@ -387,7 +387,11 @@ int main_matrix(int argc, char *argv[]) {
     else if (strcmp(argv[i], "--no-header") == 0) no_header = 1;
     else if (strcmp(argv[i], "--refx") == 0) refx = 1;
     else if (strcmp(argv[i], "--min-cov") == 0 && i + 1 < argc) min_cov = atoi(argv[++i]);
-    else if (strcmp(argv[i], "-h") == 0) return matrix_usage();
+    else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+      matrix_usage(); return 0;
+    }
+    else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
+      mdie("unrecognized or incomplete option", argv[i]);
     else break;
   }
   if (argc - i != 2) return matrix_usage();

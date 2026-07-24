@@ -18,8 +18,8 @@
 typedef struct { char name[NAMELEN]; uint64_t offset, length; } entry_t;
 
 static void bdie(const char *msg, const char *arg) {
-  if (arg) fprintf(stderr, "[methscope] %s: %s\n", msg, arg);
-  else     fprintf(stderr, "[methscope] %s\n", msg);
+  if (arg) fprintf(stderr, "[methscope] bundle: %s: %s\n", msg, arg);
+  else     fprintf(stderr, "[methscope] bundle: %s\n", msg);
   exit(1);
 }
 
@@ -281,7 +281,11 @@ int main_bundle(int argc, char *argv[]) {
     else if (strcmp(argv[i], "-l") == 0 && i+1 < argc) meta   = argv[++i];
     else if (strcmp(argv[i], "-O") == 0 && i+1 < argc) outcpg = argv[++i];
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out    = argv[++i];
-    else if (strcmp(argv[i], "-h") == 0) return bundle_usage();
+    else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+      bundle_usage(); return 0;
+    }
+    else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
+      bdie("unrecognized or incomplete option", argv[i]);
     else break;
   }
   if (!mrmp || !out || argc - i != 1) return bundle_usage();
@@ -368,7 +372,11 @@ int main_unbundle(int argc, char *argv[]) {
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-o") == 0 && i+1 < argc) model_out = argv[++i];
     else if (strcmp(argv[i], "--mrmp") == 0 && i+1 < argc) mrmp_out = argv[++i];
-    else if (strcmp(argv[i], "-h") == 0) return unbundle_usage();
+    else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+      unbundle_usage(); return 0;
+    }
+    else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
+      bdie("unrecognized or incomplete option", argv[i]);
     else break;
   }
   if (argc - i != 1) return unbundle_usage();

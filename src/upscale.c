@@ -30,8 +30,8 @@
 #include "cfile.h"     /* YAME: cdata_t, cdata_write1, open_cfile, read_cdata1, FMT6_/FMT0_ macros */
 
 static void udie(const char *msg, const char *arg) {
-  if (arg) fprintf(stderr, "[methscope] %s: %s\n", msg, arg);
-  else     fprintf(stderr, "[methscope] %s\n", msg);
+  if (arg) fprintf(stderr, "[methscope] upscale: %s: %s\n", msg, arg);
+  else     fprintf(stderr, "[methscope] upscale: %s\n", msg);
   exit(1);
 }
 
@@ -344,6 +344,8 @@ int main_upscale(int argc, char *argv[]) {
       upscale_usage();
       return 0;
     }
+    else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
+      udie("unrecognized or incomplete option", argv[i]);
     else break;
   }
   if (argc - i < 1 || argc - i > 2) return upscale_usage();

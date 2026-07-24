@@ -24,8 +24,8 @@
   } while (0)
 
 static void pdie(const char *msg, const char *arg) {
-  if (arg) fprintf(stderr, "[methscope] %s: %s\n", msg, arg);
-  else     fprintf(stderr, "[methscope] %s\n", msg);
+  if (arg) fprintf(stderr, "[methscope] predict: %s: %s\n", msg, arg);
+  else     fprintf(stderr, "[methscope] predict: %s\n", msg);
   exit(1);
 }
 
@@ -117,7 +117,11 @@ int main_predict(int argc, char *argv[]) {
     if      (strcmp(argv[i], "-o") == 0 && i + 1 < argc) out_path = argv[++i];
     else if (strcmp(argv[i], "--probs") == 0) with_probs = 1;
     else if (strcmp(argv[i], "--no-header") == 0) no_header = 1;
-    else if (strcmp(argv[i], "-h") == 0) return predict_usage();
+    else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+      predict_usage(); return 0;
+    }
+    else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
+      pdie("unrecognized or incomplete option", argv[i]);
     else break;
   }
   if (argc - i != 2 && argc - i != 3) return predict_usage();

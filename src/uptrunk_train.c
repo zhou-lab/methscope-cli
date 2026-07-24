@@ -32,7 +32,7 @@ static int usage(void) {
 static uint64_t u64(const char *s, const char *name) {
   errno = 0; char *e = NULL; unsigned long long x = strtoull(s, &e, 10);
   if (errno || e == s || *e) {
-    fprintf(stderr, "[methscope] trunk-train: invalid %s: %s\n", name, s);
+    fprintf(stderr, "[methscope] _upscale trunk-train: invalid %s: %s\n", name, s);
     exit(1);
   }
   return (uint64_t)x;
@@ -41,7 +41,7 @@ static uint64_t u64(const char *s, const char *name) {
 static double real(const char *s, const char *name) {
   errno = 0; char *e = NULL; double x = strtod(s, &e);
   if (errno || e == s || *e) {
-    fprintf(stderr, "[methscope] trunk-train: invalid %s: %s\n", name, s);
+    fprintf(stderr, "[methscope] _upscale trunk-train: invalid %s: %s\n", name, s);
     exit(1);
   }
   return x;
@@ -63,7 +63,7 @@ int main_upscale_trunk_train(int argc, char **argv) {
       if (!strcmp(v, "missing")) c.feature_mode = MS_UPFEATURE_MISSING;
       else if (!strcmp(v, "count")) c.feature_mode = MS_UPFEATURE_COUNT;
       else if (!strcmp(v, "beta")) c.feature_mode = MS_UPFEATURE_BETA;
-      else { fprintf(stderr, "[methscope] trunk-train: --features must be beta, missing, or count\n"); return 1; }
+      else { fprintf(stderr, "[methscope] _upscale trunk-train: --features must be beta, missing, or count\n"); return 1; }
     }
     else if (!strcmp(a, "--patterns") && i + 1 < argc) c.patterns = (uint32_t)u64(argv[++i], a);
     else if (!strcmp(a, "--rank") && i + 1 < argc) c.rank = (uint32_t)u64(argv[++i], a);
@@ -78,14 +78,14 @@ int main_upscale_trunk_train(int argc, char **argv) {
     else if (!strcmp(a, "--homogeneous-fraction") && i + 1 < argc) c.homogeneous_fraction = real(argv[++i], a);
     else if (!strcmp(a, "--seed") && i + 1 < argc) c.seed = u64(argv[++i], a);
     else if (!strcmp(a, "--device") && i + 1 < argc) c.device = (int)u64(argv[++i], a);
-    else { usage(); fprintf(stderr, "[methscope] trunk-train: bad option: %s\n", a); return 1; }
+    else { usage(); fprintf(stderr, "[methscope] _upscale trunk-train: bad option: %s\n", a); return 1; }
   }
   if (!c.data_path || !c.model_path || !c.patterns || !c.rank || !c.hidden ||
       !c.steps || !c.batch || !c.eval_batches || !c.log_every ||
       c.homogeneous_fraction < 0 || c.homogeneous_fraction > 1)
     return usage();
   if (!ms_upfactor_cuda_available()) {
-    fprintf(stderr, "[methscope] trunk-train: CUDA backend unavailable\n");
+    fprintf(stderr, "[methscope] _upscale trunk-train: CUDA backend unavailable\n");
     return 1;
   }
   return ms_upfactor_train_cuda(&c);
