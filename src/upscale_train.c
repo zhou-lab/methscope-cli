@@ -192,7 +192,7 @@ int main_upscale_train(int argc, char **argv) {
   if (ms_mrmp_is_artifact(mrmp)) {
     if (snprintf(mask, sizeof(mask), "%s/mrmp.cm", work) >= (int)sizeof(mask))
       terr("output path is too long", NULL);
-    ms_mrmp_write_mask(mrmp, mask, NULL);
+    ms_mrmp_write_mask(mrmp, mask, NULL, c.patterns);
     bundled_mrmp = mask;
   }
   if (!ms_upunit_cuda_available())

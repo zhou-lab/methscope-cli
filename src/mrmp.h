@@ -31,7 +31,10 @@ typedef struct {
   char     magic[8];          /* "MRMPIDX1" */
   uint32_t version;           /* MRMPIDX_VERSION */
   uint32_t n_samples;         /* reference samples == pattern length */
-  uint32_t n_selected;        /* K: patterns labelled P1..PK */
+  uint32_t n_selected;        /* selectable patterns; == n_candidates since the
+                               * top-K cut moved to the consumers. Older
+                               * artifacts carry their build-time K, and every
+                               * reader takes min(n_selected, its own K). */
   uint32_t flags;             /* MRMP_FLAG_* */
   uint64_t n_cpg;             /* genomic CpGs (per-CpG membership entries) */
   uint64_t n_candidates;      /* distinct {0,1} patterns (ranked; excl. PNA) */
@@ -67,10 +70,12 @@ int main_mrmp(int argc, char *argv[]);
 /* Nonzero if PATH is a MRMPIDX1 artifact rather than an exported .cm mask. */
 int ms_mrmp_is_artifact(const char *path);
 
-/* Write the artifact's per-CpG P1..PK / PNA labels as a YAME format-2 .cm.
+/* Write the artifact's per-CpG P1..P<top_k> / PNA labels as a YAME format-2
+ * .cm. The caller owns top_k: for a model bundle it is the model's MRMP input
+ * count, so the shipped mask cannot disagree with the input dimension.
  * Fatal on error. */
 void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
-                        const char *pna_label);
+                        const char *pna_label, uint32_t top_k);
 
 /* Fill group[0..n_cpg-1] with each CpG's 1-based selected-pattern index, or 0
  * for PNA and ranks at or beyond `patterns`. Fatal on error or size mismatch. */

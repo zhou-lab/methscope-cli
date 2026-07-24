@@ -68,6 +68,18 @@
   pre:hover .copy,.copy:focus{opacity:1}
   .copy:hover{background:rgba(20,60,56,.98)}
   .copy.ok{color:var(--ok);opacity:1}
+  /* Hover note for a token inside a code block. The box is a sibling of <pre>,
+     not a child, so pre's overflow-x:auto cannot clip it. */
+  .tipwrap{position:relative}
+  .tip{border-bottom:1px dotted currentColor;cursor:help;outline:none}
+  .tipbox{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:30;display:none;
+     background:var(--card);color:var(--fg);border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));
+     border-radius:9px;padding:10px 12px;box-shadow:0 6px 22px rgba(0,0,0,.22);font-size:.72rem;line-height:1.5}
+  .tipwrap:has(.tip:hover) .tipbox,.tipwrap:has(.tip:focus) .tipbox{display:block}
+  .tipbox b{color:var(--accent)}
+  .tipbox dl{margin:6px 0 0;display:grid;grid-template-columns:auto 1fr;gap:2px 10px}
+  .tipbox dt{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--accent);white-space:nowrap}
+  .tipbox dd{margin:0;color:var(--muted)}
   .full{border:1px solid var(--line);border-radius:13px;background:var(--card);padding:16px 18px;margin-top:22px;box-shadow:var(--shadow)}
   .full>h2{font-size:1.1rem;margin:0 0 4px;letter-spacing:-.01em}
   .full>h2 .m{color:var(--muted);font-weight:400;font-size:.85rem}
@@ -141,14 +153,31 @@ git clone \
       labels every genomic CpG with its pattern is what every model is built on.
       <code class="inl">mrmp</code> constructs it natively from a discretized reference
       <code class="inl">.cg</code> — no YAME + awk + sort pipeline, ~576&nbsp;MB peak.</p>
-    <pre><code>methscope <span class="sub">mrmp</span> build --reference ref.cg \
-  --patterns 1000 -o panel.mrmp
+    <div class="tipwrap">
+      <pre><code>methscope <span class="sub">mrmp</span> build --reference ref.cg \
+  -o <span class="tip" tabindex="0">panel.mrmp</span>
 methscope <span class="sub">mrmp</span> inspect panel.mrmp
-<span class="cm"># export a YAME .cm mask + tables</span>
+<span class="cm"># inspection only — not a pipeline step</span>
 methscope <span class="sub">mrmp</span> export panel.mrmp \
-  --mask panel.cm --patterns pat.tsv</code></pre>
-    <p style="margin-top:11px">Each pattern packs to a base-3 <code class="inl">uint64</code> key;
-      selection is deterministic (count desc, key asc), so a build is byte-reproducible. The
+  --mask panel.cm --top 1000</code></pre>
+      <span class="tipbox">
+        <b>MRMPIDX1</b> — a rank-complete artifact. No top-K is baked in: every candidate is
+        ranked and every CpG keeps its exact rank, so consumers choose their own cut.
+        <dl>
+          <dt>header</dt><dd>128 B — reference path, sample names, binstring parameters
+            (<code class="inl">mincov</code>, beta, max-ambig, min-fold), PNA key + CpG count,
+            FNV content checksum</dd>
+          <dt>patterns</dt><dd><i>n_candidates</i> × {base-3 <code class="inl">uint64</code> key,
+            <code class="inl">uint64</code> count}, ordered count desc then key asc</dd>
+          <dt>membership</dt><dd><i>n_cpg</i> × <code class="inl">uint32</code> rank;
+            <code class="inl">0xFFFFFFFF</code> = PNA (the all-'2' sentinel)</dd>
+        </dl>
+        hg38 × 35 samples: 2,345,190 candidates over 29,401,795 CpGs ≈ 155 MB.
+      </span>
+    </div>
+    <p style="margin-top:11px">Ranking is deterministic (count desc, key asc), so a build is
+      byte-reproducible from the reference alone — hover <code class="inl">panel.mrmp</code> above
+      for the on-disk scheme. The
       artifact is the build pipeline's currency — <code class="inl">_upscale prepare</code>,
       <code class="inl">_upscale index</code>, and <code class="inl">upscale-train</code> all read
       it, so the sidecar's group map and the mask a model ships cannot drift apart. The

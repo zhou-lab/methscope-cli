@@ -185,7 +185,7 @@ static void write_or_die(FILE *fp, const void *p, size_t n, const char *path) {
 
 static int mrmp_build(int argc, char *argv[]) {
   const char *ref = NULL, *out = NULL;
-  uint32_t K = 1000, mincov = MRMP_DEF_MINCOV;
+  uint32_t mincov = MRMP_DEF_MINCOV;
   float beta_thr = MRMP_DEF_BETA_THRESH, max_ambig = MRMP_DEF_MAX_AMBIG,
         min_fold = MRMP_DEF_MIN_FOLD;
   int force = 0;
@@ -195,11 +195,11 @@ static int mrmp_build(int argc, char *argv[]) {
       ms_help(stderr,
         "Usage: methscope mrmp build --reference REF.cg -o OUT.mrmp [options]\n\n"
         "Reproduce YAME `rowop -o binstring` per CpG over the reference samples,\n"
-        "count exact membership patterns, rank them (count desc, key asc), and\n"
-        "select the top -K as P1..PK. The all-'2' sentinel is always PNA.\n\n"
+        "count exact membership patterns, and rank them (count desc, key asc).\n"
+        "Every candidate is ranked and every CpG keeps its exact rank, so the\n"
+        "top-K cut belongs to the consumer, not here. The all-'2' sentinel is PNA.\n\n"
         "  --reference PATH   discretized format-3 reference .cg (needs <ref>.idx)\n"
         "  -o PATH            output MRMPIDX1 artifact (required)\n"
-        "  --patterns K       encoder patterns to select (default 1000)\n"
         "  --mincov N         binstring -c (default 1)\n"
         "  --beta-threshold X binstring -b (default 0.5)\n"
         "  --max-ambig-frac X binstring -m (default 1.0 = off)\n"
@@ -209,7 +209,6 @@ static int mrmp_build(int argc, char *argv[]) {
     }
     else if (!strcmp(a, "--reference") && i + 1 < argc) ref = argv[++i];
     else if (!strcmp(a, "-o") && i + 1 < argc) out = argv[++i];
-    else if (!strcmp(a, "--patterns") && i + 1 < argc) K = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--mincov") && i + 1 < argc) mincov = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--beta-threshold") && i + 1 < argc) beta_thr = (float)atof(argv[++i]);
     else if (!strcmp(a, "--max-ambig-frac") && i + 1 < argc) max_ambig = (float)atof(argv[++i]);
@@ -218,7 +217,6 @@ static int mrmp_build(int argc, char *argv[]) {
     else die("unrecognized or incomplete option", a);
   }
   if (!ref || !out) die("need --reference and -o (see mrmp build -h)", NULL);
-  if (!K) die("--patterns must be positive", NULL);
   if (!force) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
 
   uint32_t ns = 0;
@@ -307,19 +305,14 @@ static int mrmp_build(int argc, char *argv[]) {
   for (uint64_t p = 0; p < n_pat; ++p) rank_of[p] = MRMP_PNA_MEMBERSHIP;
   for (uint64_t r = 0; r < n_cand; ++r) rank_of[order[r]] = (uint32_t)r;
 
-  if (K > n_cand) {
-    fprintf(stderr, "[methscope] mrmp: only %" PRIu64 " candidates < K=%u; "
-            "selecting all\n", n_cand, K);
-    K = (uint32_t)n_cand;
-  }
-
   /* Serialize MRMPIDX1. Sections are laid out in header order. */
   FILE *fp = fopen(out, "wb");
   if (!fp) die("cannot create output", out);
   mrmp_header_t hd; memset(&hd, 0, sizeof(hd));
   if (sizeof(hd) != 128) die("MRMPIDX1 header is not 128 bytes", NULL);
   memcpy(hd.magic, MRMPIDX_MAGIC, 8);
-  hd.version = MRMPIDX_VERSION; hd.n_samples = ns; hd.n_selected = K;
+  hd.version = MRMPIDX_VERSION; hd.n_samples = ns;
+  hd.n_selected = (uint32_t)n_cand;   /* the cut is the consumer's */
   hd.flags = MRMP_FLAG_INCLUDE_HOMOGENEOUS;   /* always: see the candidate loop */
   hd.n_cpg = n_cpg; hd.n_candidates = n_cand;
   hd.pna_key = pna_key; hd.pna_cpg = pna_cpg;
@@ -364,8 +357,8 @@ static int mrmp_build(int argc, char *argv[]) {
     "[methscope] mrmp build: %s\n"
     "  samples=%u  CpGs=%" PRIu64 "  distinct patterns=%" PRIu64
     " (+PNA)  candidates=%" PRIu64 "\n"
-    "  selected K=%u  PNA CpGs=%" PRIu64 " (%.2f%%)  checksum=%016" PRIx64 "\n",
-    out, ns, n_cpg, n_pat, n_cand, K, pna_cpg,
+    "  PNA CpGs=%" PRIu64 " (%.2f%%)  checksum=%016" PRIx64 "\n",
+    out, ns, n_cpg, n_pat, n_cand, pna_cpg,
     100.0 * (double)pna_cpg / (double)n_cpg, checksum);
 
   free(pat); free(order); free(rank_of);
@@ -473,20 +466,23 @@ static int mrmp_inspect(int argc, char *argv[]) {
 static int mrmp_export(int argc, char *argv[]) {
   const char *path = NULL, *mask = NULL, *patterns = NULL, *counts = NULL,
              *pna_label = "Pna";
+  uint32_t top_k = 1000;
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       ms_help(stderr,
         "Usage: methscope mrmp export FILE.mrmp [--mask CM] [--patterns TSV]\n"
-        "                             [--counts TSV] [--pna-label NAME]\n\n"
+        "                             [--counts TSV] [--top K] [--pna-label NAME]\n\n"
         "  --mask CM        per-CpG P1..PK/Pna labels as a YAME format-2 .cm\n"
-        "  --patterns TSV   selected patterns: string<tab>P<rank><tab>count\n"
+        "  --patterns TSV   top-K patterns: string<tab>P<rank><tab>count\n"
+        "  --top K          rank cut for --mask and --patterns (default 1000)\n"
         "  --counts TSV     every pattern (incl. PNA): count<tab>string\n"
         "  --pna-label NAME background label in --mask (default Pna)\n");
       return 0;
     } else if (!strcmp(a, "--mask") && i + 1 < argc) mask = argv[++i];
     else if (!strcmp(a, "--patterns") && i + 1 < argc) patterns = argv[++i];
     else if (!strcmp(a, "--counts") && i + 1 < argc) counts = argv[++i];
+    else if (!strcmp(a, "--top") && i + 1 < argc) top_k = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--pna-label") && i + 1 < argc) pna_label = argv[++i];
     else if (a[0] != '-') path = a;
     else die("unrecognized option", a);
@@ -501,7 +497,7 @@ static int mrmp_export(int argc, char *argv[]) {
   if (patterns) {
     FILE *f = fopen(patterns, "w");
     if (!f) die("cannot create --patterns", patterns);
-    uint64_t lim = h->n_selected < h->n_candidates ? h->n_selected : h->n_candidates;
+    uint64_t lim = top_k < h->n_candidates ? top_k : h->n_candidates;
     for (uint64_t p = 0; p < lim; ++p) {
       key_to_string(r.pat[p].key, ns, buf);
       fprintf(f, "%s\tP%" PRIu64 "\t%" PRIu64 "\n", buf, p + 1, r.pat[p].count);
@@ -522,7 +518,7 @@ static int mrmp_export(int argc, char *argv[]) {
     if (fclose(f)) die("error closing --counts", counts);
   }
 
-  if (mask) ms_mrmp_write_mask(path, mask, pna_label);
+  if (mask) ms_mrmp_write_mask(path, mask, pna_label, top_k);
 
   free(buf);
   mrmp_close(&r);
@@ -554,15 +550,17 @@ void ms_mrmp_group_map(const char *artifact, uint16_t *group, uint64_t n_cpg,
 }
 
 void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
-                        const char *pna_label) {
+                        const char *pna_label, uint32_t top_k) {
   mrmp_reader_t r; mrmp_open(&r, artifact);
   const mrmp_header_t *h = r.h;
   if (!pna_label) pna_label = "Pna";
+  if (!top_k) die("mask needs a positive rank cut", out_cm);
+  if (top_k > h->n_selected) top_k = h->n_selected;
   {
     /* Build a raw YAME format-2 cdata directly (no genome-sized text file),
      * mirroring fmt2_read_raw: first-seen key order over genomic CpGs, then
      * cdata_compress (RLE) + cdata_write. Labels: P(rank+1) or the PNA label. */
-    const uint64_t n = h->n_cpg, K = h->n_selected;
+    const uint64_t n = h->n_cpg, K = top_k;
     const char *mask = out_cm;
     /* distinct label ids in first-seen order */
     uint32_t *label_id = xcalloc(n, sizeof(uint32_t), "label ids");
