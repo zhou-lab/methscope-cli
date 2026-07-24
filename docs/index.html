@@ -149,8 +149,11 @@ methscope <span class="sub">mrmp</span> export panel.mrmp \
   --mask panel.cm --patterns pat.tsv</code></pre>
     <p style="margin-top:11px">Each pattern packs to a base-3 <code class="inl">uint64</code> key;
       selection is deterministic (count desc, key asc), so a build is byte-reproducible. The
-      whole-genome unit index for <code class="inl">upscale-train</code> reads the artifact directly
-      (<code class="inl">_upscale index --mrmp</code>).</p>
+      artifact is the build pipeline's currency — <code class="inl">_upscale prepare</code>,
+      <code class="inl">_upscale index</code>, and <code class="inl">upscale-train</code> all read
+      it, so the sidecar's group map and the mask a model ships cannot drift apart. The
+      <code class="inl">.cm</code> is the runtime form, materialized into the bundle at train
+      time; <code class="inl">export --mask</code> is for inspection, not a pipeline step.</p>
   </section>
 
   <section class="card">
@@ -223,7 +226,7 @@ methscope <span class="sub">build-reference</span> --matrix query.cg panel.mrmp<
       <code class="inl">--split</code> pins the exact assignment.</p>
     <pre><code>make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80
 methscope <span class="sub">upscale-train</span> -i train.msur \
-  --index units.msui --mrmp panel.cm \
+  --index units.msui --mrmp panel.mrmp \
   -o model.updecx --work-dir work/ \
   --split loyfer_split.tsv
 <span class="cm"># split rows: &lt;cell_index&gt;TAB&lt;train|val|test&gt;, one per source cell</span></code></pre>

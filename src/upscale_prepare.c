@@ -18,6 +18,7 @@
 #include "methscope.h"
 #include "cfile.h"
 #include "summary.h"
+#include "mrmp.h"
 
 #define MSUR_MAGIC "MSURAW2\0"
 #define MSUR_VERSION 2u
@@ -86,13 +87,13 @@ static int cmp_u32(const void *a, const void *b) {
 
 static int usage(void) {
   ms_help(stderr,
-    "Usage: methscope _upscale prepare -o OUT.msur --truth TRUTH.cg --mrmp MRMP.cm [options]\n\n"
+    "Usage: methscope _upscale prepare -o OUT.msur --truth TRUTH.cg --mrmp MRMP.mrmp [options]\n\n"
     "Create a compact exact-YAME sampling sidecar for global upscale training.\n"
     "The original TRUTH.cg remains the truth store and is never copied.\n\n"
     "Options:\n"
     "  -o PATH          output sidecar (.msur; required)\n"
     "  --truth PATH     continuous format-3 YAME .cg truth store (required)\n"
-    "  --mrmp PATH      categorical MRMP .cm with P1..Pn/PNA states (required)\n"
+    "  --mrmp PATH      MRMPIDX1 artifact (preferred) or exported .cm (required)\n"
     "  --reps N         deterministic simulations, seeds 1..N (default 100)\n"
     "  --sample N       CpGs retained per cell/replicate (default 29000)\n"
     "  --patterns N     retain feature summaries P1..PN (default 1000)\n"
@@ -131,25 +132,13 @@ int main_upscale_prepare(int argc, char *argv[]) {
   if (sizeof(msur_header_t) != 72) pdie("unexpected sidecar header layout", NULL);
   if (patterns > UINT16_MAX - 1) pdie("--patterns exceeds uint16 group format", NULL);
 
-  /* Load exactly one categorical MRMP record.  Its state at i is the feature
-   * group of CpG i.  PNA/background remains group 0 and is never a feature. */
-  cfile_t cmf = open_cfile((char *)mrmp);
-  cdata_t cm = read_cdata1(&cmf);
-  cdata_t extra = read_cdata1(&cmf);
-  bgzf_close(cmf.fh);
-  if (!cm.n || extra.n) pdie("MRMP must contain exactly one record", mrmp);
-  free_cdata(&extra);
-  decompress_in_situ(&cm);
-  if (cm.fmt != '2') pdie("MRMP must be categorical format 2", mrmp);
-  fmt2_set_aux(&cm);
-
+  /* Size the truth store first; the MRMP is then read against its CpG count. */
   cfile_t check = open_cfile((char *)truth);
   cdata_t first = read_cdata1(&check);
   if (!first.n) pdie("truth store is empty", truth);
   decompress_in_situ(&first);
   if (first.fmt != '3') pdie("truth store must be continuous format 3", truth);
   uint64_t n_cpg = first.n;
-  if (cm.n != n_cpg) pdie("MRMP and truth CpG counts differ", mrmp);
   uint32_t n_cells = 0;
   free_cdata(&first);
   for (;;) { cdata_t c = read_cdata1(&check); if (!c.n) { free_cdata(&c); break; } ++n_cells; free_cdata(&c); }
@@ -157,12 +146,30 @@ int main_upscale_prepare(int argc, char *argv[]) {
   bgzf_close(check.fh);
   if (n_cpg > UINT32_MAX) pdie("sidecar supports at most 2^32-1 CpGs", truth);
 
+  /* Feature group of CpG i; PNA/background stays group 0 and is never a
+   * feature.  Prefer the MRMPIDX1 artifact, so this map and the mask the model
+   * ends up bundling derive from one source and cannot disagree; an
+   * already-exported categorical .cm is still accepted. */
   uint16_t *group = xmalloc((size_t)n_cpg * sizeof(*group), "MRMP group map");
-  for (uint64_t i = 0; i < n_cpg; ++i) {
-    int p = pnum(f2_get_string(&cm, i));
-    group[i] = (p > 0 && p <= (int)patterns) ? (uint16_t)p : 0;
+  if (ms_mrmp_is_artifact(mrmp)) {
+    ms_mrmp_group_map(mrmp, group, n_cpg, patterns);
+  } else {
+    cfile_t cmf = open_cfile((char *)mrmp);
+    cdata_t cm = read_cdata1(&cmf);
+    cdata_t extra = read_cdata1(&cmf);
+    bgzf_close(cmf.fh);
+    if (!cm.n || extra.n) pdie("MRMP must contain exactly one record", mrmp);
+    free_cdata(&extra);
+    decompress_in_situ(&cm);
+    if (cm.fmt != '2') pdie("MRMP must be categorical format 2", mrmp);
+    fmt2_set_aux(&cm);
+    if (cm.n != n_cpg) pdie("MRMP and truth CpG counts differ", mrmp);
+    for (uint64_t i = 0; i < n_cpg; ++i) {
+      int p = pnum(f2_get_string(&cm, i));
+      group[i] = (p > 0 && p <= (int)patterns) ? (uint16_t)p : 0;
+    }
+    free_cdata(&cm);
   }
-  free_cdata(&cm);
 
   /* A full continuous hg38 x 207-cell store inflates to about 46 GiB.  On the
    * 120-GiB training node this trades ~750 GiB of repeated filesystem reads

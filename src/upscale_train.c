@@ -11,6 +11,7 @@
 #include "bundle.h"
 #include "methscope.h"
 #include "updec2.h"
+#include "mrmp.h"
 #include "upsplit.h"
 #include "upunit_cuda.h"
 
@@ -42,14 +43,15 @@ static double real(const char *s, const char *name) {
 static int usage(void) {
   ms_help(stderr,
     "Usage: methscope upscale-train -i DATA.msur --index UNITS.msui\n"
-    "       --mrmp TOP1000.cm -o MODEL.updecx --work-dir DIR [options]\n\n"
+    "       --mrmp TOP1000.mrmp -o MODEL.updecx --work-dir DIR [options]\n\n"
     "Train whole-genome UPDEC2 processing units on CUDA. Each MRMP contributes\n"
     "beta plus log1p(observed-CpG count); count zero represents missingness.\n"
     "An optional frozen learned trunk is shared by every processing unit.\n\n"
     "Required:\n"
     "  -i, --data PATH          embedded-truth MSURAW2 training sidecar\n"
     "  --index PATH             whole-genome MSUIDX1 processing-unit index\n"
-    "  --mrmp PATH              top-P MRMP .cm bundled into the output\n"
+    "  --mrmp PATH              MRMPIDX1 artifact (preferred) or exported .cm;\n"
+    "                           the runtime mask is bundled into the output\n"
     "  -o PATH                  self-contained output .updecx\n"
     "  --work-dir DIR           resumable unit checkpoints and bare UPDEC2\n\n"
     "Architecture:\n"
@@ -182,6 +184,17 @@ int main_upscale_train(int argc, char **argv) {
     return 0;
   }
   ensure_dir(work);
+  /* The bundle carries the runtime .cm mask. Derive it here from the MRMPIDX1
+   * artifact -- before the hours of training, so a bad --mrmp fails now -- so
+   * the shipped mask and the sidecar's group map come from one source. */
+  char mask[4096];
+  const char *bundled_mrmp = mrmp;
+  if (ms_mrmp_is_artifact(mrmp)) {
+    if (snprintf(mask, sizeof(mask), "%s/mrmp.cm", work) >= (int)sizeof(mask))
+      terr("output path is too long", NULL);
+    ms_mrmp_write_mask(mrmp, mask, NULL);
+    bundled_mrmp = mask;
+  }
   if (!ms_upunit_cuda_available())
     terr("CUDA backend unavailable; rebuild with make CUDA=1 on a GPU node", NULL);
   c.data_path = data; c.index_path = index; c.model_path = bare; c.work_dir = work;
@@ -193,7 +206,7 @@ int main_upscale_train(int argc, char **argv) {
   if (train_rc) terr("CUDA training failed", NULL);
 
   /* Bundle assembly streams the model, so peak RAM is independent of model size. */
-  ms_bundle_pack(out, "upscale", bare, mrmp, NULL);
+  ms_bundle_pack(out, "upscale", bare, bundled_mrmp, NULL);
   FILE *mf = fopen(manifest, "w");
   if (!mf) terr("cannot create training manifest", manifest);
   fprintf(mf,

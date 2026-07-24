@@ -522,11 +522,48 @@ static int mrmp_export(int argc, char *argv[]) {
     if (fclose(f)) die("error closing --counts", counts);
   }
 
-  if (mask) {
+  if (mask) ms_mrmp_write_mask(path, mask, pna_label);
+
+  free(buf);
+  mrmp_close(&r);
+  return 0;
+}
+
+/* ---------------- artifact -> runtime forms ------------------------------ */
+
+int ms_mrmp_is_artifact(const char *path) {
+  char magic[8];
+  FILE *f = fopen(path, "rb");
+  if (!f) die("cannot open MRMP", path);
+  size_t got = fread(magic, 1, sizeof(magic), f);
+  fclose(f);
+  return got == sizeof(magic) && !memcmp(magic, MRMPIDX_MAGIC, 8);
+}
+
+void ms_mrmp_group_map(const char *artifact, uint16_t *group, uint64_t n_cpg,
+                       uint32_t patterns) {
+  mrmp_reader_t r; mrmp_open(&r, artifact);
+  if (r.h->n_cpg != n_cpg) die("MRMP artifact CpG count disagrees", artifact);
+  uint32_t K = r.h->n_selected < patterns ? r.h->n_selected : patterns;
+  for (uint64_t i = 0; i < n_cpg; ++i) {
+    uint32_t rank = r.membership[i];
+    group[i] = (rank != MRMP_PNA_MEMBERSHIP && rank < K)
+             ? (uint16_t)(rank + 1) : 0;
+  }
+  mrmp_close(&r);
+}
+
+void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
+                        const char *pna_label) {
+  mrmp_reader_t r; mrmp_open(&r, artifact);
+  const mrmp_header_t *h = r.h;
+  if (!pna_label) pna_label = "Pna";
+  {
     /* Build a raw YAME format-2 cdata directly (no genome-sized text file),
      * mirroring fmt2_read_raw: first-seen key order over genomic CpGs, then
      * cdata_compress (RLE) + cdata_write. Labels: P(rank+1) or the PNA label. */
     const uint64_t n = h->n_cpg, K = h->n_selected;
+    const char *mask = out_cm;
     /* distinct label ids in first-seen order */
     uint32_t *label_id = xcalloc(n, sizeof(uint32_t), "label ids");
     /* map rank(<K) -> key id; PNA and below-K share the PNA label. */
@@ -588,13 +625,10 @@ static int mrmp_export(int argc, char *argv[]) {
     free_cdata(&c);
     for (uint64_t kk = 0; kk < n_keys; ++kk) free(keys[kk]);
     free(keys); free(label_id); free(key_of_rank);
-    fprintf(stderr, "[methscope] mrmp export: wrote %s (%" PRIu64 " labels)\n",
+    fprintf(stderr, "[methscope] mrmp: wrote mask %s (%" PRIu64 " labels)\n",
             mask, n_keys);
   }
-
-  free(buf);
   mrmp_close(&r);
-  return 0;
 }
 
 /* ---------------- dispatch ---------------------------------------------- */

@@ -59,4 +59,22 @@ typedef struct {
 
 int main_mrmp(int argc, char *argv[]);
 
+/* The artifact is the build pipeline's currency: `_upscale prepare`, `_upscale
+ * index`, and `upscale-train` all read it, so the per-CpG mask and the group
+ * map they use cannot drift apart.  The .cm exists only as the runtime form,
+ * materialized into the model bundle. */
+
+/* Nonzero if PATH is a MRMPIDX1 artifact rather than an exported .cm mask. */
+int ms_mrmp_is_artifact(const char *path);
+
+/* Write the artifact's per-CpG P1..PK / PNA labels as a YAME format-2 .cm.
+ * Fatal on error. */
+void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
+                        const char *pna_label);
+
+/* Fill group[0..n_cpg-1] with each CpG's 1-based selected-pattern index, or 0
+ * for PNA and ranks at or beyond `patterns`. Fatal on error or size mismatch. */
+void ms_mrmp_group_map(const char *artifact, uint16_t *group, uint64_t n_cpg,
+                       uint32_t patterns);
+
 #endif /* MS_MRMP_H */

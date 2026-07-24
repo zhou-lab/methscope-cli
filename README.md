@@ -60,11 +60,19 @@ downstream of MRMP aggregation, not a CpG-to-MRMP encoder. Beta-only,
 beta-plus-missing, and beta-plus-count inputs are supported. PyTorch is not
 used.
 
+The `.mrmp` artifact is the build pipeline's currency: `_upscale prepare`,
+`_upscale index`, and `upscale-train` all read the same one, so the sidecar's
+per-CpG group map and the mask the model ships cannot drift apart. The `.cm` is
+the *runtime* form — `upscale-train` materializes it into `--work-dir` and packs
+it into the bundle. `mrmp export --mask` stays available for inspection and for
+feeding the `.cm`-based commands, but it is no longer a pipeline step. (An
+already-exported `.cm` is still accepted wherever a `.mrmp` is.)
+
 ```sh
 $MS upscale-train \
   -i training.msur \
-  --index whole_genome_membership_16k.msui \
-  --mrmp mrmp1000.cm \
+  --index processing_units_16k.msui \
+  --mrmp zhou_major_p1000.mrmp \
   -o hg38_upscale.updecx \
   --work-dir ~/tmp/hg38_upscale_train \
   --features beta \
