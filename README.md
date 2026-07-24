@@ -71,7 +71,7 @@ already-exported `.cm` is still accepted wherever a `.mrmp` is.)
 ```sh
 $MS upscale-train \
   -i training.msur \
-  --index processing_units_16k.msui \
+  --units processing_units_16k.msui \
   --mrmp zhou_major_p1000.mrmp \
   -o hg38_upscale.updecx \
   --work-dir ~/tmp/hg38_upscale_train \

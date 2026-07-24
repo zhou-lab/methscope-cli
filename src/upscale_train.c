@@ -42,14 +42,15 @@ static double real(const char *s, const char *name) {
 
 static int usage(void) {
   ms_help(stderr,
-    "Usage: methscope upscale-train -i DATA.msur --index UNITS.msui\n"
+    "Usage: methscope upscale-train -i DATA.msur --units UNITS.msui\n"
     "       --mrmp TOP1000.mrmp -o MODEL.updecx --work-dir DIR [options]\n\n"
     "Train whole-genome UPDEC2 processing units on CUDA. Each MRMP contributes\n"
     "beta plus log1p(observed-CpG count); count zero represents missingness.\n"
     "An optional frozen learned trunk is shared by every processing unit.\n\n"
     "Required:\n"
     "  -i, --data PATH          embedded-truth MSURAW2 training sidecar\n"
-    "  --index PATH             whole-genome MSUIDX1 processing-unit index\n"
+    "  --units PATH             whole-genome MSUIDX1 processing-unit index\n"
+"                           (from upscale-set-units)\n"
     "  --mrmp PATH              MRMPIDX1 artifact (preferred) or exported .cm;\n"
     "                           the runtime mask is bundled into the output\n"
     "  -o PATH                  self-contained output .updecx\n"
@@ -110,7 +111,7 @@ int main_upscale_train(int argc, char **argv) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(); return 0; }
     else if ((!strcmp(a, "-i") || !strcmp(a, "--data")) && i + 1 < argc) data = argv[++i];
-    else if (!strcmp(a, "--index") && i + 1 < argc) index = argv[++i];
+    else if (!strcmp(a, "--units") && i + 1 < argc) index = argv[++i];
     else if (!strcmp(a, "--mrmp") && i + 1 < argc) mrmp = argv[++i];
     else if (!strcmp(a, "-o") && i + 1 < argc) out = argv[++i];
     else if (!strcmp(a, "--work-dir") && i + 1 < argc) work = argv[++i];

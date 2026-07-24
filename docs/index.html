@@ -68,24 +68,32 @@
   pre:hover .copy,.copy:focus{opacity:1}
   .copy:hover{background:rgba(20,60,56,.98)}
   .copy.ok{color:var(--ok);opacity:1}
-  /* Hover note for a token inside a code block. The box is a sibling of <pre>,
-     not a child, so pre's overflow-x:auto cannot clip it. */
+  /* Hover note for a token inside a code block. With JS the note follows the
+     cursor from a #tipfloat portaled onto <body> -- it must not live inside
+     .card, whose :hover transform would make it the containing block for
+     position:fixed. Without JS it falls back to a box below the <pre> (a
+     sibling, since pre's overflow-x:auto would clip a child). */
   .tipwrap{position:relative}
   .tip{border-bottom:1px dotted currentColor;cursor:help;outline:none}
-  .tipbox{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:30;display:none;
-     background:var(--card);color:var(--fg);border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));
-     border-radius:9px;padding:10px 12px;box-shadow:0 6px 22px rgba(0,0,0,.22);font-size:.72rem;line-height:1.5}
-  /* One rule per tip name, so a block with several tips shows the right box. */
-  .tipwrap:has(.tip[data-tip=mrmp]:hover) .tipbox[data-tip=mrmp],
-  .tipwrap:has(.tip[data-tip=mrmp]:focus) .tipbox[data-tip=mrmp],
-  .tipwrap:has(.tip[data-tip=msur]:hover) .tipbox[data-tip=msur],
-  .tipwrap:has(.tip[data-tip=msur]:focus) .tipbox[data-tip=msur],
-  .tipwrap:has(.tip[data-tip=msui]:hover) .tipbox[data-tip=msui],
-  .tipwrap:has(.tip[data-tip=msui]:focus) .tipbox[data-tip=msui]{display:block}
-  .tipbox b{color:var(--accent)}
-  .tipbox dl{margin:6px 0 0;display:grid;grid-template-columns:auto 1fr;gap:2px 10px}
-  .tipbox dt{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--accent);white-space:nowrap}
-  .tipbox dd{margin:0;color:var(--muted)}
+  .tipbox,#tipfloat{background:var(--card);color:var(--fg);font-size:.72rem;line-height:1.5;
+     border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));border-radius:9px;
+     padding:9px 11px;box-shadow:0 6px 22px rgba(0,0,0,.22)}
+  .tipbox{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:30;display:none}
+  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=mrmp]:hover) .tipbox[data-tip=mrmp],
+  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=mrmp]:focus) .tipbox[data-tip=mrmp],
+  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=msur]:hover) .tipbox[data-tip=msur],
+  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=msur]:focus) .tipbox[data-tip=msur],
+  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=msui]:hover) .tipbox[data-tip=msui],
+  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=msui]:focus) .tipbox[data-tip=msui]{display:block}
+  #tipfloat{position:fixed;z-index:60;display:none;max-width:min(600px,93vw);pointer-events:none}
+  #tipfloat.on{display:block}
+  .tipbox b,#tipfloat b{color:var(--accent)}
+  .tipbox .tdim,#tipfloat .tdim{color:var(--muted)}
+  .tsch{margin:5px 0 0;padding:7px 8px;background:var(--code-bg);color:var(--code-fg);border-radius:6px;
+     font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.68rem;line-height:1.5;
+     white-space:pre;overflow-x:auto}
+  .tsch .k{color:#2dd4bf}
+  .tsch .c{color:var(--cm)}
   .full{border:1px solid var(--line);border-radius:13px;background:var(--card);padding:16px 18px;margin-top:22px;box-shadow:var(--shadow)}
   .full>h2{font-size:1.1rem;margin:0 0 4px;letter-spacing:-.01em}
   .full>h2 .m{color:var(--muted);font-weight:400;font-size:.85rem}
@@ -166,18 +174,16 @@ methscope <span class="sub">mrmp-inspect</span> panel.mrmp --patterns
 methscope <span class="sub">mrmp-export</span> --top 1000 \
   panel.mrmp panel.cm</code></pre>
       <span class="tipbox" data-tip="mrmp">
-        <b>MRMPIDX1</b> — a rank-complete artifact. No top-K is baked in: every candidate is
-        ranked and every CpG keeps its exact rank, so consumers choose their own cut.
-        <dl>
-          <dt>header</dt><dd>128 B — reference path, sample names, binstring parameters
-            (<code class="inl">mincov</code>, beta, max-ambig, min-fold), PNA key + CpG count,
-            FNV content checksum</dd>
-          <dt>patterns</dt><dd><i>n_candidates</i> × {base-3 <code class="inl">uint64</code> key,
-            <code class="inl">uint64</code> count}, ordered count desc then key asc</dd>
-          <dt>membership</dt><dd><i>n_cpg</i> × <code class="inl">uint32</code> rank;
-            <code class="inl">0xFFFFFFFF</code> = PNA (the all-'2' sentinel)</dd>
-        </dl>
-        hg38 × 35 samples: 2,345,190 candidates over 29,401,795 CpGs ≈ 155 MB.
+        <b>MRMPIDX1</b> <span class="tdim">— every candidate ranked, no top-K baked in</span>
+<pre class="tsch"><span class="c">hg38 · 35 samples · 29,401,795 CpGs · 2,345,190 patterns · 155 MB</span>
+
+<span class="k">header</span>       128 B   reference, sample names, binstring params, checksum
+<span class="k">patterns</span>  16 B × 2,345,190   base-3 key + count, ranked
+             11111111111111111111111111111111111  10,736,116  <span class="c">P1</span>
+             11111111111011111111111111111111111   2,859,193  <span class="c">P2</span>
+             00000000000000000000000000000000000   2,214,235  <span class="c">P3</span>
+<span class="k">membership</span> 4 B × 29,401,795  rank per CpG
+             CpG 0 → 0  <span class="c">P1</span>    CpG 7 → 4294967295  <span class="c">PNA</span></pre>
       </span>
     </div>
     <p style="margin-top:11px">Ranking is deterministic (count desc, key asc), so a build is
@@ -236,7 +242,7 @@ methscope <span class="sub">upscale-set-units</span> --mrmp panel.mrmp \
 #    else cells are cut 70/15/15 by --seed</span>
 make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80
 methscope <span class="sub">upscale-train</span> -i train.msur \
-  --index units.msui --mrmp panel.mrmp \
+  --units units.msui --mrmp panel.mrmp \
   -o model.updecx --work-dir work/ \
   --split cells.tsv
 
@@ -245,39 +251,29 @@ methscope <span class="sub">upscale</span> -o imputed.cg \
   model.updecx test/human_hg38_test.cg
 <span class="out">[methscope] upscaled 1 sample(s) x 29,401,795 CpGs (genome .cg)</span></code></pre>
       <span class="tipbox" data-tip="msur">
-        <b>MSURAW2</b> (<code class="inl">.msur</code>) — the training sidecar. Deterministic
-        YAME-compatible downsampling: every cell × replicate, with the exact CpGs each
-        simulation retained. The truth <code class="inl">.cg</code> is never copied.
-        <dl>
-          <dt>header</dt><dd>72 B — <i>n_cells</i>, <i>n_reps</i>, <i>n_patterns</i>,
-            <i>n_cpg</i>, sampled-per-cell, section offsets</dd>
-          <dt>groups</dt><dd><i>n_cpg</i> × <code class="inl">uint16</code> — each CpG's MRMP
-            feature group, 0 = PNA/background</dd>
-          <dt>truth</dt><dd><i>n_cells</i> × <i>n_cpg</i> × <code class="inl">uint16</code> beta
-            (65535 = missing), only with <code class="inl">--embed-truth</code>, which training
-            requires</dd>
-          <dt>records</dt><dd><i>n_cells·n_reps</i> × {per-pattern beta + observed count,
-            sampled CpG positions}</dd>
-        </dl>
-        hg38 × 207 cells × 100 reps ≈ 15 GB, of which the truth block is 12.2 GB.
+        <b>MSURAW2</b> <span class="tdim">— training sidecar; the truth .cg is never copied</span>
+<pre class="tsch"><span class="c">hg38 · 207 cells × 100 reps · 29,401,795 CpGs · 15.0 GB</span>
+
+<span class="k">offset</span>            <span class="k">section</span>                              <span class="k">size</span>
+0                 header      72 B
+72                groups      u16 × 29.4M                58.8 MB
+                              <span class="c">CpG → 1..1000, 0 = PNA</span>
+58,803,662        truth       u16 × 207 × 29.4M          12.2 GB
+                              <span class="c">beta×65534, 65535 = missing (--embed-truth)</span>
+12,231,146,792    records     124,000 B × 20,700          2.6 GB
+                              <span class="c">1000 beta + 1000 count + 29,000 CpG ids</span></pre>
       </span>
       <span class="tipbox" data-tip="msui">
-        <b>MSUIDX1</b> (<code class="inl">.msui</code>) — the processing-unit index. Real MRMP
-        memberships are ordered by decreasing size (ternary key breaks ties) and are
-        <b>never split</b>; CpGs keep genomic order inside a membership, and PNA CpGs become
-        singleton memberships packed last.
-        <dl>
-          <dt>header</dt><dd>pattern length, target CpGs per unit, <i>n_units</i>,
-            <i>n_real_memberships</i>, <i>n_pna_units</i>, real/PNA CpG split, pattern checksum
-            tying it to the <code class="inl">.mrmp</code></dd>
-          <dt>units</dt><dd><i>n_units</i> × {output offset, first membership, membership count,
-            CpG count, flags: pure / PNA / oversized}</dd>
-          <dt>cpg</dt><dd><i>n_cpg</i> × <code class="inl">uint32</code> — permutation from
-            unit-local output slot back to genomic CpG index</dd>
-          <dt>membership</dt><dd><i>n_real_memberships</i> × {pattern key, output offset, count,
-            unit}</dd>
-        </dl>
-        hg38 at 16,384 CpGs/unit: 700 units over 2,345,190 memberships ≈ 174 MB.
+        <b>MSUIDX1</b> <span class="tdim">— memberships size-ranked, never split</span>
+<pre class="tsch"><span class="c">hg38 · 16,384 CpGs/unit · 700 units · 2,345,190 memberships · 174 MB</span>
+
+<span class="k">header</span>     26,841,955 real CpGs + 2,559,840 PNA; checksum ties it to .mrmp
+<span class="k">units</span>      24 B × 700    {offset, first_member, n_member, n_cpg, flags}
+             u0  10,736,116 CpGs  <span class="c">pure  (P1, all-1)</span>
+             u1   2,859,193 CpGs  <span class="c">pure  (P2)</span>
+             u2   2,214,235 CpGs  <span class="c">pure  (P3, all-0)</span>
+<span class="k">cpg</span>        4 B × 29,401,795   output slot → genomic CpG index
+<span class="k">membership</span> 24 B × 2,345,190   {key, offset, count, unit}</pre>
       </span>
     </div>
   </section>
@@ -457,6 +453,39 @@ model.refx   <span class="cm"># deconv reference (deconv)</span>
     });
     pre.appendChild(b);
   });
+  // Format notes that follow the cursor. #tipfloat lives on <body>: .card's
+  // :hover transform would otherwise become the containing block for a
+  // position:fixed child and break viewport coordinates.
+  var tips=document.querySelectorAll('.tip[data-tip]');
+  if(tips.length){
+    document.documentElement.classList.add('js-tips');   // disables the CSS fallback
+    var tf=document.createElement('div');tf.id='tipfloat';document.body.appendChild(tf);
+    var GAP=16;
+    function place(x,y){
+      var r=tf.getBoundingClientRect(),
+          left=x+GAP, top=y+GAP;
+      if(left+r.width>innerWidth-8) left=Math.max(8,x-GAP-r.width);
+      if(top+r.height>innerHeight-8) top=Math.max(8,y-GAP-r.height);
+      tf.style.left=left+'px';tf.style.top=top+'px';
+    }
+    function show(t,x,y){
+      var w=t.closest('.tipwrap');if(!w)return;
+      var b=w.querySelector('.tipbox[data-tip="'+t.dataset.tip+'"]');if(!b)return;
+      tf.innerHTML=b.innerHTML;tf.style.left='0px';tf.style.top='0px';
+      tf.classList.add('on');place(x,y);
+    }
+    function hide(){tf.classList.remove('on');}
+    tips.forEach(function(t){
+      t.addEventListener('mouseenter',function(e){show(t,e.clientX,e.clientY);});
+      t.addEventListener('mousemove',function(e){if(tf.classList.contains('on'))place(e.clientX,e.clientY);});
+      t.addEventListener('mouseleave',hide);
+      t.addEventListener('focus',function(){var r=t.getBoundingClientRect();show(t,r.left,r.bottom);});
+      t.addEventListener('blur',hide);
+    });
+    addEventListener('scroll',hide,true);
+    addEventListener('keydown',function(e){if(e.key==='Escape')hide();});
+  }
+
   // header conda-install badge: click the command to copy it (⧉ -> ✓)
   var ib=document.getElementById('install-btn');
   if(ib)ib.addEventListener('click',function(){
