@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "upfactor_cuda.h"
+#include "upsplit.h"
 #include "methscope.h"
 
 static int usage(void) {
@@ -25,6 +26,7 @@ static int usage(void) {
     "  --weight-decay X  (default 0.00001)\n"
     "  --homogeneous-groups LIST\n"
     "  --homogeneous-fraction X (default 0.1)\n"
+    "  --split FILE      curated cell split (default seeded 70/15/15)\n"
     "  --seed N          default 1\n"
     "  --device N        default 0\n");
   return 1;
@@ -77,6 +79,7 @@ int main_upscale_trunk_train(int argc, char **argv) {
     else if (!strcmp(a, "--weight-decay") && i + 1 < argc) c.weight_decay = real(argv[++i], a);
     else if (!strcmp(a, "--homogeneous-groups") && i + 1 < argc) c.homogeneous_groups = argv[++i];
     else if (!strcmp(a, "--homogeneous-fraction") && i + 1 < argc) c.homogeneous_fraction = real(argv[++i], a);
+    else if (!strcmp(a, "--split") && i + 1 < argc) c.split_path = argv[++i];
     else if (!strcmp(a, "--seed") && i + 1 < argc) c.seed = u64(argv[++i], a);
     else if (!strcmp(a, "--device") && i + 1 < argc) c.device = (int)u64(argv[++i], a);
     else { usage(); fprintf(stderr, "[methscope] _upscale trunk-train: bad option: %s\n", a); return 1; }
@@ -85,6 +88,7 @@ int main_upscale_trunk_train(int argc, char **argv) {
       !c.steps || !c.batch || !c.eval_batches || !c.log_every ||
       c.homogeneous_fraction < 0 || c.homogeneous_fraction > 1)
     return usage();
+  if (c.split_path) ms_upsplit_check("_upscale trunk-train", c.data_path, c.split_path);
   if (!ms_upfactor_cuda_available()) {
     fprintf(stderr, "[methscope] _upscale trunk-train: CUDA backend unavailable\n");
     return 1;

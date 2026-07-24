@@ -218,11 +218,15 @@ methscope <span class="sub">build-reference</span> --matrix query.cg panel.mrmp<
   <section class="card">
     <h2>upscale-train <span class="m">— whole-genome decoder</span></h2>
     <p>Train the unified whole-genome upscale model (<code class="inl">UPDEC2</code>) on CUDA —
-      one processing unit per MRMP membership. Inference stays pure-C.</p>
+      one processing unit per MRMP membership. Inference stays pure-C.
+      Source cells are cut 70/15/15 by <code class="inl">--seed</code> unless
+      <code class="inl">--split</code> pins the exact assignment.</p>
     <pre><code>make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80
 methscope <span class="sub">upscale-train</span> -i train.msur \
   --index units.msui --mrmp panel.cm \
-  -o model.updecx --work-dir work/</code></pre>
+  -o model.updecx --work-dir work/ \
+  --split loyfer_split.tsv
+<span class="cm"># split rows: &lt;cell_index&gt;TAB&lt;train|val|test&gt;, one per source cell</span></code></pre>
   </section>
 
   <section class="card">

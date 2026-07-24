@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include <vector>
 #include "upfactor_cuda.h"
+#include "upsplit.h"
 
 static const int THREADS=256;
 
@@ -180,9 +181,19 @@ extern "C" int ms_upfactor_train_cuda(const ms_upfactor_config_t*cfg){
     if(easy_pool.empty()||variable_pool.empty())die("--homogeneous-groups produced an empty target stratum");
   }
 
-  std::vector<uint32_t>order(h->n_cells);for(uint32_t q=0;q<h->n_cells;++q)order[q]=q;Pcg split_rng;pcg_seed(&split_rng,cfg->seed);for(uint32_t q=h->n_cells;q>1;--q)std::swap(order[q-1],order[pcg32(&split_rng)%q]);
-  uint32_t nt=(uint32_t)(h->n_cells*.70),nv=(uint32_t)(h->n_cells*.15);if(!nt)nt=1;if(!nv)nv=1;if(nt+nv>=h->n_cells)die("not enough cells for train/validation/test");
-  std::vector<uint32_t>train(order.begin(),order.begin()+nt),val(order.begin()+nt,order.begin()+nt+nv),test(order.begin()+nt+nv,order.end());std::vector<uint8_t>split(h->n_cells,2);for(uint32_t c:train)split[c]=0;for(uint32_t c:val)split[c]=1;
+  /* Same split contract as upscale-train: a curated --split file, else a seeded
+   * 70/15/15 shuffle. Pass the same file to both, so a frozen trunk never sees
+   * the unit trainer's held-out cells. `split` is stored in the UPFAC3. */
+  std::vector<uint32_t>train,val,test;std::vector<uint8_t>split(h->n_cells,MS_UPSPLIT_TEST);
+  if(cfg->split_path){
+    ms_upsplit_load("_upscale trunk-train",cfg->split_path,h->n_cells,split.data());
+    for(uint32_t q=0;q<h->n_cells;++q)(split[q]==MS_UPSPLIT_TRAIN?train:split[q]==MS_UPSPLIT_VAL?val:test).push_back(q);
+  }else{
+    std::vector<uint32_t>order(h->n_cells);for(uint32_t q=0;q<h->n_cells;++q)order[q]=q;Pcg split_rng;pcg_seed(&split_rng,cfg->seed);for(uint32_t q=h->n_cells;q>1;--q)std::swap(order[q-1],order[pcg32(&split_rng)%q]);
+    uint32_t nt=(uint32_t)(h->n_cells*.70),nv=(uint32_t)(h->n_cells*.15);if(!nt)nt=1;if(!nv)nv=1;if(nt+nv>=h->n_cells)die("not enough cells for train/validation/test");
+    train.assign(order.begin(),order.begin()+nt);val.assign(order.begin()+nt,order.begin()+nt+nv);test.assign(order.begin()+nt+nv,order.end());
+    for(uint32_t c:train)split[c]=MS_UPSPLIT_TRAIN;for(uint32_t c:val)split[c]=MS_UPSPLIT_VAL;
+  }
 
   if(cfg->feature_mode>MS_UPFEATURE_BETA)die("invalid feature mode");
   int I=(int)(cfg->feature_mode==MS_UPFEATURE_BETA?G:2*G),H=(int)cfg->hidden,R=(int)cfg->rank;size_t rows=(size_t)h->n_cells*h->n_reps;

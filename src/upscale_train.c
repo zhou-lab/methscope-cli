@@ -11,6 +11,7 @@
 #include "bundle.h"
 #include "methscope.h"
 #include "updec2.h"
+#include "upsplit.h"
 #include "upunit_cuda.h"
 
 static void terr(const char *msg, const char *arg) {
@@ -69,6 +70,8 @@ static int usage(void) {
     "  --learning-rate X        AdamW rate (default 0.001)\n"
     "  --weight-decay X         AdamW decay (default 0.00001)\n"
     "  --seed N                 deterministic seed (default 1)\n"
+    "  --split FILE             curated cell split, rows <cell_index>TAB<train|\n"
+    "                           val|test> (default: seeded 70/15/15 shuffle)\n"
     "  --device N               CUDA device (default 0)\n"
     "  --pilot-units FILE       train listed unit IDs only; do not assemble\n"
     "  --force                  replace final output and manifest\n"
@@ -140,6 +143,7 @@ int main_upscale_train(int argc, char **argv) {
     else if (!strcmp(a, "--weight-decay") && i + 1 < argc) c.weight_decay = real(argv[++i], a);
     else if (!strcmp(a, "--seed") && i + 1 < argc) c.seed = u64(argv[++i], a);
     else if (!strcmp(a, "--device") && i + 1 < argc) c.device = (int)u32(argv[++i], a);
+    else if (!strcmp(a, "--split") && i + 1 < argc) c.split_path = argv[++i];
     else if (!strcmp(a, "--pilot-units") && i + 1 < argc) c.pilot_units_path = argv[++i];
     else if (!strcmp(a, "--force")) force = 1;
     else if (!strcmp(a, "--dry-run")) dry = 1;
@@ -161,7 +165,8 @@ int main_upscale_train(int argc, char **argv) {
     "[methscope] upscale-train: data=%s index=%s MRMP=%s\n"
     "[methscope] upscale-train: output=%s work=%s\n"
     "[methscope] upscale-train: P=%u features=%s input=%u trunk=%s pure=%u mixed=%s/%u activation=%s\n"
-    "[methscope] upscale-train: steps=%u..%u eval=%u patience=%u batch=%u seed=%" PRIu64 "\n",
+    "[methscope] upscale-train: steps=%u..%u eval=%u patience=%u batch=%u seed=%" PRIu64 "\n"
+    "[methscope] upscale-train: split=%s\n",
     data, index, mrmp, out, work, c.patterns,
     c.feature_mode == MS_UPFEATURE_COUNT ? "beta+count" :
       c.feature_mode == MS_UPFEATURE_MISSING ? "beta+missing" : "beta-only",
@@ -169,7 +174,9 @@ int main_upscale_train(int argc, char **argv) {
     c.trunk_path ? c.trunk_path : "none",
     c.pure_bottleneck, c.mixed_direct ? "direct" : "factor",
     c.mixed_bottleneck, c.activation ? "leaky" : "linear",
-    c.min_steps, c.max_steps, c.eval_every, c.patience, c.batch, c.seed);
+    c.min_steps, c.max_steps, c.eval_every, c.patience, c.batch, c.seed,
+    c.split_path ? c.split_path : "seeded 70/15/15");
+  if (c.split_path) ms_upsplit_check("upscale-train", data, c.split_path);
   if (dry) {
     fprintf(stderr, "[methscope] upscale-train: dry run complete\n");
     return 0;
@@ -194,7 +201,7 @@ int main_upscale_train(int argc, char **argv) {
     "patterns\t%u\ninput_dim\t%u\nfeatures\t%s\ntrunk\t%s\npure_bottleneck\t%u\nmixed_mode\t%s\n"
     "mixed_bottleneck\t%u\nactivation\t%s\nmin_steps\t%u\nmax_steps\t%u\n"
     "eval_every\t%u\npatience\t%u\nbatch\t%u\neval_rows\t%u\nseed\t%" PRIu64
-    "\nlearning_rate\t%.9g\nweight_decay\t%.9g\n",
+    "\nlearning_rate\t%.9g\nweight_decay\t%.9g\nsplit\t%s\n",
     out, data, index, mrmp, work, c.patterns,
     (c.feature_mode == MS_UPFEATURE_BETA ? 1 : 2) * c.patterns,
     c.feature_mode == MS_UPFEATURE_COUNT ? "beta_log1p_count" :
@@ -203,7 +210,8 @@ int main_upscale_train(int argc, char **argv) {
     c.pure_bottleneck, c.mixed_direct ? "direct" : "factor",
     c.mixed_bottleneck, c.activation ? "leaky" : "linear",
     c.min_steps, c.max_steps, c.eval_every, c.patience, c.batch,
-    c.eval_rows, c.seed, c.learning_rate, c.weight_decay);
+    c.eval_rows, c.seed, c.learning_rate, c.weight_decay,
+    c.split_path ? c.split_path : "");
   if (fclose(mf)) terr("cannot close training manifest", manifest);
   fprintf(stderr, "[methscope] upscale-train: complete -> %s\n", out);
   return 0;

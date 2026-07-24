@@ -16,6 +16,7 @@ typedef struct {
   const char *work_dir;
   const char *pilot_units_path; /* optional unit IDs; train/checkpoint only */
   const char *trunk_path; /* optional frozen UPFAC3 shared trunk */
+  const char *split_path; /* optional curated cell split; see upsplit.h */
   uint32_t patterns;
   uint32_t feature_mode; /* MS_UPFEATURE_* */
   uint32_t pure_bottleneck;

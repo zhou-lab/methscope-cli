@@ -21,6 +21,7 @@
 #include <thread>
 #include <time.h>
 #include "updec2.h"
+#include "upsplit.h"
 #include "upunit_cuda.h"
 
 static const int THREADS=256;
@@ -153,7 +154,18 @@ extern "C" int ms_upunit_train_cuda(const ms_upunit_config_t*c){
   runsum=fnv(runsum,&c->eval_every,sizeof(c->eval_every));runsum=fnv(runsum,&c->patience,sizeof(c->patience));
   runsum=fnv(runsum,&c->batch,sizeof(c->batch));runsum=fnv(runsum,&c->eval_rows,sizeof(c->eval_rows));
   runsum=fnv(runsum,&c->seed,sizeof(c->seed));runsum=fnv(runsum,&c->learning_rate,sizeof(c->learning_rate));runsum=fnv(runsum,&c->weight_decay,sizeof(c->weight_decay));
-  std::vector<uint32_t>cells(h->n_cells);for(uint32_t i=0;i<h->n_cells;++i)cells[i]=i;Pcg sr;seed(&sr,c->seed);for(uint32_t q=h->n_cells;q>1;--q)std::swap(cells[q-1],cells[rnd(&sr)%q]);size_t nt=h->n_cells*70/100,nv=h->n_cells*15/100;if(!nt||!nv||nt+nv>=h->n_cells)die("too few source cells for split");std::vector<uint32_t>train(cells.begin(),cells.begin()+nt),val(cells.begin()+nt,cells.begin()+nt+nv),test(cells.begin()+nt+nv,cells.end());
+  /* Cell split: a curated --split file, else cells shuffled by seed and cut
+   * 70/15/15. All simulations of a cell stay together either way. Only the
+   * explicit labels enter the run checksum, so seeded-split work directories
+   * built before --split existed still resume. */
+  std::vector<uint32_t>train,val,test;
+  if(c->split_path){
+    std::vector<uint8_t>label(h->n_cells);ms_upsplit_load("upscale-train",c->split_path,h->n_cells,label.data());
+    for(uint32_t i=0;i<h->n_cells;++i)(label[i]==MS_UPSPLIT_TRAIN?train:label[i]==MS_UPSPLIT_VAL?val:test).push_back(i);
+    runsum=fnv(runsum,label.data(),label.size());
+  }else{
+    std::vector<uint32_t>cells(h->n_cells);for(uint32_t i=0;i<h->n_cells;++i)cells[i]=i;Pcg sr;seed(&sr,c->seed);for(uint32_t q=h->n_cells;q>1;--q)std::swap(cells[q-1],cells[rnd(&sr)%q]);size_t nt=h->n_cells*70/100,nv=h->n_cells*15/100;if(!nt||!nv||nt+nv>=h->n_cells)die("too few source cells for split");train.assign(cells.begin(),cells.begin()+nt);val.assign(cells.begin()+nt,cells.begin()+nt+nv);test.assign(cells.begin()+nt+nv,cells.end());
+  }
   std::vector<uint8_t>is_train(h->n_cells);for(uint32_t x:train)is_train[x]=1;
   std::vector<float>mean(F),scale(F);
   if(th){

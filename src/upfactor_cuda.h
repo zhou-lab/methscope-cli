@@ -26,6 +26,7 @@ typedef struct {
   int device;
   double learning_rate;
   double weight_decay;
+  const char *split_path; /* optional curated cell split; see upsplit.h */
   const char *homogeneous_groups;
   double homogeneous_fraction;
   uint32_t feature_mode;

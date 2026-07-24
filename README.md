@@ -75,6 +75,17 @@ $MS upscale-train \
 # -> one self-contained .updecx plus a training manifest
 ```
 
+By default the source cells are shuffled by `--seed` and cut 70/15/15. Pass
+`--split FILE` to pin the assignment instead — rows of
+`<cell_index>TAB<train|val|test>`, one per cell, indexed by the sample order of
+the truth `.cg` the sidecar was prepared from (a trailing sample-name column is
+ignored, and one non-numeric header row is allowed). Use it when a random cut
+would strand a whole cell type outside training, or to train against the exact
+held-out cells an external baseline used. The split is validated before CUDA is
+claimed, is recorded in the training manifest, and is folded into the checkpoint
+run checksum, so one work directory cannot resume across two different splits.
+Pass the same file to `_upscale trunk-train` when a frozen trunk is involved.
+
 Build training support with
 `make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80`. Each unit is checkpointed
 under `--work-dir`, so interrupted runs resume completed units. The distributed
