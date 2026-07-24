@@ -79,7 +79,7 @@
   <p class="links">
     <a href="https://github.com/zhou-lab/methscope-cli">GitHub</a><span>·</span>
     <a href="https://anaconda.org/zhou-lab/methscope">conda</a><span>·</span>
-    <a href="https://github.com/zhou-lab/methscope_data">models</a><span>·</span>
+    <a href="https://huggingface.co/zhou-lab/methscope">models</a><span>·</span>
     <a href="https://github.com/zhou-lab/YAME">YAME</a><span>·</span>
     <a href="https://zhou-lab.github.io/MethScope/">R / MethScope</a><span>·</span>
     hg38 · mm10 · WGBS · single-cell · spatial
@@ -99,13 +99,17 @@ git clone --recurse-submodules \
   https://github.com/zhou-lab/methscope-cli
 cd methscope-cli &amp;&amp; make
 
-<span class="cm"># pretrained models + test fixtures</span>
+<span class="cm"># pretrained models — from HuggingFace</span>
+hf download zhou-lab/methscope --local-dir models
+
+<span class="cm"># test fixtures + catalog — from GitHub</span>
 git clone \
   https://github.com/zhou-lab/methscope_data</code></pre>
     <p style="margin-top:11px">Every model is one self-contained bundle that already carries its
       MRMP feature definition (and labels), so a query <code class="inl">.cg</code> runs directly —
-      no separate annotation files. Examples below run from the
-      <code class="inl">methscope_data/</code> checkout.</p>
+      no separate annotation files. Examples below use <code class="inl">models/</code>
+      (from <a href="https://huggingface.co/zhou-lab/methscope">HuggingFace</a>) and
+      <code class="inl">test/</code> (from the <code class="inl">methscope_data</code> checkout).</p>
   </section>
 
   <section class="card">
