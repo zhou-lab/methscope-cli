@@ -699,9 +699,12 @@ Options:
 <pre class="tsch">Usage: methscope fetch [options] [NAME ... | models | data | all]
 
 Download pretrained models (HuggingFace zhou-lab/methscope) and the query
-.cg example fixtures (GitHub methscope_data) into the local store. With no
-NAME it lists the catalog and what is already there. Never prompts, so it
-is safe inside a build or workflow step.
+.cg example fixtures (GitHub methscope_data) into the local store.
+
+With no NAME: a full-screen picker on a terminal (arrows/jk move, space
+toggles, a/n all/none, / filters, f fetches, q or Esc cancels), and a plain
+listing everywhere else. A named target never prompts, so a build or a
+workflow step can never wait for input.
 
 Human-facing lines go to stderr; stdout is one absolute path per file, so
 $(methscope fetch NAME) resolves to a usable path and re-runs for free.
