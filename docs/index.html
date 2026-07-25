@@ -147,8 +147,7 @@
     <button class="tab" role="tab" id="t-mrmp"     aria-controls="p-mrmp"     data-panel="mrmp">2 · Build MRMP</button>
     <button class="tab" role="tab" id="t-classify" aria-controls="p-classify" data-panel="classify">3 · Classify</button>
     <button class="tab" role="tab" id="t-deconv"   aria-controls="p-deconv"   data-panel="deconv">4 · Deconvolve</button>
-    <button class="tab" role="tab" id="t-upscale"  aria-controls="p-upscale"  data-panel="upscale">5 · Upscale / imputation</button>
-    <button class="tab" role="tab" id="t-bundle"   aria-controls="p-bundle"   data-panel="bundle">6 · Bundle &amp; inspect</button>
+    <button class="tab" role="tab" id="t-upscale"  aria-controls="p-upscale"  data-panel="upscale">5 · Upscale / impute</button>
   </nav>
 
   <div class="panes">
@@ -258,9 +257,22 @@ Blood-Monocytes  Mono              0.8360   # monocyte</span>
 <span class="cm"># or fit your own: features + labels -> one runnable bundle</span>
 methscope <span class="sub">classify-train</span> -l labels.txt \
   -o hg38_celltype.ubjx query.cg panel.mrmp
-<span class="cm"># --framework xgboost | logistic | threshold</span></code></pre>
+<span class="cm"># --framework xgboost | logistic | threshold</span>
+
+<span class="cm"># the same wrapping by hand: inner model + its MRMP (+ labels) -> one file</span>
+methscope <span class="sub">bundle</span> -m panel.cm -l labels.txt model.ubj -o model.ubjx
+methscope <span class="sub">unbundle</span> model.ubjx        <span class="cm"># -> back to its parts</span>
+
+<span class="cm"># look inside one without running it</span>
+methscope <span class="sub">inspect</span> $M/hg38_sex.ubjx
+<span class="out">container  MSBNDL1 — 3 sections, 30,931 bytes
+  0  mrmp    fmt2 MRMP definition, 3 states
+  1  kind    "logistic" framework mark
+  2  model   methscope-linear text spec
+     labels  Female, Male</span></code></pre>
     <p style="margin-top:11px">Linear models store per-feature training means, so missing/sparse
-      betas are imputed at classify time — accurate even at &lt;1% genome coverage.</p>
+      betas are imputed at classify time — accurate even at &lt;1% genome coverage. A bundle is
+      self-describing, so it ships and runs stand-alone — no separate annotation files.</p>
   </section>
 
   <section class="panel" id="p-deconv" role="tabpanel" aria-labelledby="t-deconv">
@@ -288,7 +300,7 @@ methscope <span class="sub">deconv-build-ref</span> --matrix query.cg panel.mrmp
   </section>
 
   <section class="panel" id="p-upscale" role="tabpanel" aria-labelledby="t-upscale">
-    <h2>Upscale / imputation <span class="m">— the whole-genome decoder</span></h2>
+    <h2>Upscale / impute <span class="m">— the whole-genome decoder</span></h2>
     <p>Impute dense CpG methylation from a sparse methylome with a bundled decoder — pure-C
       inference, no CUDA or BLAS at run time. Training the decoder is three steps, all reading the
       same <code class="inl">.mrmp</code>.</p>
@@ -317,7 +329,19 @@ methscope <span class="sub">upscale-train</span> -i train.msur \
   --units units.msui --mrmp panel.mrmp \
   -o <span class="tip" data-tip="updecx" tabindex="0">model.updecx</span> --work-dir work/ \
   --split cells.tsv
-<span class="cm"># split rows: &lt;cell_index&gt;TAB&lt;train|val|test&gt;, one per source cell</span></code></pre>
+<span class="cm"># split rows: &lt;cell_index&gt;TAB&lt;train|val|test&gt;, one per source cell</span>
+
+<span class="cm"># inspect reads every build artifact, detected from its magic</span>
+methscope <span class="sub">inspect</span> units.msui
+<span class="out">format            MSUIDX1 v1
+cpgs              29401795  (26841955 real + 2559840 PNA)
+units             700  (157 PNA)
+real_memberships  2345190</span>
+methscope <span class="sub">inspect</span> train.msur
+<span class="out">format            MSURAW2 v2
+cells             207
+replicates        100
+embedded_truth    yes (trainable)</span></code></pre>
       <span class="tipbox" data-tip="msur">
         <b>MSURAW2</b> <span class="tdim">— training sidecar; the truth .cg is never copied</span>
 <pre class="tsch"><span class="c">hg38 · 207 cells × 100 reps · 29,401,795 CpGs · 15.0 GB</span>
@@ -357,35 +381,6 @@ methscope <span class="sub">upscale-train</span> -i train.msur \
     </div>
   </section>
 
-  <section class="panel" id="p-bundle" role="tabpanel" aria-labelledby="t-bundle">
-    <h2>Bundle &amp; inspect <span class="m">— package and look inside</span></h2>
-    <p>A bundle wraps an inner model + its MRMP (+ labels) into one self-describing file
-      (<code class="inl">.ubjx</code> / <code class="inl">.updecx</code> /
-      <code class="inl">.refx</code>) so it ships and runs stand-alone.
-      <code class="inl">inspect</code> describes any artifact, detected from its magic.</p>
-    <pre><code>methscope <span class="sub">bundle</span> -m panel.cm -l labels.txt model.ubj -o model.ubjx
-methscope <span class="sub">unbundle</span> model.ubjx        <span class="cm"># -> its parts</span>
-
-methscope <span class="sub">inspect</span> $M/hg38_sex.ubjx
-<span class="out">container  MSBNDL1 — 3 sections, 30,931 bytes
-  0  mrmp    fmt2 MRMP definition, 3 states
-  1  kind    "logistic" framework mark
-  2  model   methscope-linear text spec
-     labels  Female, Male</span>
-
-<span class="cm"># the same command reads the build artifacts too</span>
-methscope <span class="sub">inspect</span> units.msui
-<span class="out">format            MSUIDX1 v1
-cpgs              29401795  (26841955 real + 2559840 PNA)
-units             700  (157 PNA)
-real_memberships  2345190</span>
-
-methscope <span class="sub">inspect</span> train.msur
-<span class="out">format            MSURAW2 v2
-cells             207
-replicates        100
-embedded_truth    yes (trainable)</span></code></pre>
-  </section>
 
   </div>
 </div>
