@@ -35,6 +35,7 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -97,20 +98,29 @@ static int term_rows(void) {
 /* Key codes above the ASCII range so arrows and letters share one switch. */
 enum { K_UP = 256, K_DOWN, K_PGUP, K_PGDN, K_HOME, K_END, K_OTHER };
 
+/* Escape both starts a sequence and is a key in its own right. Poll briefly
+ * rather than blocking on a second byte, so pressing Esc exits instead of
+ * hanging until the next keystroke arrives. */
 static int read_key(void) {
-  int c = getchar();
-  if (c == EOF) return 'q';
+  unsigned char c;
+  if (read(0, &c, 1) != 1) return 'q';
   if (c != 27) return c;
-  int a = getchar();
-  if (a != '[' && a != 'O') return 27;      /* bare Esc */
-  int b = getchar();
+
+  struct timeval tv = {0, 40000};           /* 40 ms, well above key repeat */
+  fd_set fds; FD_ZERO(&fds); FD_SET(0, &fds);
+  if (select(1, &fds, NULL, NULL, &tv) <= 0) return 27;   /* bare Esc */
+
+  unsigned char a, b;
+  if (read(0, &a, 1) != 1) return 27;
+  if (a != '[' && a != 'O') return 27;
+  if (read(0, &b, 1) != 1) return 27;
   switch (b) {
     case 'A': return K_UP;
     case 'B': return K_DOWN;
     case 'H': return K_HOME;
     case 'F': return K_END;
-    case '5': getchar(); return K_PGUP;     /* ESC [ 5 ~ */
-    case '6': getchar(); return K_PGDN;
+    case '5': { unsigned char t; read(0, &t, 1); return K_PGUP; }
+    case '6': { unsigned char t; read(0, &t, 1); return K_PGDN; }
     default:  return K_OTHER;
   }
 }
@@ -118,12 +128,37 @@ static int read_key(void) {
 /* Repaint the whole frame: title, a viewport over the matching rows, and a
  * footer. Home-then-clear each line rather than clearing the screen, so the
  * repaint does not flicker. */
+/* Wrap `text` at `width`, indented, into at most `max` lines. */
+static int wrap_pane(const char *text, int width, int max) {
+  int used = 0, col = 0;
+  const char *w = text;
+  while (*w && used < max) {
+    while (*w == ' ') ++w;
+    const char *e = w;
+    while (*e && *e != ' ') ++e;
+    int len = (int)(e - w);
+    if (!len) break;
+    if (!col) { fputs("\033[2K   ", stderr); col = 3; }
+    else if (col + 1 + len > width) {
+      fputc('\n', stderr); ++used;
+      if (used >= max) break;
+      fputs("\033[2K   ", stderr); col = 3;
+    } else { fputc(' ', stderr); ++col; }
+    fwrite(w, 1, (size_t)len, stderr);
+    col += len; w = e;
+  }
+  if (col) { fputc('\n', stderr); ++used; }
+  return used;
+}
+
 static void draw(const char *title, const char *const *items,
-                 const char *const *notes, const size_t *view, size_t nview,
+                 const char *const *notes, const char *const *details,
+                 const size_t *view, size_t nview,
                  const int *on, size_t cur, size_t top, size_t nsel,
                  const char *filter, int filtering) {
   int rows = term_rows();
-  int avail = rows - 4;                       /* title, blank, footer, status */
+  int PANE = 4;                               /* the detail pane's budget */
+  int avail = rows - 4 - PANE;
   if (avail < 3) avail = 3;
   fputs("\033[H", stderr);
   fprintf(stderr, "\033[2K%s%s%s   %s%zu of %zu selected%s\n",
@@ -149,8 +184,17 @@ static void draw(const char *title, const char *const *items,
             notes && notes[k] ? ms_ui_dim() : "",
             notes && notes[k] ? notes[k] : "", ms_ui_reset());
   }
-  fprintf(stderr, "\033[2K\n\033[2K%s  arrows/jk move · space toggle · a/n all/none · "
-          "/ filter · f fetch · enter accept · q cancel%s\033[J",
+  /* Detail pane: what the row under the cursor actually is. */
+  fputs("\033[2K\n", stderr);
+  int used = 0;
+  if (nview && details && details[view[cur]]) {
+    struct winsize ws;
+    int width = (ioctl(2, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 20) ? ws.ws_col - 2 : 78;
+    used = wrap_pane(details[view[cur]], width, PANE - 1);
+  }
+  for (int r = used; r < PANE - 1; ++r) fputs("\033[2K\n", stderr);
+  fprintf(stderr, "\033[2K%s  arrows/jk move · space toggle · a/n all/none · "
+          "/ filter · f fetch · enter accept · q or Esc cancel%s\033[J",
           ms_ui_dim(), ms_ui_reset());
   fflush(stderr);
 }
@@ -168,10 +212,15 @@ static int matches(const char *hay, const char *needle) {
   return 0;
 }
 
+/* *ran is set when the widget actually drew, so the caller can tell a user's
+ * cancel from "this terminal cannot run a widget" -- the first must be
+ * obeyed, the second must fall back. */
 static int *widget(const char *title, const char *const *items,
-                   const char *const *notes, size_t n, int preselect,
-                   int *fetch_now) {
+                   const char *const *notes, const char *const *details,
+                   size_t n, int preselect, int *fetch_now, int *ran) {
+  *ran = 0;
   if (!raw_on()) return NULL;
+  *ran = 1;
   int *on = calloc(n, sizeof(int));
   size_t *view = calloc(n, sizeof(size_t));
   char filter[64] = {0};
@@ -193,7 +242,7 @@ static int *widget(const char *title, const char *const *items,
     size_t nsel = 0;
     for (size_t i = 0; i < n; ++i) nsel += (size_t)(on[i] != 0);
 
-    draw(title, items, notes, view, nview, on, cur, top, nsel, filter, filtering);
+    draw(title, items, notes, details, view, nview, on, cur, top, nsel, filter, filtering);
     int k = read_key();
 
     if (filtering) {                       /* typing into the filter box */
@@ -255,12 +304,14 @@ static int parse_selection(const char *s, int *on, size_t n) {
 }
 
 int *ms_ui_multiselect(const char *title, const char *const *items,
-                       const char *const *notes, size_t n, int preselect,
-                       int *fetch_now) {
+                       const char *const *notes, const char *const *details,
+                       size_t n, int preselect, int *fetch_now) {
   if (fetch_now) *fetch_now = 0;
   if (!n || !ms_ui_interactive()) return NULL;
-  int *on = widget(title, items, notes, n, preselect, fetch_now);
+  int ran = 0;
+  int *on = widget(title, items, notes, details, n, preselect, fetch_now, &ran);
   if (on) return on;
+  if (ran) return NULL;          /* the user cancelled: do not ask again */
 
   /* No usable raw mode: number the list and read one line. */
   on = calloc(n, sizeof(int));

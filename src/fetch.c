@@ -371,8 +371,8 @@ static void fetch_one(const ms_model_t *m, const char *dir, int force, int quiet
 /* Turn the printed catalog into a pick list, then hand the choices to the same
  * download path a named target uses. */
 static int browse_and_fetch(const char *dir, int force, int dry) {
-  char labels[N_CATALOG][96], notes[N_CATALOG][64];
-  const char *items[N_CATALOG], *note_p[N_CATALOG];
+  char labels[N_CATALOG][96], notes[N_CATALOG][64], details[N_CATALOG][320];
+  const char *items[N_CATALOG], *note_p[N_CATALOG], *detail_p[N_CATALOG];
   int missing[N_CATALOG], n = 0;
   for (int i = 0; i < N_CATALOG; ++i) {
     const ms_model_t *m = &CATALOG[i];
@@ -382,12 +382,19 @@ static int browse_and_fetch(const char *dir, int force, int dry) {
     char sz[32]; human(m->bytes, sz, sizeof(sz));
     snprintf(labels[n], sizeof(labels[n]), "%-34s %9s", m->name, sz);
     snprintf(notes[n], sizeof(notes[n]), "  %s%s", m->task, have ? " (present)" : "");
-    items[n] = labels[n]; note_p[n] = notes[n]; missing[n] = !have;
+    /* the pane text: what it is, what runs it, and the full description */
+    snprintf(details[n], sizeof(details[n]), "%s \xc2\xb7 %s \xc2\xb7 %s%s %s",
+             m->task, m->framework, m->labels,
+             m->sibling ? " (its .cg.idx comes too)" : "",
+             have ? "[already in the store]" : "");
+    items[n] = labels[n]; note_p[n] = notes[n]; detail_p[n] = details[n];
+    missing[n] = !have;
     ++n;
   }
   fputc('\n', stderr);
   int fetch_now = 0;
-  int *pick = ms_ui_multiselect("methscope fetch", items, note_p, (size_t)n, 0, &fetch_now);
+  int *pick = ms_ui_multiselect("methscope fetch", items, note_p, detail_p,
+                                (size_t)n, 0, &fetch_now);
   if (!pick) { fprintf(stderr, "[methscope] fetch: nothing selected\n"); return 0; }
 
   const ms_model_t *plan[N_CATALOG];

@@ -21,8 +21,8 @@ const char *ms_ui_reset(void);
  * `fetch_now` (optional) is set when the user pressed f rather than enter, so
  * the caller can skip its confirmation -- f already is the commit. */
 int *ms_ui_multiselect(const char *title, const char *const *items,
-                       const char *const *notes, size_t n, int preselect,
-                       int *fetch_now);
+                       const char *const *notes, const char *const *details,
+                       size_t n, int preselect, int *fetch_now);
 
 /* Off a terminal this returns `default_yes` rather than asking. */
 int ms_ui_confirm(const char *question, int default_yes);
