@@ -158,15 +158,24 @@ sits inside block 10k1, and carries one observed input CpG), and let `yame hprin
 `2`=NA — colour on by default in a recent YAME; pass `-c` to disable):
 
 ```sh
+# the whole block, window-averaged into 60 columns of deciles
+cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg > three.cg
+yame index -s <(printf 'truth\ninput\nreconstructed\n') three.cg
+yame hprint -g -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg
+# truth          104523059802945587792005953275337999952335758999995168975689
+# input          ...0.....5.0...........09...............9..0....9...9....9..
+# reconstructed  106634049802945687893006953285447999952536758999995168975789
+
+# then single CpGs over the same block (-c because cut counts bytes)
 cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg \
-  | yame rowsub -I 232_50 - | yame hprint -
-# truth  11111111111111111111111111010111111111111110111100    dense 0/1
-# input  22222222222222222222222222222222222221222222222222    2 = NA; one CpG observed
-# recon  11111111111111111111111111010111111111111110111100    matches truth
+  | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1-60
+# truth  010000000111111111111011010000000000000000000000000000000000
+# input  222222222222222222222222222222222222222222222222222222222222
+# recon  110011000111111111111011010000000000000000000000000000000000
 ```
 
-From a single observed CpG in this window, the reconstruction matches the truth
-at all 50 positions. `--probs` emits per-CpG probabilities as TSV instead of a
+None of those first 60 CpGs was observed, and the reconstruction still gets 57
+of 60 right. `--probs` emits per-CpG probabilities as TSV instead of a
 `.cg`. (Rebuild the bundle: `export_upscale_model.py … -o 10k1.updec`, then
 `bundle -m mrmp100.cm -O outcpg.cm -o 10k1.updecx 10k1.updec`, where
 `outcpg.cm` is a genome-wide YAME mask marking the block's CpGs.)

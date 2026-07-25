@@ -90,6 +90,10 @@
   .out{color:#9fc7c1}                          /* sample output */
   /* yame hprint colours: methylated, unmethylated, unobserved */
   .hm{color:#e5b567}.hu{color:#6c99bb}.hn{color:#6b7a78}
+  /* yame hprint -g deciles: 0 unmethylated (blue) .. 9 methylated (red) */
+  .g0{color:#0000ff}.g1{color:#005fff}.g2{color:#0087ff}.g3{color:#00afff}
+  .g4{color:#00d7ff}.g5{color:#ffffff}.g6{color:#ffd7d7}.g7{color:#ffafaf}
+  .g8{color:#ff8787}.g9{color:#ff0000}.gn{color:#6b7a78}
   code.inl{background:var(--accent-soft);color:var(--accent);padding:1px 5px;border-radius:5px;
      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.84em}
   /* Copy one command, not the block: the output lines are there to be read,
@@ -462,30 +466,29 @@ human_hg38_test_reconstructed.cg      1     NA  global   10000     6239   10000 
 <span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;</span>
 <span class="out">9211/9794 (94.0%)</span>
 
-<span class="cm"># and see it: stack the three tracks over the same block the score used.
-# yame hprint colours the calls (1 methylated, 0 unmethylated, 2 unobserved);
-# -c turns colour off, which cut needs since it counts bytes, not columns</span>
+<span class="cm"># see the whole block first. -R makes the view coordinate-aware and
+# window-averages 10,000 CpGs into 60 columns; -g shows deciles</span>
+<span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg</span>
+<span class="cmd" data-cmd="yame index -s &lt;(printf &#x27;truth\ninput\nreconstructed\n&#x27;) three.cg">yame index -s &lt;(printf &#x27;truth\ninput\nreconstructed\n&#x27;) three.cg</span>
+<span class="cmd" data-cmd="yame hprint -g -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg">yame hprint -g -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg</span>
+<span class="out">                      chr1:921649-1151482 (10000 CpGs, win=167)
+                      |.........|.........|.........|.........|.........|.........
+                      921649    958945    995856    1033422   1067326   1112421
+truth                 <span class="g1">1</span><span class="g0">0</span><span class="g4">4</span><span class="g5">5</span><span class="g2">2</span><span class="g3">3</span><span class="g0">0</span><span class="g5">5</span><span class="g9">9</span><span class="g8">8</span><span class="g0">0</span><span class="g2">2</span><span class="g9">9</span><span class="g4">4</span><span class="g5">55</span><span class="g8">8</span><span class="g7">77</span><span class="g9">9</span><span class="g2">2</span><span class="g0">00</span><span class="g5">5</span><span class="g9">9</span><span class="g5">5</span><span class="g3">3</span><span class="g2">2</span><span class="g7">7</span><span class="g5">5</span><span class="g3">33</span><span class="g7">7</span><span class="g9">9999</span><span class="g5">5</span><span class="g2">2</span><span class="g3">33</span><span class="g5">5</span><span class="g7">7</span><span class="g5">5</span><span class="g8">8</span><span class="g9">99999</span><span class="g5">5</span><span class="g1">1</span><span class="g6">6</span><span class="g8">8</span><span class="g9">9</span><span class="g7">7</span><span class="g5">5</span><span class="g6">6</span><span class="g8">8</span><span class="g9">9</span>
+input                 <span class="gn">...</span><span class="g0">0</span><span class="gn">.....</span><span class="g5">5</span><span class="gn">.</span><span class="g0">0</span><span class="gn">...........</span><span class="g0">0</span><span class="g9">9</span><span class="gn">...............</span><span class="g9">9</span><span class="gn">..</span><span class="g0">0</span><span class="gn">....</span><span class="g9">9</span><span class="gn">...</span><span class="g9">9</span><span class="gn">....</span><span class="g9">9</span><span class="gn">..</span>
+reconstructed         <span class="g1">1</span><span class="g0">0</span><span class="g6">66</span><span class="g3">3</span><span class="g4">4</span><span class="g0">0</span><span class="g4">4</span><span class="g9">9</span><span class="g8">8</span><span class="g0">0</span><span class="g2">2</span><span class="g9">9</span><span class="g4">4</span><span class="g5">5</span><span class="g6">6</span><span class="g8">8</span><span class="g7">7</span><span class="g8">8</span><span class="g9">9</span><span class="g3">3</span><span class="g0">00</span><span class="g6">6</span><span class="g9">9</span><span class="g5">5</span><span class="g3">3</span><span class="g2">2</span><span class="g8">8</span><span class="g5">5</span><span class="g4">44</span><span class="g7">7</span><span class="g9">9999</span><span class="g5">5</span><span class="g2">2</span><span class="g5">5</span><span class="g3">3</span><span class="g6">6</span><span class="g7">7</span><span class="g5">5</span><span class="g8">8</span><span class="g9">99999</span><span class="g5">5</span><span class="g1">1</span><span class="g6">6</span><span class="g8">8</span><span class="g9">9</span><span class="g7">7</span><span class="g5">5</span><span class="g7">7</span><span class="g8">8</span><span class="g9">9</span></span>
+<span class="cm"># 0 unmethylated through 9 methylated, . no coverage, coloured blue to red.
+# the input row is almost all gaps; truth and reconstruction track each other</span>
+
+<span class="cm"># then zoom to single CpGs over the same block the score used -- the same
+# rowsub -I as above. -c turns colour off, which cut needs since it counts
+# bytes, not columns</span>
 <span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1-60">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1-60</span>
 <span class="out">truth  <span class="hu">0</span><span class="hm">1</span><span class="hu">0000000</span><span class="hm">111111111111</span><span class="hu">0</span><span class="hm">11</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0000000000000000000000000000000000</span>
 input  <span class="hn">222222222222222222222222222222222222222222222222222222222222</span>
 recon  <span class="hm">11</span><span class="hu">00</span><span class="hm">11</span><span class="hu">000</span><span class="hm">111111111111</span><span class="hu">0</span><span class="hm">11</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0000000000000000000000000000000000</span></span>
-<span class="cm"># the first 60 CpGs of the block. None of them was observed, and the
-# reconstruction still gets 57 of 60 right -- the three misses are all in
-# the opening run.</span>
-
-<span class="cm"># or take the whole block at once: -R gives a coordinate-aware view that
-# window-averages to fit, so 10,000 CpGs become 60 columns of H/M/L</span>
-<span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg</span>
-<span class="cmd" data-cmd="yame index -s &lt;(printf &#x27;truth\ninput\nreconstructed\n&#x27;) three.cg">yame index -s &lt;(printf &#x27;truth\ninput\nreconstructed\n&#x27;) three.cg</span>
-<span class="cmd" data-cmd="yame hprint -c -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg">yame hprint -c -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg</span>
-<span class="out">                      chr1:921649-1151482 (10000 CpGs, win=167)
-                      |.........|.........|.........|.........|.........|.........
-                      921649    958945    995856    1033422   1067326   1112421
-truth                 LLMMLLLMHHLLHMMMHHHHLLLMHMMLHMMMHHHHHMLMMMHMHHHHHHMLMHHHMMHH
-input                 ...L.....M.L...........LH...............H..L....H...H....H..
-reconstructed         LLMMMMLMHHLLHMMMHHHHLLLHHMMLHMMMHHHHHMLMMMHMHHHHHHMLMHHHMHHH</span>
-<span class="cm"># H >0.67, M 0.33-0.67, L <0.33, . no coverage. The input row is almost
-# all gaps; truth and reconstruction track each other across the block.</span></code></pre>
+<span class="cm"># the first 60 CpGs. None was observed, and the reconstruction still gets
+# 57 of 60 right -- the three misses are all in the opening run.</span></code></pre>
     </div>
 
     <h3>Train <span class="m">— featurize, group into units, fit (CUDA)</span></h3>
