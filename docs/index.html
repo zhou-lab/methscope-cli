@@ -68,6 +68,11 @@
   .panel h2{font-size:1.05rem;margin:0 0 6px;letter-spacing:-.01em}
   .panel h2 .m{color:var(--muted);font-weight:400;font-size:.82rem}
   .panel p{margin:0 0 10px;color:var(--muted);font-size:.85rem;max-width:96ch}
+  /* Inference first, then training: two blocks per workflow, each labelled. */
+  .panel h3{font-size:.8rem;margin:16px 0 6px;color:var(--fg);font-weight:700;
+     display:flex;align-items:baseline;gap:8px}
+  .panel h3:first-of-type{margin-top:2px}
+  .panel h3 .m{color:var(--muted);font-weight:400;font-size:.78rem}
   pre{position:relative;background:var(--code-bg);color:var(--code-fg);border-radius:9px;padding:11px 12px;
      overflow-x:auto;font-size:.75rem;line-height:1.55;margin:0}
   pre code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
@@ -243,10 +248,12 @@ methscope <span class="sub">mrmp-export</span> --top 1000 panel.mrmp panel.cm</c
 
   <section class="panel" id="p-classify" role="tabpanel" aria-labelledby="t-classify">
     <h2>Classify <span class="m">— cell type, sex, any label</span></h2>
-    <p>Fit a label classifier over MRMP features and bundle it with its MRMP + labels in one step,
-      then classify with it. Three frameworks (<code class="inl">xgboost</code> /
-      <code class="inl">logistic</code> / <code class="inl">threshold</code>); the bundle records
-      which.</p>
+    <p>Classify a methylome against a bundled classifier — the bundle carries its own MRMP
+      features and labels, so a query <code class="inl">.cg</code> runs directly. Three frameworks
+      (<code class="inl">xgboost</code> / <code class="inl">logistic</code> /
+      <code class="inl">threshold</code>); the bundle records which.</p>
+
+    <h3>Classify <span class="m">— with a shipped model</span></h3>
     <pre><code>M=~/.methscope
 methscope <span class="sub">fetch</span> hg38_celltype,celltypes_cg,celltypes_idx
 
@@ -260,16 +267,7 @@ Blood-Monocytes  Mono              0.8360   # monocyte</span>
 <span class="cm"># Loyfer truth -> Zhou2025 label: 4/4 concordant.
 # the same call runs a sex / age / any bundled model</span>
 
-<span class="cm"># or fit your own: features + labels -> one runnable bundle</span>
-methscope <span class="sub">classify-train</span> -l labels.txt \
-  -o hg38_celltype.ubjx query.cg panel.mrmp
-<span class="cm"># --framework xgboost | logistic | threshold</span>
-
-<span class="cm"># the same wrapping by hand: inner model + its MRMP (+ labels) -> one file</span>
-methscope <span class="sub">bundle</span> -m panel.cm -l labels.txt model.ubj -o model.ubjx
-methscope <span class="sub">unbundle</span> model.ubjx        <span class="cm"># -> back to its parts</span>
-
-<span class="cm"># look inside one without running it</span>
+<span class="cm"># look inside any bundle without running it</span>
 methscope <span class="sub">fetch</span> hg38_sex
 methscope <span class="sub">inspect</span> $M/hg38_sex.ubjx
 <span class="out">container  MSBNDL1 — 3 sections, 30,931 bytes
@@ -277,26 +275,39 @@ methscope <span class="sub">inspect</span> $M/hg38_sex.ubjx
   1  kind    "logistic" framework mark
   2  model   methscope-linear text spec
      labels  Female, Male</span></code></pre>
+
+    <h3>Train <span class="m">— fit your own classifier</span></h3>
+    <pre><code><span class="cm"># features + labels -> one runnable bundle, in a single step</span>
+methscope <span class="sub">classify-train</span> -l labels.txt \
+  -o hg38_celltype.ubjx query.cg panel.mrmp
+<span class="cm"># --framework xgboost | logistic | threshold</span>
+
+<span class="cm"># the same wrapping by hand: inner model + its MRMP (+ labels) -> one file</span>
+methscope <span class="sub">bundle</span> -m panel.cm -l labels.txt model.ubj -o model.ubjx
+methscope <span class="sub">unbundle</span> model.ubjx        <span class="cm"># -> back to its parts</span></code></pre>
     <p style="margin-top:11px">Linear models store per-feature training means, so missing/sparse
-      betas are imputed at classify time — accurate even at &lt;1% genome coverage. A bundle is
-      self-describing, so it ships and runs stand-alone — no separate annotation files.</p>
+      betas are imputed at classify time — accurate even at &lt;1% genome coverage.</p>
   </section>
 
   <section class="panel" id="p-deconv" role="tabpanel" aria-labelledby="t-deconv">
     <h2>Deconvolve <span class="m">— cell-type proportions</span></h2>
-    <p>Summarize per-cell-type pseudobulks against the MRMP into a self-contained
-      <code class="inl">.refx</code>, then solve a mixture against it by non-negative least squares.
-      Uses all MRMP patterns; robust to extreme sparsity.</p>
+    <p>Solve a mixture against a signature panel by non-negative least squares. Uses all MRMP
+      patterns and is robust to extreme sparsity, so it works on cfDNA-scale coverage.</p>
+
+    <h3>Deconvolve <span class="m">— with a shipped reference</span></h3>
     <pre><code>M=~/.methscope
-methscope <span class="sub">fetch</span> hg38_65celltypes,immune_mixture,celltypes_cg,celltypes_idx
+methscope <span class="sub">fetch</span> hg38_65celltypes,immune_mixture
 
 <span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
 methscope <span class="sub">deconv</span> $M/human_hg38_immune_mixture.cg $M/hg38_65celltypes.refx
 <span class="out">cell  … Macrophage  Mono    NK_CD56  …
 1     … 0.7486      0.2370  0.0000   …</span>
-<span class="cm"># truth 70/30; the other 63 types come back ~0</span>
+<span class="cm"># truth 70/30; the other 63 types come back ~0</span></code></pre>
 
-<span class="cm"># build your own panel — here per-cell, so each cell must deconvolve to itself</span>
+    <h3>Build a reference <span class="m">— your own .refx panel</span></h3>
+    <pre><code>methscope <span class="sub">fetch</span> hg38_celltype,celltypes_cg,celltypes_idx
+
+<span class="cm"># per-cell panel, so each cell must deconvolve to itself</span>
 methscope <span class="sub">deconv-build-ref</span> -o self.refx \
   $M/human_hg38_celltypes.cg $M/hg38_celltype.ubjx
 methscope <span class="sub">deconv</span> $M/human_hg38_celltypes.cg self.refx
@@ -312,10 +323,11 @@ methscope <span class="sub">deconv-build-ref</span> --matrix query.cg panel.mrmp
   <section class="panel" id="p-upscale" role="tabpanel" aria-labelledby="t-upscale">
     <h2>Upscale / impute <span class="m">— the whole-genome decoder</span></h2>
     <p>Impute dense CpG methylation from a sparse methylome with a bundled decoder — pure-C
-      inference, no CUDA or BLAS at run time. Training the decoder is three steps, all reading the
-      same <code class="inl">.mrmp</code>.</p>
-    <div class="tipwrap">
-      <pre><code>M=~/.methscope
+      inference, no CUDA or BLAS at run time. Training that decoder is a separate, three-step
+      pipeline, and every step reads the same <code class="inl">.mrmp</code>.</p>
+
+    <h3>Impute <span class="m">— with a shipped decoder</span></h3>
+    <pre><code>M=~/.methscope
 methscope <span class="sub">fetch</span> hg38_10k1,upscale_query,upscale_truth
 
 <span class="cm"># impute from ~0.1% coverage, then score against the truth track</span>
@@ -323,11 +335,11 @@ methscope <span class="sub">upscale</span> -o recon.cg $M/hg38_10k1.updecx $M/hu
 paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) \
       &lt;(yame rowsub -I 1_10000 $M/human_hg38_test.truth.cg | yame unpack -a - | cut -f4) \
   | awk '$2!=2{t++;if($1==$2)c++} END{printf "%d/%d (%.1f%%)\n",c,t,100*c/t}'
-<span class="out">9211/9794 (94.0%)   — 94% accurate from ~0.1% input</span>
+<span class="out">9211/9794 (94.0%)   — 94% accurate from ~0.1% input</span></code></pre>
 
-<span class="cm"># ---- training the decoder -------------------------------------------------</span>
-
-<span class="cm"># 1. featurize the truth atlas -> sampling/truth sidecar</span>
+    <h3>Train <span class="m">— featurize, group into units, fit (CUDA)</span></h3>
+    <div class="tipwrap">
+      <pre><code><span class="cm"># 1. featurize the truth atlas -> sampling/truth sidecar</span>
 methscope <span class="sub">upscale-featurize</span> --embed-truth \
   atlas.cg panel.mrmp <span class="tip" data-tip="msur" tabindex="0">train.msur</span>
 
