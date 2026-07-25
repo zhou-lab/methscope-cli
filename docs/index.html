@@ -478,17 +478,22 @@ truth                 <span class="g1">1</span><span class="g0">0</span><span cl
 input                 <span class="gn">...</span><span class="g0">0</span><span class="gn">.....</span><span class="g5">5</span><span class="gn">.</span><span class="g0">0</span><span class="gn">...........</span><span class="g0">0</span><span class="g9">9</span><span class="gn">...............</span><span class="g9">9</span><span class="gn">..</span><span class="g0">0</span><span class="gn">....</span><span class="g9">9</span><span class="gn">...</span><span class="g9">9</span><span class="gn">....</span><span class="g9">9</span><span class="gn">..</span>
 reconstructed         <span class="g1">1</span><span class="g0">0</span><span class="g6">66</span><span class="g3">3</span><span class="g4">4</span><span class="g0">0</span><span class="g4">4</span><span class="g9">9</span><span class="g8">8</span><span class="g0">0</span><span class="g2">2</span><span class="g9">9</span><span class="g4">4</span><span class="g5">5</span><span class="g6">6</span><span class="g8">8</span><span class="g7">7</span><span class="g8">8</span><span class="g9">9</span><span class="g3">3</span><span class="g0">00</span><span class="g6">6</span><span class="g9">9</span><span class="g5">5</span><span class="g3">3</span><span class="g2">2</span><span class="g8">8</span><span class="g5">5</span><span class="g4">44</span><span class="g7">7</span><span class="g9">9999</span><span class="g5">5</span><span class="g2">2</span><span class="g5">5</span><span class="g3">3</span><span class="g6">6</span><span class="g7">7</span><span class="g5">5</span><span class="g8">8</span><span class="g9">99999</span><span class="g5">5</span><span class="g1">1</span><span class="g6">6</span><span class="g8">8</span><span class="g9">9</span><span class="g7">7</span><span class="g5">5</span><span class="g7">7</span><span class="g8">8</span><span class="g9">9</span></span>
 <span class="cm"># 0 unmethylated through 9 methylated, . no coverage, coloured blue to red.
-# the input row is almost all gaps; truth and reconstruction track each other</span>
+# each column averages 167 CpGs. The input row is mostly gaps, and where it
+# does show a digit that digit is one or two observed CpGs standing in for the
+# whole window -- so it reads lower or higher than the truth because it is a
+# far thinner sample of the same window, not because it disagrees with it.
+# Truth and reconstruction, both dense, track each other across the block.</span>
 
 <span class="cm"># then zoom to single CpGs over the same block the score used -- the same
 # rowsub -I as above. -c turns colour off, which cut needs since it counts
 # bytes, not columns</span>
-<span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1-60">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1-60</span>
-<span class="out">truth  <span class="hu">0</span><span class="hm">1</span><span class="hu">0000000</span><span class="hm">111111111111</span><span class="hu">0</span><span class="hm">11</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0000000000000000000000000000000000</span>
-input  <span class="hn">222222222222222222222222222222222222222222222222222222222222</span>
-recon  <span class="hm">11</span><span class="hu">00</span><span class="hm">11</span><span class="hu">000</span><span class="hm">111111111111</span><span class="hu">0</span><span class="hm">11</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0000000000000000000000000000000000</span></span>
-<span class="cm"># the first 60 CpGs. None was observed, and the reconstruction still gets
-# 57 of 60 right -- the three misses are all in the opening run.</span></code></pre>
+<span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1621-1680">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1621-1680</span>
+<span class="out">truth  <span class="hm">111111</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">000000</span><span class="hm">1</span><span class="hu">0000000000000000000000000</span>
+input  <span class="hn">22222222222222222</span><span class="hm">1</span><span class="hn">22222222222222222222222222</span><span class="hu">0</span><span class="hn">222222222222222</span>
+recon  <span class="hm">111111</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">000000</span><span class="hm">1</span><span class="hu">0000000000000000000000000</span></span>
+<span class="cm"># 60 CpGs from the middle of the block. Two were observed, and the
+# reconstruction matches the truth at all 60 -- including the isolated 0 at
+# position 7 and the lone 1 sitting in the unmethylated run.</span></code></pre>
     </div>
 
     <h3>Train <span class="m">— featurize, group into units, fit (CUDA)</span></h3>

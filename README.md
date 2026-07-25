@@ -165,17 +165,21 @@ yame hprint -g -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg
 # truth          104523059802945587792005953275337999952335758999995168975689
 # input          ...0.....5.0...........09...............9..0....9...9....9..
 # reconstructed  106634049802945687893006953285447999952536758999995168975789
+# each column averages 167 CpGs; the input's few digits are one or two observed
+# CpGs standing in for a whole window, so they read differently from the truth
+# because they sample it thinly, not because they contradict it.
 
 # then single CpGs over the same block (-c because cut counts bytes)
 cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg \
-  | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1-60
-# truth  010000000111111111111011010000000000000000000000000000000000
-# input  222222222222222222222222222222222222222222222222222222222222
-# recon  110011000111111111111011010000000000000000000000000000000000
+  | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1621-1680
+# truth  111111010111111111111110111100000010000000000000000000000000
+# input  222222222222222221222222222222222222222222220222222222222222
+# recon  111111010111111111111110111100000010000000000000000000000000
 ```
 
-None of those first 60 CpGs was observed, and the reconstruction still gets 57
-of 60 right. `--probs` emits per-CpG probabilities as TSV instead of a
+Two CpGs were observed in that 60-CpG window, and the reconstruction matches
+the truth at all 60 — including the isolated 0 and the lone 1 inside the
+unmethylated run. `--probs` emits per-CpG probabilities as TSV instead of a
 `.cg`. (Rebuild the bundle: `export_upscale_model.py … -o 10k1.updec`, then
 `bundle -m mrmp100.cm -O outcpg.cm -o 10k1.updecx 10k1.updec`, where
 `outcpg.cm` is a genome-wide YAME mask marking the block's CpGs.)
