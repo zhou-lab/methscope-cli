@@ -326,6 +326,12 @@ int main_upscale_set_units(int argc, char **argv) {
     if (mh->n_cpg > UINT32_MAX) fail("genomic CpG index exceeds uint32");
     if (mh->membership_offset + mh->n_cpg * sizeof(uint32_t) > mmap_bytes)
       fail_path("MRMP artifact offsets out of bounds", mrmp_path);
+    /* the loop below reads pat[0..n_candidates); validate that region too,
+     * overflow-safe against a crafted patterns_offset / n_candidates. */
+    if (mh->patterns_offset > mmap_bytes ||
+        mh->n_candidates >
+          (mmap_bytes - mh->patterns_offset) / sizeof(mrmp_pattern_t))
+      fail_path("MRMP artifact offsets out of bounds", mrmp_path);
     const mrmp_pattern_t *pat =
       (const mrmp_pattern_t *)((const char *)mmap_base + mh->patterns_offset);
     membership =

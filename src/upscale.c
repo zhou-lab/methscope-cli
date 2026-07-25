@@ -213,9 +213,15 @@ static long run_from_cg(const ms_updec_t *m, const char *mrmp_path,
   return row;
 }
 
-/* extract a bundle section to a temp file; returns the path (caller unlink+free) */
+/* extract a bundle section to a temp file; returns the path (caller unlink+free).
+ * Honors $TMPDIR so a genome-wide mask (tens of MB) lands in the user's scratch
+ * rather than the small shared /tmp partition. */
 static char *section_to_tmp(const void *buf, size_t len, const char *tag) {
-  char tmpl[64]; snprintf(tmpl, sizeof(tmpl), "/tmp/methscope_%s_XXXXXX", tag);
+  const char *dir = getenv("TMPDIR");
+  if (!dir || !*dir) dir = "/tmp";
+  char tmpl[256];
+  int nw = snprintf(tmpl, sizeof(tmpl), "%s/methscope_%s_XXXXXX", dir, tag);
+  if (nw < 0 || nw >= (int)sizeof(tmpl)) udie("temp path too long", tag);
   int fd = mkstemp(tmpl);
   if (fd < 0) udie("cannot create temp file", tag);
   for (size_t off = 0; off < len; ) {
