@@ -8,8 +8,7 @@ static int internal_usage(void) {
   ms_help(stderr,
     "Usage: methscope _upscale <command> [options]\n\n"
     "Internal development tools; interfaces and file formats may change:\n"
-    "  trunk-train Train a research shared 512-dimensional decoder trunk\n"
-    "  eval        Legacy hybrid research evaluator\n\n"
+    "  trunk-train Train a research shared 512-dimensional decoder trunk\n\n"
     "The pipeline steps are public: upscale-featurize, upscale-set-units.\n\n"
     "These commands are intentionally omitted from the public command list.\n");
   return 1;
@@ -23,8 +22,6 @@ int main_upscale_internal(int argc, char **argv) {
   }
   if (!strcmp(argv[1], "trunk-train"))
     return main_upscale_trunk_train(argc - 1, argv + 1);
-  if (!strcmp(argv[1], "eval"))
-    return main_upscale_hybrid_eval(argc - 1, argv + 1);
   fprintf(stderr, "[methscope] _upscale: unrecognized internal command '%s'\n",
           argv[1]);
   return 1;

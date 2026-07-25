@@ -88,15 +88,15 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   if (strcmp(argv[1], "upscale-prepare") == 0) {
-    fprintf(stderr, "[methscope] internal tool moved to '_upscale prepare'\n");
+    fprintf(stderr, "[methscope] 'upscale-prepare' was renamed to 'upscale-featurize'\n");
     return 1;
   }
   if (strcmp(argv[1], "upscale-residual-index") == 0) {
-    fprintf(stderr, "[methscope] internal tool moved to '_upscale index'\n");
+    fprintf(stderr, "[methscope] 'upscale-residual-index' was renamed to 'upscale-set-units'\n");
     return 1;
   }
   if (strcmp(argv[1], "upscale-hybrid-eval") == 0) {
-    fprintf(stderr, "[methscope] research evaluator moved to '_upscale eval'\n");
+    fprintf(stderr, "[methscope] 'upscale-hybrid-eval' was removed (deprecated hybrid model)\n");
     return 1;
   }
   if (strcmp(argv[1], "fetch")        == 0) return main_fetch(argc - 1, argv + 1);

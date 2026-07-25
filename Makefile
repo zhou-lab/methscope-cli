@@ -46,7 +46,7 @@ OBJ = $(SRC:.c=.o)
 CUDA_OBJ =
 
 ifeq ($(CUDA),1)
-  CUDA_OBJ = src/upfactor_cuda.o src/upresidual_cuda.o src/uphybrid_eval_cuda.o src/upunit_cuda.o
+  CUDA_OBJ = src/upfactor_cuda.o src/upunit_cuda.o
   LDFLAGS += -L$(CUDA_HOME)/lib -Wl,-rpath,$(CUDA_HOME)/lib
   LIBS += -lcublas -lcudart -lstdc++
 endif
@@ -71,12 +71,6 @@ src/%.o: src/%.c | check-xgb
 	$(CC) $(CFLAGS) -c $< -o $@
 
 src/upfactor_cuda.o: src/upfactor_cuda.cu src/upfactor_cuda.h | check-xgb
-	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
-
-src/upresidual_cuda.o: src/upresidual_cuda.cu src/upresidual_cuda.h | check-xgb
-	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
-
-src/uphybrid_eval_cuda.o: src/uphybrid_eval_cuda.cu src/uphybrid_eval_cuda.h | check-xgb
 	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
 
 src/upunit_cuda.o: src/upunit_cuda.cu src/upunit_cuda.h src/updec2.h | check-xgb
@@ -127,9 +121,8 @@ dist:
 	@sha256sum $(DIST_TARBALL) 2>/dev/null || shasum -a 256 $(DIST_TARBALL)
 
 clean:
-	rm -f $(OBJ) src/upfactor_cuda.o src/upresidual_cuda.o src/uphybrid_eval_cuda.o src/upunit_cuda.o \
-	      src/updec_cuda.o src/updec_nn.o src/updec_train.o \
-	      src/upfactor_train.o src/upresidual_train.o $(PROG)
+	rm -f $(OBJ) src/upfactor_cuda.o src/upunit_cuda.o \
+	      src/updec_cuda.o src/updec_nn.o src/updec_train.o $(PROG)
 
 # Also clean the YAME submodule build artifacts.
 clean-all: clean
