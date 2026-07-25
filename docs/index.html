@@ -143,7 +143,7 @@
 
 <div class="tabs">
   <nav class="tabnav" role="tablist" aria-label="Workflows">
-    <button class="tab" role="tab" id="t-setup"    aria-controls="p-setup"    data-panel="setup">1 · Install &amp; fetch models</button>
+    <button class="tab" role="tab" id="t-setup"    aria-controls="p-setup"    data-panel="setup">1 · Install</button>
     <button class="tab" role="tab" id="t-mrmp"     aria-controls="p-mrmp"     data-panel="mrmp">2 · Build MRMP</button>
     <button class="tab" role="tab" id="t-classify" aria-controls="p-classify" data-panel="classify">3 · Classify</button>
     <button class="tab" role="tab" id="t-deconv"   aria-controls="p-deconv"   data-panel="deconv">4 · Deconvolve</button>
@@ -153,41 +153,44 @@
   <div class="panes">
 
   <section class="panel" id="p-setup" role="tabpanel" aria-labelledby="t-setup">
-    <h2>Install &amp; fetch models</h2>
+    <h2>Install <span class="m">— the binary, and what it can fetch</span></h2>
     <p>Every model is one self-contained bundle carrying its own MRMP feature definition (and
       labels), so a query <code class="inl">.cg</code> runs directly — no separate annotation
-      files. <code class="inl">fetch</code> carries the catalog: with no name it lists what exists
-      and what is already local, and it never prompts, so it is safe inside a container build.</p>
-    <pre><code><span class="cm"># 1. the binary — conda, or build from source (bundles YAME)</span>
+      files. <code class="inl">fetch</code> carries the catalog of models <i>and</i> the example
+      <code class="inl">.cg</code> fixtures; each workflow below opens by fetching just what it
+      needs. It never prompts, so it is safe inside a container build.</p>
+    <pre><code><span class="cm"># conda — installs the `methscope` binary</span>
 conda install -c zhou-lab -c conda-forge methscope
 
+<span class="cm"># or build from source (bundles YAME)</span>
 git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli
 cd methscope-cli &amp;&amp; make
 
-<span class="cm"># 2. the models — no HuggingFace client needed</span>
+<span class="cm"># what is available, and what is already local</span>
 methscope <span class="sub">fetch</span>
-<span class="out">store              ~/.methscope/models
+<span class="out">store   ~/.methscope
 
-name               size       task                           framework    local
-hg38_celltype      24.5 MB    cell-type annotation           xgboost      -
-mm10_celltype      21.5 MB    cell-type annotation           xgboost      -
-hg38_sex           30.2 KB    sex prediction                 logistic     -
-hg38_65celltypes   27.6 MB    deconvolution (NNLS)           refx         -
-hg38_10k1          27.7 MB    CpG upscaling (one block)      UPDEC1       -
-hg38_wg            2.8 GB     CpG upscaling (whole genome)   UPDEC2       -
+models (HuggingFace zhou-lab/methscope)
+  name             size       task                             local
+  hg38_celltype    24.5 MB    cell-type annotation             -
+  mm10_celltype    21.5 MB    cell-type annotation             -
+  hg38_sex         30.2 KB    sex prediction                   -
+  hg38_65celltypes 27.6 MB    deconvolution (NNLS)             -
+  hg38_10k1        27.7 MB    CpG upscaling (one block)        -
+  hg38_wg          2.8 GB     CpG upscaling (whole genome)     -
 
-6 models, 2.9 GB total; 0 B present</span>
+example data (GitHub methscope_data)
+  name             size       task                             local
+  celltypes_cg     6.1 MB     classify / deconv input          -
+  celltypes_idx    96 B       cell names for the above         -
+  immune_mixture   3.5 MB     deconv input                     -
+  upscale_query    101.3 KB   upscale input                    -
+  upscale_truth    1.9 MB     upscale ground truth             -
 
-methscope <span class="sub">fetch</span> hg38_celltype,hg38_65celltypes,hg38_10k1
-<span class="cm"># or `all`; --store DIR overrides $METHSCOPE_HOME (default ~/.methscope/models)</span>
+11 entries, 2.9 GB total; 0 B present</span>
 
-<span class="cm"># 3. the .cg fixtures used by every example below</span>
-mkdir -p ~/tmp/methscope-test &amp;&amp; cd ~/tmp/methscope-test
-M=~/.methscope/models
-MD=https://raw.githubusercontent.com/zhou-lab/methscope_data/main/test
-wget -q $MD/human_hg38_celltypes.cg $MD/human_hg38_celltypes.cg.idx   <span class="cm"># 4 typed cells</span>
-wget -q $MD/human_hg38_immune_mixture.cg                              <span class="cm"># 70% macro / 30% mono</span>
-wget -q $MD/human_hg38_test.cg $MD/human_hg38_test.truth.cg           <span class="cm"># upscale input + truth</span></code></pre>
+<span class="cm"># groups: models | data | all; --store DIR overrides $METHSCOPE_HOME</span>
+methscope <span class="sub">fetch</span> data</code></pre>
     <p style="margin-top:11px">Downloads land on a <code class="inl">.part</code> sibling and are
       renamed only once the byte count matches the catalog, so an interrupted fetch can never leave
       a short file that later reads as a valid model. Have <code class="inl">yame</code> on
@@ -244,8 +247,11 @@ methscope <span class="sub">mrmp-export</span> --top 1000 panel.mrmp panel.cm</c
       then classify with it. Three frameworks (<code class="inl">xgboost</code> /
       <code class="inl">logistic</code> / <code class="inl">threshold</code>); the bundle records
       which.</p>
-    <pre><code><span class="cm"># classify against a shipped model (4 Loyfer cells vs the Zhou2025 62-type atlas)</span>
-methscope <span class="sub">classify</span> human_hg38_celltypes.cg $M/hg38_celltype.ubjx
+    <pre><code>M=~/.methscope
+methscope <span class="sub">fetch</span> hg38_celltype,celltypes_cg,celltypes_idx
+
+<span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
+methscope <span class="sub">classify</span> $M/human_hg38_celltypes.cg $M/hg38_celltype.ubjx
 <span class="out">cell             prediction_label  confidence
 Oligodendrocyte  ODC               0.9151   # oligodendrocyte
 Pancreas-Beta    Beta              0.9307   # islet beta
@@ -264,6 +270,7 @@ methscope <span class="sub">bundle</span> -m panel.cm -l labels.txt model.ubj -o
 methscope <span class="sub">unbundle</span> model.ubjx        <span class="cm"># -> back to its parts</span>
 
 <span class="cm"># look inside one without running it</span>
+methscope <span class="sub">fetch</span> hg38_sex
 methscope <span class="sub">inspect</span> $M/hg38_sex.ubjx
 <span class="out">container  MSBNDL1 — 3 sections, 30,931 bytes
   0  mrmp    fmt2 MRMP definition, 3 states
@@ -280,16 +287,19 @@ methscope <span class="sub">inspect</span> $M/hg38_sex.ubjx
     <p>Summarize per-cell-type pseudobulks against the MRMP into a self-contained
       <code class="inl">.refx</code>, then solve a mixture against it by non-negative least squares.
       Uses all MRMP patterns; robust to extreme sparsity.</p>
-    <pre><code><span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
-methscope <span class="sub">deconv</span> human_hg38_immune_mixture.cg $M/hg38_65celltypes.refx
+    <pre><code>M=~/.methscope
+methscope <span class="sub">fetch</span> hg38_65celltypes,immune_mixture,celltypes_cg,celltypes_idx
+
+<span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
+methscope <span class="sub">deconv</span> $M/human_hg38_immune_mixture.cg $M/hg38_65celltypes.refx
 <span class="out">cell  … Macrophage  Mono    NK_CD56  …
 1     … 0.7486      0.2370  0.0000   …</span>
 <span class="cm"># truth 70/30; the other 63 types come back ~0</span>
 
 <span class="cm"># build your own panel — here per-cell, so each cell must deconvolve to itself</span>
 methscope <span class="sub">deconv-build-ref</span> -o self.refx \
-  human_hg38_celltypes.cg $M/hg38_celltype.ubjx
-methscope <span class="sub">deconv</span> human_hg38_celltypes.cg self.refx
+  $M/human_hg38_celltypes.cg $M/hg38_celltype.ubjx
+methscope <span class="sub">deconv</span> $M/human_hg38_celltypes.cg self.refx
 <span class="out"># Oligodendrocyte  Oligodendrocyte=100%
 # Pancreas-Beta    Pancreas-Beta=100%    ... (each 100% itself)</span>
 
@@ -305,10 +315,13 @@ methscope <span class="sub">deconv-build-ref</span> --matrix query.cg panel.mrmp
       inference, no CUDA or BLAS at run time. Training the decoder is three steps, all reading the
       same <code class="inl">.mrmp</code>.</p>
     <div class="tipwrap">
-      <pre><code><span class="cm"># impute from ~0.1% coverage, then score against the truth track</span>
-methscope <span class="sub">upscale</span> -o recon.cg $M/hg38_10k1.updecx human_hg38_test.cg
+      <pre><code>M=~/.methscope
+methscope <span class="sub">fetch</span> hg38_10k1,upscale_query,upscale_truth
+
+<span class="cm"># impute from ~0.1% coverage, then score against the truth track</span>
+methscope <span class="sub">upscale</span> -o recon.cg $M/hg38_10k1.updecx $M/human_hg38_test.cg
 paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) \
-      &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) \
+      &lt;(yame rowsub -I 1_10000 $M/human_hg38_test.truth.cg | yame unpack -a - | cut -f4) \
   | awk '$2!=2{t++;if($1==$2)c++} END{printf "%d/%d (%.1f%%)\n",c,t,100*c/t}'
 <span class="out">9211/9794 (94.0%)   — 94% accurate from ~0.1% input</span>
 

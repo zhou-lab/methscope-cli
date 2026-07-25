@@ -21,9 +21,14 @@ git. `methscope fetch` carries the catalog and downloads them; the
 
 ```sh
 methscope fetch                       # list the catalog + what is already local
-methscope fetch hg38_celltype         # or a comma-separated list, or `all`
-# -> $METHSCOPE_HOME, else ~/.methscope/models (--store DIR overrides)
+methscope fetch hg38_celltype         # a comma-separated list, or a group:
+methscope fetch models                # every model
+methscope fetch data                  # every example .cg fixture
+# -> $METHSCOPE_HOME, else ~/.methscope (--store DIR overrides)
 ```
+
+The catalog covers both the models and the query `.cg` fixtures the examples
+run against, so a workflow fetches exactly what it needs in one call.
 
 `fetch` never prompts, so it is safe inside a container build or a workflow
 step, and it is the only command that touches the network. Downloads land on a
