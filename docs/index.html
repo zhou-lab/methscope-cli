@@ -81,12 +81,16 @@
   .out{color:#9fc7c1}                          /* sample output */
   code.inl{background:var(--accent-soft);color:var(--accent);padding:1px 5px;border-radius:5px;
      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.84em}
-  .copy{position:absolute;top:6px;right:6px;font:600 .63rem ui-monospace,SFMono-Regular,Menlo,monospace;
-     color:var(--code-fg);background:rgba(12,40,38,.95);border:1px solid rgba(255,255,255,.18);border-radius:6px;
-     padding:2px 8px;cursor:pointer;opacity:0;transition:opacity .14s,background .14s;box-shadow:0 1px 6px rgba(0,0,0,.3)}
-  pre:hover .copy,.copy:focus{opacity:1}
-  .copy:hover{background:rgba(20,60,56,.98)}
-  .copy.ok{color:var(--ok);opacity:1}
+  /* Copy one command, not the block: the output lines are there to be read,
+     not pasted into a shell. Each runnable command is its own click target. */
+  .cmd{cursor:pointer;border-radius:4px;transition:background .12s,box-shadow .12s;outline:none}
+  .cmd:hover,.cmd:focus-visible{background:rgba(45,212,191,.14);
+     box-shadow:0 0 0 1px rgba(45,212,191,.35)}
+  .cmd.ok{background:rgba(34,197,94,.22);box-shadow:0 0 0 1px rgba(34,197,94,.5)}
+  .copyhint{position:absolute;top:6px;right:8px;font:600 .63rem ui-monospace,SFMono-Regular,Menlo,monospace;
+     color:var(--cm);opacity:0;transition:opacity .14s,color .14s;pointer-events:none}
+  pre:hover .copyhint{opacity:1}
+  .copyhint.ok{color:var(--ok);opacity:1}
   /* Hover note for a token inside a code block. With JS the note follows the
      cursor from a #tipfloat portaled onto <body>: any transformed or filtered
      ancestor becomes the containing block for position:fixed, so keeping the
@@ -106,11 +110,14 @@
   :root:not(.js-tips) .tipwrap:has(.tip[data-tip=msui]:hover) .tipbox[data-tip=msui],
   :root:not(.js-tips) .tipwrap:has(.tip[data-tip=msui]:focus) .tipbox[data-tip=msui],
   :root:not(.js-tips) .tipwrap:has(.tip[data-tip=updecx]:hover) .tipbox[data-tip=updecx],
-  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=updecx]:focus) .tipbox[data-tip=updecx]{display:block}
+  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=updecx]:focus) .tipbox[data-tip=updecx],
+  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=ubjx]:hover) .tipbox[data-tip=ubjx],
+  :root:not(.js-tips) .tipwrap:has(.tip[data-tip=ubjx]:focus) .tipbox[data-tip=ubjx]{display:block}
   #tipfloat{position:fixed;z-index:60;display:none;max-width:min(600px,93vw);pointer-events:none}
   #tipfloat.on{display:block}
   .tipbox b,#tipfloat b{color:var(--accent)}
   .tipbox .tdim,#tipfloat .tdim{color:var(--muted)}
+  .tipbox p,#tipfloat p{margin:5px 0 0;color:var(--muted);font-size:inherit;max-width:none}
   .tsch{margin:5px 0 0;padding:7px 8px;background:var(--code-bg);color:var(--code-fg);border-radius:6px;
      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.68rem;line-height:1.5;
      white-space:pre;overflow-x:auto}
@@ -165,15 +172,15 @@
       <code class="inl">.cg</code> fixtures; each workflow below opens by fetching just what it
       needs. It never prompts, so it is safe inside a container build.</p>
     <pre><code><span class="cm"># conda — installs the `methscope` binary</span>
-conda install -c zhou-lab -c conda-forge methscope
+<span class="cmd" data-cmd="conda install -c zhou-lab -c conda-forge methscope">conda install -c zhou-lab -c conda-forge methscope</span>
 
 <span class="cm"># or build from source (bundles YAME)</span>
-git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli
-cd methscope-cli &amp;&amp; make
+<span class="cmd" data-cmd="git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli">git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli</span>
+<span class="cmd" data-cmd="cd methscope-cli &amp;&amp; make">cd methscope-cli &amp;&amp; make</span>
 
 <span class="cm"># what is available, and what is already local</span>
-methscope <span class="sub">fetch</span>
-<span class="out">store   ~/.methscope
+<span class="cmd" data-cmd="methscope fetch">methscope <span class="sub">fetch</span></span>
+<span class="out">store   ~/.cache/methscope
 
 models (HuggingFace zhou-lab/methscope)
   name             size       task                             local
@@ -194,8 +201,12 @@ example data (GitHub methscope_data)
 
 11 entries, 2.9 GB total; 0 B present</span>
 
-<span class="cm"># groups: models | data | all; --store DIR overrides $METHSCOPE_HOME</span>
-methscope <span class="sub">fetch</span> data</code></pre>
+<span class="cm"># groups: models | data | all</span>
+<span class="cmd" data-cmd="methscope fetch data">methscope <span class="sub">fetch</span> data</span>
+
+<span class="cm"># where things land: $METHSCOPE_DATA_DIR, else ~/.cache/methscope
+# (same shape as kycg's KYCG_DATA_DIR); --store DIR overrides both</span>
+<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=/shared/methscope    # optional">export METHSCOPE_DATA_DIR=/shared/methscope    <span class="cm"># optional</span></span></code></pre>
     <p style="margin-top:11px">Downloads land on a <code class="inl">.part</code> sibling and are
       renamed only once the byte count matches the catalog, so an interrupted fetch can never leave
       a short file that later reads as a valid model. Have <code class="inl">yame</code> on
@@ -212,11 +223,11 @@ methscope <span class="sub">fetch</span> data</code></pre>
       for hg38.</p>
     <div class="tipwrap">
       <pre><code><span class="cm"># rank every membership pattern over the reference samples</span>
-methscope <span class="sub">mrmp-build</span> ref.cg <span class="tip" data-tip="mrmp" tabindex="0">panel.mrmp</span>
+<span class="cmd" data-cmd="methscope mrmp-build ref.cg panel.mrmp">methscope <span class="sub">mrmp-build</span> ref.cg <span class="tip" data-tip="mrmp" tabindex="0">panel.mrmp</span></span>
 <span class="out">samples=35  CpGs=29401795  distinct patterns=2345190 (+PNA)  candidates=2345190
 PNA CpGs=2559840 (8.71%)  checksum=61d3a9e508cea26a</span>
 
-methscope <span class="sub">inspect</span> panel.mrmp --patterns --top 3
+<span class="cmd" data-cmd="methscope inspect panel.mrmp --patterns --top 3">methscope <span class="sub">inspect</span> panel.mrmp --patterns --top 3</span>
 <span class="out">#pattern                              label  count      (top 3 of 2345190)
 11111111111111111111111111111111111   P1     10736116
 11111111111011111111111111111111111   P2      2859193
@@ -224,7 +235,7 @@ methscope <span class="sub">inspect</span> panel.mrmp --patterns --top 3
 
 <span class="cm"># the runtime .cm mask — inspection / interop only, not a pipeline step:
 # upscale-train materializes it into the bundle from the .mrmp itself</span>
-methscope <span class="sub">mrmp-export</span> --top 1000 panel.mrmp panel.cm</code></pre>
+<span class="cmd" data-cmd="methscope mrmp-export --top 1000 panel.mrmp panel.cm">methscope <span class="sub">mrmp-export</span> --top 1000 panel.mrmp panel.cm</span></code></pre>
       <span class="tipbox" data-tip="mrmp">
         <b>MRMPIDX1</b> <span class="tdim">— every candidate ranked, no top-K baked in</span>
 <pre class="tsch"><span class="c">hg38 · 35 samples · 29,401,795 CpGs · 2,345,190 patterns · 155 MB</span>
@@ -248,43 +259,60 @@ methscope <span class="sub">mrmp-export</span> --top 1000 panel.mrmp panel.cm</c
 
   <section class="panel" id="p-classify" role="tabpanel" aria-labelledby="t-classify">
     <h2>Classify <span class="m">— cell type, sex, any label</span></h2>
-    <p>Classify a methylome against a bundled classifier — the bundle carries its own MRMP
-      features and labels, so a query <code class="inl">.cg</code> runs directly. Three frameworks
-      (<code class="inl">xgboost</code> / <code class="inl">logistic</code> /
-      <code class="inl">threshold</code>); the bundle records which.</p>
+    <p>Classify a methylome against a bundled classifier. Fetching is idempotent and prints the
+      path it guarantees, so <code class="inl">$(methscope fetch NAME)</code> is usable directly as
+      an argument — the block below runs as-is on a clean machine.</p>
 
     <h3>Classify <span class="m">— with a shipped model</span></h3>
-    <pre><code>M=~/.methscope
-methscope <span class="sub">fetch</span> hg38_celltype,celltypes_cg,celltypes_idx
-
-<span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
-methscope <span class="sub">classify</span> $M/human_hg38_celltypes.cg $M/hg38_celltype.ubjx
+    <div class="tipwrap">
+      <pre><code><span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
+<span class="cmd" data-cmd="methscope classify \
+  $(methscope fetch human_hg38_celltypes) \
+  $(methscope fetch hg38_celltype)">methscope <span class="sub">classify</span> \
+  $(methscope <span class="sub">fetch</span> human_hg38_celltypes) \
+  $(methscope <span class="sub">fetch</span> <span class="tip" data-tip="ubjx" tabindex="0">hg38_celltype</span>)</span>
 <span class="out">cell             prediction_label  confidence
-Oligodendrocyte  ODC               0.9151   # oligodendrocyte
-Pancreas-Beta    Beta              0.9307   # islet beta
-Blood-NK         NK CD16           0.8127   # natural killer
-Blood-Monocytes  Mono              0.8360   # monocyte</span>
+Oligodendrocyte  ODC               0.915134   # oligodendrocyte
+Pancreas-Beta    Beta              0.930708   # islet beta
+Blood-NK         NK CD16           0.812749   # natural killer
+Blood-Monocytes  Mono              0.835970   # monocyte</span>
 <span class="cm"># Loyfer truth -> Zhou2025 label: 4/4 concordant.
 # the same call runs a sex / age / any bundled model</span>
 
 <span class="cm"># look inside any bundle without running it</span>
-methscope <span class="sub">fetch</span> hg38_sex
-methscope <span class="sub">inspect</span> $M/hg38_sex.ubjx
+<span class="cmd" data-cmd="methscope inspect $(methscope fetch hg38_sex)">methscope <span class="sub">inspect</span> $(methscope <span class="sub">fetch</span> hg38_sex)</span>
 <span class="out">container  MSBNDL1 — 3 sections, 30,931 bytes
   0  mrmp    fmt2 MRMP definition, 3 states
   1  kind    "logistic" framework mark
   2  model   methscope-linear text spec
      labels  Female, Male</span></code></pre>
+      <span class="tipbox" data-tip="ubjx">
+        <b>MSBNDL1</b> <span class="tdim">— a classifier bundle (<code class="inl">.ubjx</code>)</span>
+        <p style="margin:5px 0 0">One self-describing file: the inner model, its MRMP feature
+          definition, and the labels. A query <code class="inl">.cg</code> therefore runs directly —
+          no separate annotation files to match up. Three frameworks are supported
+          (<code class="inl">xgboost</code> / <code class="inl">logistic</code> /
+          <code class="inl">threshold</code>) and the <code class="inl">kind</code> section records
+          which, so <code class="inl">classify</code> needs no flag to know how to run it.</p>
+<pre class="tsch"><span class="c">hg38_celltype.ubjx · 24.5 MB · 62 human cell types</span>
+
+<span class="k">mrmp</span>    fmt2 MRMP definition — the feature set the model was fit on
+<span class="k">kind</span>    framework mark: xgboost | logistic | threshold
+<span class="k">model</span>   the booster / linear spec, labels embedded
+<span class="k">labels</span>  62 cell types (linear models also store per-feature means)</pre>
+      </span>
+    </div>
 
     <h3>Train <span class="m">— fit your own classifier</span></h3>
     <pre><code><span class="cm"># features + labels -> one runnable bundle, in a single step</span>
-methscope <span class="sub">classify-train</span> -l labels.txt \
-  -o hg38_celltype.ubjx query.cg panel.mrmp
+<span class="cmd" data-cmd="methscope classify-train -l labels.txt \
+  -o hg38_celltype.ubjx query.cg panel.mrmp">methscope <span class="sub">classify-train</span> -l labels.txt \
+  -o hg38_celltype.ubjx query.cg panel.mrmp</span>
 <span class="cm"># --framework xgboost | logistic | threshold</span>
 
 <span class="cm"># the same wrapping by hand: inner model + its MRMP (+ labels) -> one file</span>
-methscope <span class="sub">bundle</span> -m panel.cm -l labels.txt model.ubj -o model.ubjx
-methscope <span class="sub">unbundle</span> model.ubjx        <span class="cm"># -> back to its parts</span></code></pre>
+<span class="cmd" data-cmd="methscope bundle -m panel.cm -l labels.txt model.ubj -o model.ubjx">methscope <span class="sub">bundle</span> -m panel.cm -l labels.txt model.ubj -o model.ubjx</span>
+<span class="cmd" data-cmd="methscope unbundle model.ubjx        # -&gt; back to its parts">methscope <span class="sub">unbundle</span> model.ubjx        <span class="cm"># -> back to its parts</span></span></code></pre>
     <p style="margin-top:11px">Linear models store per-feature training means, so missing/sparse
       betas are imputed at classify time — accurate even at &lt;1% genome coverage.</p>
   </section>
@@ -295,27 +323,28 @@ methscope <span class="sub">unbundle</span> model.ubjx        <span class="cm">#
       patterns and is robust to extreme sparsity, so it works on cfDNA-scale coverage.</p>
 
     <h3>Deconvolve <span class="m">— with a shipped reference</span></h3>
-    <pre><code>M=~/.methscope
-methscope <span class="sub">fetch</span> hg38_65celltypes,immune_mixture
-
-<span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
-methscope <span class="sub">deconv</span> $M/human_hg38_immune_mixture.cg $M/hg38_65celltypes.refx
+    <pre><code><span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
+<span class="cmd" data-cmd="methscope deconv \
+  $(methscope fetch human_hg38_immune_mixture) \
+  $(methscope fetch hg38_65celltypes)">methscope <span class="sub">deconv</span> \
+  $(methscope <span class="sub">fetch</span> human_hg38_immune_mixture) \
+  $(methscope <span class="sub">fetch</span> hg38_65celltypes)</span>
 <span class="out">cell  … Macrophage  Mono    NK_CD56  …
 1     … 0.7486      0.2370  0.0000   …</span>
 <span class="cm"># truth 70/30; the other 63 types come back ~0</span></code></pre>
 
     <h3>Build a reference <span class="m">— your own .refx panel</span></h3>
-    <pre><code>methscope <span class="sub">fetch</span> hg38_celltype,celltypes_cg,celltypes_idx
-
-<span class="cm"># per-cell panel, so each cell must deconvolve to itself</span>
-methscope <span class="sub">deconv-build-ref</span> -o self.refx \
-  $M/human_hg38_celltypes.cg $M/hg38_celltype.ubjx
-methscope <span class="sub">deconv</span> $M/human_hg38_celltypes.cg self.refx
+    <pre><code><span class="cm"># per-cell panel, so each cell must deconvolve to itself</span>
+<span class="cmd" data-cmd="CELLS=$(methscope fetch human_hg38_celltypes)">CELLS=$(methscope <span class="sub">fetch</span> human_hg38_celltypes)</span>
+<span class="cmd" data-cmd="methscope deconv-build-ref -o self.refx \
+  $CELLS $(methscope fetch hg38_celltype)">methscope <span class="sub">deconv-build-ref</span> -o self.refx \
+  $CELLS $(methscope <span class="sub">fetch</span> hg38_celltype)</span>
+<span class="cmd" data-cmd="methscope deconv $CELLS self.refx">methscope <span class="sub">deconv</span> $CELLS self.refx</span>
 <span class="out"># Oligodendrocyte  Oligodendrocyte=100%
 # Pancreas-Beta    Pancreas-Beta=100%    ... (each 100% itself)</span>
 
 <span class="cm"># --matrix emits the raw record x pattern beta TSV instead of a .refx</span>
-methscope <span class="sub">deconv-build-ref</span> --matrix query.cg panel.mrmp</code></pre>
+<span class="cmd" data-cmd="methscope deconv-build-ref --matrix query.cg panel.mrmp">methscope <span class="sub">deconv-build-ref</span> --matrix query.cg panel.mrmp</span></code></pre>
     <p style="margin-top:11px">The 65-type reference spans 58 Zhou single-cell + 7 Loyfer
       organ/blood types for whole-body / cfDNA deconvolution.</p>
   </section>
@@ -327,42 +356,52 @@ methscope <span class="sub">deconv-build-ref</span> --matrix query.cg panel.mrmp
       pipeline, and every step reads the same <code class="inl">.mrmp</code>.</p>
 
     <h3>Impute <span class="m">— with a shipped decoder</span></h3>
-    <pre><code>M=~/.methscope
-methscope <span class="sub">fetch</span> hg38_10k1,upscale_query,upscale_truth
-
-<span class="cm"># impute from ~0.1% coverage, then score against the truth track</span>
-methscope <span class="sub">upscale</span> -o recon.cg $M/hg38_10k1.updecx $M/human_hg38_test.cg
-paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) \
-      &lt;(yame rowsub -I 1_10000 $M/human_hg38_test.truth.cg | yame unpack -a - | cut -f4) \
-  | awk '$2!=2{t++;if($1==$2)c++} END{printf "%d/%d (%.1f%%)\n",c,t,100*c/t}'
+    <pre><code><span class="cm"># impute from ~0.1% coverage, then score against the truth track</span>
+<span class="cmd" data-cmd="methscope upscale -o recon.cg \
+  $(methscope fetch hg38_10k1) \
+  $(methscope fetch human_hg38_test)">methscope <span class="sub">upscale</span> -o recon.cg \
+  $(methscope <span class="sub">fetch</span> hg38_10k1) \
+  $(methscope <span class="sub">fetch</span> human_hg38_test)</span>
+<span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) \
+      &lt;(yame rowsub -I 1_10000 $(methscope fetch human_hg38_test.truth) \
+         | yame unpack -a - | cut -f4) \
+  | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) \
+      &lt;(yame rowsub -I 1_10000 $(methscope <span class="sub">fetch</span> human_hg38_test.truth) \
+         | yame unpack -a - | cut -f4) \
+  | awk '$2!=2{t++;if($1==$2)c++} END{printf "%d/%d (%.1f%%)\n",c,t,100*c/t}'</span>
 <span class="out">9211/9794 (94.0%)   — 94% accurate from ~0.1% input</span></code></pre>
 
     <h3>Train <span class="m">— featurize, group into units, fit (CUDA)</span></h3>
     <div class="tipwrap">
       <pre><code><span class="cm"># 1. featurize the truth atlas -> sampling/truth sidecar</span>
-methscope <span class="sub">upscale-featurize</span> --embed-truth \
-  atlas.cg panel.mrmp <span class="tip" data-tip="msur" tabindex="0">train.msur</span>
+<span class="cmd" data-cmd="methscope upscale-featurize --embed-truth \
+  atlas.cg panel.mrmp train.msur">methscope <span class="sub">upscale-featurize</span> --embed-truth \
+  atlas.cg panel.mrmp <span class="tip" data-tip="msur" tabindex="0">train.msur</span></span>
 
 <span class="cm"># 2. group CpGs into processing units</span>
-methscope <span class="sub">upscale-set-units</span> --unit-cpgs 16384 \
-  panel.mrmp <span class="tip" data-tip="msui" tabindex="0">units.msui</span>
+<span class="cmd" data-cmd="methscope upscale-set-units --unit-cpgs 16384 \
+  panel.mrmp units.msui">methscope <span class="sub">upscale-set-units</span> --unit-cpgs 16384 \
+  panel.mrmp <span class="tip" data-tip="msui" tabindex="0">units.msui</span></span>
 
 <span class="cm"># 3. train on CUDA; --split pins the exact held-out cells,
 #    else cells are cut 70/15/15 by --seed</span>
-make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80
-methscope <span class="sub">upscale-train</span> -i train.msur \
+<span class="cmd" data-cmd="make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80">make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80</span>
+<span class="cmd" data-cmd="methscope upscale-train -i train.msur \
+  --units units.msui --mrmp panel.mrmp \
+  -o model.updecx --work-dir work/ \
+  --split cells.tsv">methscope <span class="sub">upscale-train</span> -i train.msur \
   --units units.msui --mrmp panel.mrmp \
   -o <span class="tip" data-tip="updecx" tabindex="0">model.updecx</span> --work-dir work/ \
-  --split cells.tsv
+  --split cells.tsv</span>
 <span class="cm"># split rows: &lt;cell_index&gt;TAB&lt;train|val|test&gt;, one per source cell</span>
 
 <span class="cm"># inspect reads every build artifact, detected from its magic</span>
-methscope <span class="sub">inspect</span> units.msui
+<span class="cmd" data-cmd="methscope inspect units.msui">methscope <span class="sub">inspect</span> units.msui</span>
 <span class="out">format            MSUIDX1 v1
 cpgs              29401795  (26841955 real + 2559840 PNA)
 units             700  (157 PNA)
 real_memberships  2345190</span>
-methscope <span class="sub">inspect</span> train.msur
+<span class="cmd" data-cmd="methscope inspect train.msur">methscope <span class="sub">inspect</span> train.msur</span>
 <span class="out">format            MSURAW2 v2
 cells             207
 replicates        100
@@ -421,85 +460,34 @@ embedded_truth    yes (trainable)</span></code></pre>
 </div>
 <script>
 (function(){
-  // :not(.tsch) -- the format notes are <pre> too, and a copy button on a
-  // byte map is noise (and unclickable inside the pointer-events:none float).
+  // Click one command to copy it. The old whole-block button also swept up the
+  // sample output, which is not runnable -- and it had a dead filter that was
+  // computed and then ignored, so it copied everything regardless.
   document.querySelectorAll('pre:not(.tsch)').forEach(function(pre){
-    var b=document.createElement('button');b.className='copy';b.type='button';b.textContent='copy';
-    var code=pre.querySelector('code');
-    // copy only the commands, not the sample output lines
-    b.addEventListener('click',function(ev){
-      ev.stopPropagation();
-      var text=(code?code.innerText:pre.innerText).split('\n')
-        .filter(function(l){return !l.startsWith('cell')&&!l.startsWith('[methscope]')&&
-          !l.startsWith('container')&&!/^\s*\d/.test(l)&&!l.startsWith('  ');}).join('\n');
-      navigator.clipboard.writeText((code?code.innerText:pre.innerText)).then(function(){
-        b.textContent='copied';b.classList.add('ok');
-        setTimeout(function(){b.textContent='copy';b.classList.remove('ok');},1200);
+    if(!pre.querySelector('.cmd'))return;
+    var hint=document.createElement('span');
+    hint.className='copyhint';hint.textContent='click a command to copy';
+    pre.appendChild(hint);
+    pre.querySelectorAll('.cmd').forEach(function(el){
+      el.tabIndex=0;
+      el.setAttribute('role','button');
+      el.setAttribute('aria-label','Copy this command');
+      function copy(){
+        navigator.clipboard.writeText(el.dataset.cmd).then(function(){
+          el.classList.add('ok');hint.classList.add('ok');
+          hint.textContent='copied';
+          setTimeout(function(){
+            el.classList.remove('ok');hint.classList.remove('ok');
+            hint.textContent='click a command to copy';
+          },1200);
+        });
+      }
+      el.addEventListener('click',copy);
+      el.addEventListener('keydown',function(e){
+        if(e.key==='Enter'||e.key===' '){e.preventDefault();copy();}
       });
     });
-    pre.appendChild(b);
   });
-  // Workflow tabs. Without JS every panel stays visible, so nothing is hidden
-  // behind an interaction that never runs; js-tabs opts into one-at-a-time.
-  var tabs=[].slice.call(document.querySelectorAll('.tab[data-panel]'));
-  if(tabs.length){
-    document.documentElement.classList.add('js-tabs');
-    function select(name,focus){
-      tabs.forEach(function(t){
-        var on=t.dataset.panel===name;
-        t.setAttribute('aria-selected',on?'true':'false');
-        t.tabIndex=on?0:-1;
-        var pane=document.getElementById('p-'+t.dataset.panel);
-        if(pane)pane.classList.toggle('on',on);
-        if(on&&focus)t.focus();
-      });
-      if(history.replaceState)history.replaceState(null,'','#'+name);
-    }
-    tabs.forEach(function(t,i){
-      t.addEventListener('click',function(){select(t.dataset.panel);});
-      t.addEventListener('keydown',function(e){
-        var d=e.key==='ArrowDown'||e.key==='ArrowRight'?1:
-              e.key==='ArrowUp'||e.key==='ArrowLeft'?-1:0;
-        if(!d)return;
-        e.preventDefault();
-        select(tabs[(i+d+tabs.length)%tabs.length].dataset.panel,true);
-      });
-    });
-    var start=(location.hash||'').replace('#','');
-    select(tabs.some(function(t){return t.dataset.panel===start;})?start:tabs[0].dataset.panel);
-  }
-
-  // Format notes that follow the cursor. #tipfloat lives on <body> so no
-  // transformed ancestor can become its containing block.
-  var tips=document.querySelectorAll('.tip[data-tip]');
-  if(tips.length){
-    document.documentElement.classList.add('js-tips');   // disables the CSS fallback
-    var tf=document.createElement('div');tf.id='tipfloat';document.body.appendChild(tf);
-    var GAP=16;
-    function place(x,y){
-      var r=tf.getBoundingClientRect(),
-          left=x+GAP, top=y+GAP;
-      if(left+r.width>innerWidth-8) left=Math.max(8,x-GAP-r.width);
-      if(top+r.height>innerHeight-8) top=Math.max(8,y-GAP-r.height);
-      tf.style.left=left+'px';tf.style.top=top+'px';
-    }
-    function show(t,x,y){
-      var w=t.closest('.tipwrap');if(!w)return;
-      var b=w.querySelector('.tipbox[data-tip="'+t.dataset.tip+'"]');if(!b)return;
-      tf.innerHTML=b.innerHTML;tf.style.left='0px';tf.style.top='0px';
-      tf.classList.add('on');place(x,y);
-    }
-    function hide(){tf.classList.remove('on');}
-    tips.forEach(function(t){
-      t.addEventListener('mouseenter',function(e){show(t,e.clientX,e.clientY);});
-      t.addEventListener('mousemove',function(e){if(tf.classList.contains('on'))place(e.clientX,e.clientY);});
-      t.addEventListener('mouseleave',hide);
-      t.addEventListener('focus',function(){var r=t.getBoundingClientRect();show(t,r.left,r.bottom);});
-      t.addEventListener('blur',hide);
-    });
-    addEventListener('scroll',hide,true);
-    addEventListener('keydown',function(e){if(e.key==='Escape')hide();});
-  }
 
   // header conda-install badge: click the command to copy it (⧉ -> ✓)
   var ib=document.getElementById('install-btn');

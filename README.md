@@ -24,11 +24,21 @@ methscope fetch                       # list the catalog + what is already local
 methscope fetch hg38_celltype         # a comma-separated list, or a group:
 methscope fetch models                # every model
 methscope fetch data                  # every example .cg fixture
-# -> $METHSCOPE_HOME, else ~/.methscope (--store DIR overrides)
+# -> $METHSCOPE_DATA_DIR, else ~/.cache/methscope (--store DIR overrides)
 ```
 
 The catalog covers both the models and the query `.cg` fixtures the examples
-run against, so a workflow fetches exactly what it needs in one call.
+run against. Human-facing lines go to stderr and stdout is one absolute path
+per requested file, so fetching composes:
+
+```sh
+methscope classify $(methscope fetch human_hg38_celltypes) \
+                   $(methscope fetch hg38_celltype)
+```
+
+It is idempotent — the first run downloads, every run after just resolves the
+path — and a `.cg`'s `.cg.idx` sibling rides along without being a second name
+to remember.
 
 `fetch` never prompts, so it is safe inside a container build or a workflow
 step, and it is the only command that touches the network. Downloads land on a

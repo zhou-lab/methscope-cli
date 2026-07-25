@@ -15,6 +15,13 @@
  * a bare `fetch` only lists, and a named target proceeds. Downloading is the
  * only thing in methscope that touches the network.
  *
+ * STDOUT IS THE PATHS
+ *   Every human-facing line goes to stderr; stdout carries one absolute path
+ *   per file the command guarantees is present. Fetching is idempotent, so
+ *   `$(methscope fetch NAME)` is a usable argument anywhere -- it downloads on
+ *   the first run and just resolves on every one after, which is why the
+ *   examples need no path variable at all.
+ *
  * Integrity is a size check against the catalog, not a cryptographic digest --
  * enough to catch a truncated or redirected-to-HTML transfer, and honest about
  * being no more than that. Files land on a ".part" sibling and are renamed only
@@ -47,32 +54,37 @@ typedef struct {
   const char *name, *file, *base, *task, *framework, *labels;
   uint64_t bytes;
   int is_data;
+  /* A YAME .cg is unusable without its .cg.idx, so the sibling rides along
+   * rather than being a second name the user has to remember. */
+  const char *sibling;
+  uint64_t sibling_bytes;
 } ms_model_t;
 
 static const ms_model_t CATALOG[] = {
   {"hg38_celltype", "hg38_celltype.ubjx", MS_HF_BASE, "cell-type annotation",
-   "xgboost", "62 human cell types", 25661483, 0},
+   "xgboost", "62 human cell types", 25661483, 0, NULL, 0},
   {"mm10_celltype", "mm10_celltype.ubjx", MS_HF_BASE, "cell-type annotation",
-   "xgboost", "41 mouse-brain cell types", 22498764, 0},
+   "xgboost", "41 mouse-brain cell types", 22498764, 0, NULL, 0},
   {"hg38_sex", "hg38_sex.ubjx", MS_HF_BASE, "sex prediction",
-   "logistic", "Female, Male (XCI markers)", 30931, 0},
+   "logistic", "Female, Male (XCI markers)", 30931, 0, NULL, 0},
   {"hg38_65celltypes", "hg38_65celltypes.refx", MS_HF_BASE, "deconvolution (NNLS)",
-   "refx", "65 types = 58 Zhou + 7 Loyfer", 28900711, 0},
+   "refx", "65 types = 58 Zhou + 7 Loyfer", 28900711, 0, NULL, 0},
   {"hg38_10k1", "hg38_10k1.updecx", MS_HF_BASE, "CpG upscaling (one block)",
-   "UPDEC1", "block 10k1, 10,000 CpGs", 29075778, 0},
+   "UPDEC1", "block 10k1, 10,000 CpGs", 29075778, 0, NULL, 0},
   {"hg38_wg", "hg38_wg.updecx", MS_HF_BASE, "CpG upscaling (whole genome)",
-   "UPDEC2", "700 units over 29,401,795 CpGs", 2960796438ULL, 0},
+   "UPDEC2", "700 units over 29,401,795 CpGs", 2960796438ULL, 0, NULL, 0},
 
-  {"celltypes_cg", "human_hg38_celltypes.cg", MS_GH_BASE, "classify / deconv input",
-   ".cg", "4 typed Loyfer cells", 6402003, 1},
-  {"celltypes_idx", "human_hg38_celltypes.cg.idx", MS_GH_BASE, "cell names for the above",
-   ".cg.idx", "4 sample names", 96, 1},
-  {"immune_mixture", "human_hg38_immune_mixture.cg", MS_GH_BASE, "deconv input",
-   ".cg", "simulated 70% macrophage / 30% monocyte", 3644798, 1},
-  {"upscale_query", "human_hg38_test.cg", MS_GH_BASE, "upscale input",
-   ".cg", "~0.1% coverage sparse methylome", 103698, 1},
-  {"upscale_truth", "human_hg38_test.truth.cg", MS_GH_BASE, "upscale ground truth",
-   ".cg", "dense calls for scoring the above", 1944547, 1},
+  {"human_hg38_celltypes", "human_hg38_celltypes.cg", MS_GH_BASE,
+   "classify / deconv input", ".cg", "4 typed Loyfer cells", 6402003, 1,
+   "human_hg38_celltypes.cg.idx", 96},
+  {"human_hg38_immune_mixture", "human_hg38_immune_mixture.cg", MS_GH_BASE,
+   "deconv input", ".cg", "simulated 70% macrophage / 30% monocyte", 3644798, 1,
+   NULL, 0},
+  {"human_hg38_test", "human_hg38_test.cg", MS_GH_BASE,
+   "upscale input", ".cg", "~0.1% coverage sparse methylome", 103698, 1, NULL, 0},
+  {"human_hg38_test.truth", "human_hg38_test.truth.cg", MS_GH_BASE,
+   "upscale ground truth", ".cg", "dense calls for scoring the above", 1944547, 1,
+   NULL, 0},
 };
 static const int N_CATALOG = (int)(sizeof(CATALOG) / sizeof(CATALOG[0]));
 
@@ -91,16 +103,17 @@ static void human(uint64_t n, char *out, size_t cap) {
   snprintf(out, cap, i ? "%.1f %s" : "%.0f %s", v, u[i]);
 }
 
-/* $METHSCOPE_HOME, else ~/.methscope. Models and .cg fixtures share it, so an
- * example can name one directory. */
+/* $METHSCOPE_DATA_DIR, else ~/.cache/methscope -- the same shape as kycg's
+ * KYCG_DATA_DIR / ~/.cache/kycg. Models and .cg fixtures share one directory,
+ * so an example can name a single path. */
 static const char *store_dir(const char *override) {
   static char buf[4096];
   if (override) return override;
-  const char *env = getenv("METHSCOPE_HOME");
+  const char *env = getenv("METHSCOPE_DATA_DIR");
   if (env && *env) return env;
   const char *home = getenv("HOME");
   if (!home || !*home) fdie("cannot locate HOME; pass --store DIR", NULL);
-  if (snprintf(buf, sizeof(buf), "%s/.methscope", home) >= (int)sizeof(buf))
+  if (snprintf(buf, sizeof(buf), "%s/.cache/methscope", home) >= (int)sizeof(buf))
     fdie("store path is too long", home);
   return buf;
 }
@@ -132,13 +145,15 @@ static uint64_t file_size(const char *path) {
 
 static int usage(void) {
   ms_help(stderr,
-    "Usage: methscope fetch [options] [NAME[,NAME...] | models | data | all]\n\n"
+    "Usage: methscope fetch [options] [NAME ... | models | data | all]\n\n"
     "Download pretrained models (HuggingFace zhou-lab/methscope) and the query\n"
     ".cg example fixtures (GitHub methscope_data) into the local store. With no\n"
     "NAME it lists the catalog and what is already there. Never prompts, so it\n"
     "is safe inside a build or workflow step.\n\n"
-    "  --store DIR   store location (default $METHSCOPE_HOME,\n"
-    "                else ~/.methscope)\n"
+    "Human-facing lines go to stderr; stdout is one absolute path per file, so\n"
+    "$(methscope fetch NAME) resolves to a usable path and re-runs for free.\n\n"
+    "  --store DIR   store location (default $METHSCOPE_DATA_DIR,\n"
+    "                else ~/.cache/methscope)\n"
     "  -f, --force   re-download even if the file is already complete\n"
     "  -n, --dry-run show the plan and exit\n"
     "  -h, --help    show this help\n");
@@ -186,8 +201,8 @@ static void browse(const char *dir) {
 
 #ifndef MS_HAVE_CURL
 /* Built without libcurl: the catalog still browses; only the transfer is gone. */
-static void fetch_one(const ms_model_t *m, const char *dir, int force) {
-  (void)force;
+static void fetch_one(const ms_model_t *m, const char *dir, int force, int quiet) {
+  (void)force; (void)quiet;
   fprintf(stderr, "[methscope] fetch: built without libcurl; download manually:\n"
           "  curl -L -o %s/%s \\\n    %s%s\n", dir, m->file, m->base, m->file);
   exit(1);
@@ -211,7 +226,7 @@ static int on_progress(void *ud, curl_off_t dltotal, curl_off_t dlnow,
 }
 
 /* Download one model to <dir>/<file> via a .part sibling. */
-static void fetch_one(const ms_model_t *m, const char *dir, int force) {
+static void fetch_one(const ms_model_t *m, const char *dir, int force, int quiet) {
   char path[4096], part[4200], url[1024];
   join(path, sizeof(path), dir, m->file);
   if ((size_t)snprintf(part, sizeof(part), "%s.part", path) >= sizeof(part) ||
@@ -219,7 +234,8 @@ static void fetch_one(const ms_model_t *m, const char *dir, int force) {
     fdie("path is too long", m->file);
 
   if (!force && file_size(path) == m->bytes) {
-    fprintf(stderr, "[methscope] fetch: %s already complete\n", m->name);
+    fprintf(stderr, "[methscope] fetch: %s already present\n", m->name);
+    if (!quiet) puts(path);
     return;
   }
   FILE *fp = fopen(part, "wb");
@@ -263,12 +279,13 @@ static void fetch_one(const ms_model_t *m, const char *dir, int force) {
   char sz[32];
   human(got, sz, sizeof(sz));
   fprintf(stderr, "[methscope] fetch: %s -> %s (%s)\n", m->name, path, sz);
+  if (!quiet) puts(path);   /* one line per requested file: $(...) stays usable */
 }
 #endif /* MS_HAVE_CURL */
 
 int main_fetch(int argc, char *argv[]) {
-  const char *want = NULL, *override = NULL;
-  int force = 0, dry = 0;
+  const char *want[16] = {NULL}, *override = NULL;
+  int n_want = 0, force = 0, dry = 0;
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(); return 0; }
@@ -276,27 +293,31 @@ int main_fetch(int argc, char *argv[]) {
     else if (!strcmp(a, "-f") || !strcmp(a, "--force")) force = 1;
     else if (!strcmp(a, "-n") || !strcmp(a, "--dry-run")) dry = 1;
     else if (a[0] == '-') { usage(); fdie("unrecognized or incomplete option", a); }
-    else if (!want) want = a;
+    else if (n_want < (int)(sizeof(want) / sizeof(want[0]))) want[n_want++] = a;
     else fdie("too many arguments", a);
   }
   const char *dir = store_dir(override);
-  if (!want) { browse(dir); return 0; }
+  if (!n_want) { browse(dir); return 0; }
 
   /* Resolve every name before touching the network, so a typo in the third of
    * four names does not leave a half-finished store. */
   const ms_model_t *plan[32];
   int n = 0;
-  if (!strcmp(want, "all") || !strcmp(want, "models") || !strcmp(want, "data")) {
-    int only_data = !strcmp(want, "data"), only_models = !strcmp(want, "models");
-    for (int i = 0; i < N_CATALOG; ++i) {
-      if (only_data && !CATALOG[i].is_data) continue;
-      if (only_models && CATALOG[i].is_data) continue;
-      plan[n++] = &CATALOG[i];
+  for (int w = 0; w < n_want; ++w) {
+    const char *g = want[w];
+    if (!strcmp(g, "all") || !strcmp(g, "models") || !strcmp(g, "data")) {
+      int only_data = !strcmp(g, "data"), only_models = !strcmp(g, "models");
+      for (int i = 0; i < N_CATALOG; ++i) {
+        if (only_data && !CATALOG[i].is_data) continue;
+        if (only_models && CATALOG[i].is_data) continue;
+        if (n == (int)(sizeof(plan) / sizeof(plan[0]))) fdie("too many names", g);
+        plan[n++] = &CATALOG[i];
+      }
+      continue;
     }
-  } else {
     char buf[1024];
-    if (snprintf(buf, sizeof(buf), "%s", want) >= (int)sizeof(buf))
-      fdie("model list is too long", want);
+    if (snprintf(buf, sizeof(buf), "%s", g) >= (int)sizeof(buf))
+      fdie("name list is too long", g);
     for (char *tok = strtok(buf, ","); tok; tok = strtok(NULL, ",")) {
       const ms_model_t *m = find_model(tok);
       if (!m) {
@@ -314,6 +335,7 @@ int main_fetch(int argc, char *argv[]) {
     char path[4096];
     join(path, sizeof(path), dir, plan[i]->file);
     if (force || file_size(path) != plan[i]->bytes) need += plan[i]->bytes;
+    if (plan[i]->sibling) need += plan[i]->sibling_bytes;
   }
   char sz[32];
   human(need, sz, sizeof(sz));
@@ -325,7 +347,16 @@ int main_fetch(int argc, char *argv[]) {
 #ifdef MS_HAVE_CURL
   curl_global_init(CURL_GLOBAL_DEFAULT);
 #endif
-  for (int i = 0; i < n; ++i) fetch_one(plan[i], dir, force);
+  for (int i = 0; i < n; ++i) {
+    fetch_one(plan[i], dir, force, 0);
+    if (plan[i]->sibling) {          /* the .cg.idx is not a separate answer */
+      ms_model_t sib = *plan[i];
+      sib.file = plan[i]->sibling;
+      sib.bytes = plan[i]->sibling_bytes;
+      sib.sibling = NULL;
+      fetch_one(&sib, dir, force, 1);
+    }
+  }
 #ifdef MS_HAVE_CURL
   curl_global_cleanup();
 #endif
