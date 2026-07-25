@@ -333,7 +333,7 @@ static void fetch_one(const ms_model_t *m, const char *dir, int force, int quiet
   curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &code);
   curl_easy_cleanup(h);
   int closed = fclose(fp);
-  fprintf(stderr, "\r");
+  fprintf(stderr, "\r\033[2K");   /* erase the progress line, not just rewind */
 
   if (rc != CURLE_OK || closed) {
     remove(part);
@@ -391,7 +391,6 @@ static int browse_and_fetch(const char *dir, int force, int dry) {
     missing[n] = !have;
     ++n;
   }
-  fputc('\n', stderr);
   int fetch_now = 0;
   int *pick = ms_ui_multiselect("methscope fetch", items, note_p, detail_p,
                                 (size_t)n, 0, &fetch_now);
@@ -412,7 +411,7 @@ static int browse_and_fetch(const char *dir, int force, int dry) {
   if (!np) { fprintf(stderr, "[methscope] fetch: nothing selected\n"); return 0; }
 
   char sz[32]; human(need, sz, sizeof(sz));
-  fprintf(stderr, "\n%s%d file(s), %s to download -> %s%s\n",
+  fprintf(stderr, "%s%d file(s), %s to download -> %s%s\n",
           ms_ui_bold(), np, sz, dir, ms_ui_reset());
   if (dry) return 0;
   if (need && !fetch_now && !ms_ui_confirm("Fetch now?", 1)) {
@@ -456,9 +455,13 @@ int main_fetch(int argc, char *argv[]) {
   }
   const char *dir = store_dir(override);
   if (!n_want) {
+    /* The picker *is* the catalog on a terminal, so printing the listing first
+     * would leave the whole thing behind when the alternate screen closes --
+     * and on stdout, which belongs to the paths. Off a terminal there is no
+     * picker, so the listing is the whole answer. */
+    if (ms_ui_interactive()) return browse_and_fetch(dir, force, dry);
     browse(dir);
-    if (!ms_ui_interactive()) return 0;          /* a script just gets the list */
-    return browse_and_fetch(dir, force, dry);
+    return 0;
   }
 
   /* Resolve every name before touching the network, so a typo in the third of
