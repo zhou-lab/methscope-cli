@@ -235,7 +235,10 @@ example data (GitHub methscope_data)
       about a second.</p>
     <div class="tipwrap">
       <pre><code><span class="cm"># a 40-cell-type chr20 reference, small enough to fetch (39.5 MB)</span>
-<span class="cmd" data-cmd="methscope mrmp-build $(methscope fetch human_hg38_40_celltypes_chr20) chr20_40celltypes.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_40_celltypes_chr20) <span class="tip" data-tip="mrmp" tabindex="0">chr20_40celltypes.mrmp</span></span>
+<span class="cmd" data-cmd="methscope fetch human_hg38_40_celltypes_chr20.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_40_celltypes_chr20.cg</span>
+<span class="cmd" data-cmd="cd ~/.cache/methscope">cd ~/.cache/methscope</span>
+
+<span class="cmd" data-cmd="methscope mrmp-build human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</span>
 <span class="out">samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450
 PNA CpGs=116068 (15.01%)  checksum=9e7f6d292a2ba946</span>
 <span class="cm"># 1.3 s. 40 samples is the ceiling: a pattern packs as a base-3 uint64
@@ -294,8 +297,13 @@ content_checksum     9e7f6d292a2ba946</span>
 
     <h3>Classify <span class="m">— with a shipped model</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
-<span class="cmd" data-cmd="methscope classify $(methscope fetch human_hg38_celltypes) $(methscope fetch hg38_celltype)">methscope <span class="sub tip" data-tip="cmd-classify" tabindex="0">classify</span> $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_celltypes) $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> <span class="tip" data-tip="ubjx" tabindex="0">hg38_celltype</span>)</span>
+      <pre><code><span class="cm"># fetch once into the store, then work there
+# ($METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+<span class="cmd" data-cmd="methscope fetch hg38_celltype.ubjx hg38_sex.ubjx human_hg38_celltypes.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_celltype.ubjx hg38_sex.ubjx human_hg38_celltypes.cg</span>
+<span class="cmd" data-cmd="cd ~/.cache/methscope">cd ~/.cache/methscope</span>
+
+<span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
+<span class="cmd" data-cmd="methscope classify human_hg38_celltypes.cg hg38_celltype.ubjx">methscope <span class="sub tip" data-tip="cmd-classify" tabindex="0">classify</span> human_hg38_celltypes.cg hg38_celltype.ubjx</span>
 <span class="out">cell             prediction_label  confidence
 Oligodendrocyte  ODC               0.915134   # oligodendrocyte
 Pancreas-Beta    Beta              0.930708   # islet beta
@@ -305,7 +313,7 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 # the same call runs a sex / age / any bundled model</span>
 
 <span class="cm"># look inside any bundle without running it</span>
-<span class="cmd" data-cmd="methscope inspect $(methscope fetch hg38_sex)">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_sex)</span>
+<span class="cmd" data-cmd="methscope inspect hg38_sex.ubjx">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> hg38_sex.ubjx</span>
 <span class="out">container  MSBNDL1 — 3 sections, 30,931 bytes
   0  mrmp    fmt2 MRMP definition, 3 states
   1  kind    "logistic" framework mark
@@ -349,8 +357,13 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 
     <h3>Deconvolve <span class="m">— with a shipped reference</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
-<span class="cmd" data-cmd="methscope deconv $(methscope fetch human_hg38_immune_mixture) $(methscope fetch hg38_65celltypes)">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_immune_mixture) $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_65celltypes)</span>
+      <pre><code><span class="cm"># fetch once into the store, then work there
+# ($METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+<span class="cmd" data-cmd="methscope fetch hg38_65celltypes.refx human_hg38_immune_mixture.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_65celltypes.refx human_hg38_immune_mixture.cg</span>
+<span class="cmd" data-cmd="cd ~/.cache/methscope">cd ~/.cache/methscope</span>
+
+<span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
+<span class="cmd" data-cmd="methscope deconv human_hg38_immune_mixture.cg hg38_65celltypes.refx">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> human_hg38_immune_mixture.cg hg38_65celltypes.refx</span>
 <span class="out">cell  … Macrophage  Mono    NK_CD56  …
 1     … 0.7486      0.2370  0.0000   …</span>
 <span class="cm"># truth 70/30; the other 63 types come back ~0</span></code></pre>
@@ -358,10 +371,12 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 
     <h3>Build a reference <span class="m">— your own .refx panel</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># per-cell panel, so each cell must deconvolve to itself</span>
-<span class="cmd" data-cmd="CELLS=$(methscope fetch human_hg38_celltypes)">CELLS=$(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_celltypes)</span>
-<span class="cmd" data-cmd="methscope deconv-build-ref -o self.refx $CELLS $(methscope fetch hg38_celltype)">methscope <span class="sub tip" data-tip="cmd-deconv-build-ref" tabindex="0">deconv-build-ref</span> -o self.refx $CELLS $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_celltype)</span>
-<span class="cmd" data-cmd="methscope deconv $CELLS self.refx">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> $CELLS self.refx</span>
+      <pre><code><span class="cmd" data-cmd="methscope fetch hg38_celltype.ubjx human_hg38_celltypes.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_celltype.ubjx human_hg38_celltypes.cg</span>
+<span class="cmd" data-cmd="cd ~/.cache/methscope">cd ~/.cache/methscope</span>
+
+<span class="cm"># per-cell panel, so each cell must deconvolve to itself</span>
+<span class="cmd" data-cmd="methscope deconv-build-ref -o self.refx human_hg38_celltypes.cg hg38_celltype.ubjx">methscope <span class="sub tip" data-tip="cmd-deconv-build-ref" tabindex="0">deconv-build-ref</span> -o self.refx human_hg38_celltypes.cg hg38_celltype.ubjx</span>
+<span class="cmd" data-cmd="methscope deconv human_hg38_celltypes.cg self.refx">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> human_hg38_celltypes.cg self.refx</span>
 <span class="out"># Oligodendrocyte  Oligodendrocyte=100%
 # Pancreas-Beta    Pancreas-Beta=100%    ... (each 100% itself)</span>
 
@@ -380,9 +395,14 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 
     <h3>Impute <span class="m">— with a shipped decoder</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># impute from ~0.1% coverage, then score against the truth track</span>
-<span class="cmd" data-cmd="methscope upscale -o recon.cg $(methscope fetch hg38_10k1) $(methscope fetch human_hg38_test)">methscope <span class="sub tip" data-tip="cmd-upscale" tabindex="0">upscale</span> -o recon.cg $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_10k1) $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_test)</span>
-<span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 $(methscope fetch human_hg38_test.truth) | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_test.truth) | yame unpack -a - | cut -f4) | awk '$2!=2{t++;if($1==$2)c++} END{printf "%d/%d (%.1f%%)\n",c,t,100*c/t}'</span>
+      <pre><code><span class="cm"># fetch once into the store, then work there
+# ($METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+<span class="cmd" data-cmd="methscope fetch hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg</span>
+<span class="cmd" data-cmd="cd ~/.cache/methscope">cd ~/.cache/methscope</span>
+
+<span class="cm"># impute from ~0.1% coverage, then score against the truth track</span>
+<span class="cmd" data-cmd="methscope upscale -o recon.cg hg38_10k1.updecx human_hg38_test.cg">methscope <span class="sub tip" data-tip="cmd-upscale" tabindex="0">upscale</span> -o recon.cg hg38_10k1.updecx human_hg38_test.cg</span>
+<span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste <(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) <(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk '$2!=2{t++;if($1==$2)c++} END{printf "%d/%d (%.1f%%)\n",c,t,100*c/t}'</span>
 <span class="out">9211/9794 (94.0%)   — 94% accurate from ~0.1% input</span></code></pre>
     </div>
 

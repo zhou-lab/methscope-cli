@@ -21,24 +21,27 @@ git. `methscope fetch` carries the catalog and downloads them; the
 
 ```sh
 methscope fetch                       # list the catalog + what is already local
-methscope fetch hg38_celltype         # a comma-separated list, or a group:
+methscope fetch hg38_celltype.ubjx    # entries are named by their file
 methscope fetch models                # every model
 methscope fetch data                  # every example .cg fixture
 # -> $METHSCOPE_DATA_DIR, else ~/.cache/methscope (--store DIR overrides)
 ```
 
 The catalog covers both the models and the query `.cg` fixtures the examples
-run against. Human-facing lines go to stderr and stdout is one absolute path
-per requested file, so fetching composes:
+run against. Entries are named by their file, so what you ask for is what lands in the
+store. Human-facing lines go to stderr and stdout is one absolute path per
+requested file, so fetching also composes when a script wants a path:
 
 ```sh
-methscope classify $(methscope fetch human_hg38_celltypes) \
-                   $(methscope fetch hg38_celltype)
+methscope fetch hg38_celltype.ubjx human_hg38_celltypes.cg
+cd ~/.cache/methscope
+methscope classify human_hg38_celltypes.cg hg38_celltype.ubjx
 ```
 
 It is idempotent — the first run downloads, every run after just resolves the
 path — and a `.cg`'s `.cg.idx` sibling rides along without being a second name
-to remember.
+to remember. Every entry carries a pinned SHA-256; a download that misses it is
+discarded, and `--verify` re-checks files already in the store.
 
 `fetch` never prompts, so it is safe inside a container build or a workflow
 step, and it is the only command that touches the network. Downloads land on a

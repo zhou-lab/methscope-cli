@@ -65,41 +65,41 @@ typedef struct {
 } ms_model_t;
 
 static const ms_model_t CATALOG[] = {
-  {"hg38_celltype", "hg38_celltype.ubjx", MS_HF_BASE, "cell-type annotation",
+  {"hg38_celltype.ubjx", "hg38_celltype.ubjx", MS_HF_BASE, "cell-type annotation",
    "xgboost", "62 human cell types",
    "e1f738290b05f824873b599894228a33b189ffbda0644ed2aad0e82e7768bc7c", 25661483, 0, NULL, NULL, 0},
-  {"mm10_celltype", "mm10_celltype.ubjx", MS_HF_BASE, "cell-type annotation",
+  {"mm10_celltype.ubjx", "mm10_celltype.ubjx", MS_HF_BASE, "cell-type annotation",
    "xgboost", "41 mouse-brain cell types",
    "3bbdfeabbc59c2e5810eee06c07d24c8fc9826926dd59ddd167ff46b4cb028de", 22498764, 0, NULL, NULL, 0},
-  {"hg38_sex", "hg38_sex.ubjx", MS_HF_BASE, "sex prediction",
+  {"hg38_sex.ubjx", "hg38_sex.ubjx", MS_HF_BASE, "sex prediction",
    "logistic", "Female, Male (XCI markers)",
    "3d1618f6ca24d9a9d5b0fe1806673540515e5f6e7d7950e7c8873a85bb5c742b", 30931, 0, NULL, NULL, 0},
-  {"hg38_65celltypes", "hg38_65celltypes.refx", MS_HF_BASE, "deconvolution (NNLS)",
+  {"hg38_65celltypes.refx", "hg38_65celltypes.refx", MS_HF_BASE, "deconvolution (NNLS)",
    "refx", "65 types = 58 Zhou + 7 Loyfer",
    "ce16678dd410c83e3df1c6f1c9b912a796f69c77722b28fc83c5690df69a6c03", 28900711, 0, NULL, NULL, 0},
-  {"hg38_10k1", "hg38_10k1.updecx", MS_HF_BASE, "CpG upscaling (one block)",
+  {"hg38_10k1.updecx", "hg38_10k1.updecx", MS_HF_BASE, "CpG upscaling (one block)",
    "UPDEC1", "block 10k1, 10,000 CpGs",
    "8f7f2d6d42f64daaba5bf9cede5146fa52c0f62b5c76b3d5c6680c5c7554b1b7", 29075778, 0, NULL, NULL, 0},
-  {"hg38_wg", "hg38_wg.updecx", MS_HF_BASE, "CpG upscaling (whole genome)",
+  {"hg38_wg.updecx", "hg38_wg.updecx", MS_HF_BASE, "CpG upscaling (whole genome)",
    "UPDEC2", "700 units over 29,401,795 CpGs",
    "4aa5968c86aeba228a2001996c6a31501fd98fc40ad383ba956c988101ae0b98", 2960796438ULL, 0, NULL, NULL, 0},
 
-  {"human_hg38_celltypes", "human_hg38_celltypes.cg", MS_GH_BASE,
+  {"human_hg38_celltypes.cg", "human_hg38_celltypes.cg", MS_GH_BASE,
    "classify / deconv input", ".cg", "4 typed Loyfer cells",
    "705973c8cdd475dbee6947952bff38fe4dea7fb44dc400c33fa9df4a0bc29a96", 6402003, 1,
    "human_hg38_celltypes.cg.idx", "ca868d49a73c7adf650bd6d58dbe3bb7e37f1472eef9b125fa195fd7ac69bb02", 96},
-  {"human_hg38_immune_mixture", "human_hg38_immune_mixture.cg", MS_GH_BASE,
+  {"human_hg38_immune_mixture.cg", "human_hg38_immune_mixture.cg", MS_GH_BASE,
    "deconv input", ".cg", "simulated 70% macrophage / 30% monocyte",
    "9806da825b933d2475b3e1c07a5fc399e16279eb9ccd06f5031112304edfdbd4", 3644798, 1,
    NULL, NULL, 0},
-  {"human_hg38_test", "human_hg38_test.cg", MS_GH_BASE,
+  {"human_hg38_test.cg", "human_hg38_test.cg", MS_GH_BASE,
    "upscale input", ".cg", "~0.1% coverage sparse methylome",
    "276fce3f98a2de653009a2cb489e5f9ea699234a1b72aecd1ea3ba03795554a6", 103698, 1, NULL, NULL, 0},
-  {"human_hg38_test.truth", "human_hg38_test.truth.cg", MS_GH_BASE,
+  {"human_hg38_test.truth.cg", "human_hg38_test.truth.cg", MS_GH_BASE,
    "upscale ground truth", ".cg", "dense calls for scoring the above",
    "63dd50e9b86b8abcb4c70c4927fd766026aa29999268f407187c16acfb7f6f6f", 1944547, 1,
    NULL, NULL, 0},
-  {"human_hg38_40_celltypes_chr20", "human_hg38_40_celltypes_chr20.cg", MS_GH_BASE,
+  {"human_hg38_40_celltypes_chr20.cg", "human_hg38_40_celltypes_chr20.cg", MS_GH_BASE,
    "mrmp-build reference", ".cg + .cg.idx",
    "40 Loyfer cell types, chr20 only: 773,477 CpGs, 116,450 patterns. "
    "40 samples is mrmp-build's ceiling (a pattern packs as a base-3 uint64, "
@@ -181,12 +181,16 @@ static int usage(void) {
   return 1;
 }
 
+/* Entries are named by their file, so `fetch X` puts exactly X on disk. The
+ * extension-less stem still resolves, since that is what earlier docs used. */
 static const ms_model_t *find_model(const char *name) {
   for (int i = 0; i < N_CATALOG; ++i)
     if (!strcmp(CATALOG[i].name, name)) return &CATALOG[i];
-  /* accept the file name too, so a docs copy-paste works */
-  for (int i = 0; i < N_CATALOG; ++i)
-    if (!strcmp(CATALOG[i].file, name)) return &CATALOG[i];
+  size_t n = strlen(name);
+  for (int i = 0; i < N_CATALOG; ++i) {
+    const char *f = CATALOG[i].file;
+    if (!strncmp(f, name, n) && f[n] == '.') return &CATALOG[i];
+  }
   return NULL;
 }
 
@@ -226,7 +230,7 @@ static void browse(const char *dir) {
       uint64_t on_disk = file_size(path);
       int ok = on_disk == m->bytes;
       human(m->bytes, sz, sizeof(sz));
-      printf("  %-30s %9s   %s\n", m->name, sz,
+      printf("  %-34s %9s   %s\n", m->name, sz,
              ok ? "present" : on_disk ? "PARTIAL" : "-");
       /* One wrapped detail line: what it is, what runs it, what is inside. */
       printf("      %s \xc2\xb7 %s\n", m->task, m->framework);
