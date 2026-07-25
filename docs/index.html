@@ -171,7 +171,8 @@
       files. <code class="inl">fetch</code> carries the catalog of models <i>and</i> the example
       <code class="inl">.cg</code> fixtures; each workflow below opens by fetching just what it
       needs. It never prompts, so it is safe inside a container build.</p>
-    <pre><code><span class="cm"># conda — installs the `methscope` binary</span>
+    <div class="tipwrap">
+      <pre><code><span class="cm"># conda — installs the `methscope` binary</span>
 <span class="cmd" data-cmd="conda install -c zhou-lab -c conda-forge methscope">conda install -c zhou-lab -c conda-forge methscope</span>
 
 <span class="cm"># or build from source (bundles YAME)</span>
@@ -179,7 +180,7 @@
 <span class="cmd" data-cmd="cd methscope-cli &amp;&amp; make">cd methscope-cli &amp;&amp; make</span>
 
 <span class="cm"># what is available, and what is already local</span>
-<span class="cmd" data-cmd="methscope fetch">methscope <span class="sub">fetch</span></span>
+<span class="cmd" data-cmd="methscope fetch">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span></span>
 <span class="out">store   ~/.cache/methscope
 
 models (HuggingFace zhou-lab/methscope)
@@ -202,11 +203,12 @@ example data (GitHub methscope_data)
 11 entries, 2.9 GB total; 0 B present</span>
 
 <span class="cm"># groups: models | data | all</span>
-<span class="cmd" data-cmd="methscope fetch data">methscope <span class="sub">fetch</span> data</span>
+<span class="cmd" data-cmd="methscope fetch data">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> data</span>
 
 <span class="cm"># where things land: $METHSCOPE_DATA_DIR, else ~/.cache/methscope
 # (same shape as kycg's KYCG_DATA_DIR); --store DIR overrides both</span>
 <span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=/shared/methscope    # optional">export METHSCOPE_DATA_DIR=/shared/methscope    <span class="cm"># optional</span></span></code></pre>
+    </div>
     <p style="margin-top:11px">Downloads land on a <code class="inl">.part</code> sibling and are
       renamed only once the byte count matches the catalog, so an interrupted fetch can never leave
       a short file that later reads as a valid model. Have <code class="inl">yame</code> on
@@ -223,14 +225,15 @@ example data (GitHub methscope_data)
       for hg38.</p>
     <div class="tipwrap">
       <pre><code><span class="cm"># rank every membership pattern over the reference samples</span>
-<span class="cmd" data-cmd="methscope mrmp-build ref.cg panel.mrmp">methscope <span class="sub">mrmp-build</span> ref.cg <span class="tip" data-tip="mrmp" tabindex="0">panel.mrmp</span></span>
+<span class="cmd" data-cmd="methscope mrmp-build 2025_Zhou_MajorPseudo.cg 2025_Zhou_MajorPseudo.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> 2025_Zhou_MajorPseudo.cg \
+  <span class="tip" data-tip="mrmp" tabindex="0">2025_Zhou_MajorPseudo.mrmp</span></span>
 <span class="out">samples=35  CpGs=29401795  distinct patterns=2345190 (+PNA)  candidates=2345190
 PNA CpGs=2559840 (8.71%)  checksum=61d3a9e508cea26a</span>
 
 <span class="cm"># what it is: dimensions, the binstring parameters, the PNA share</span>
-<span class="cmd" data-cmd="methscope inspect panel.mrmp">methscope <span class="sub">inspect</span> panel.mrmp</span>
+<span class="cmd" data-cmd="methscope inspect 2025_Zhou_MajorPseudo.mrmp">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> 2025_Zhou_MajorPseudo.mrmp</span>
 <span class="out">format               MRMPIDX1 v1
-reference            ref.cg
+reference            2025_Zhou_MajorPseudo.cg
 samples              35
 cpgs                 29401795
 distinct_candidates  2345190
@@ -241,7 +244,7 @@ content_checksum     61d3a9e508cea26a
 pna_pattern          22222222222222222222222222222222222</span>
 
 <span class="cm"># --patterns adds the ranked head; --top sets how many (default 20)</span>
-<span class="cmd" data-cmd="methscope inspect panel.mrmp --patterns --top 3">methscope <span class="sub">inspect</span> panel.mrmp --patterns --top 3</span>
+<span class="cmd" data-cmd="methscope inspect 2025_Zhou_MajorPseudo.mrmp --patterns --top 3">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> 2025_Zhou_MajorPseudo.mrmp --patterns --top 3</span>
 <span class="out">#pattern                              label  count      (top 3 of 2345190)
 11111111111111111111111111111111111   P1     10736116
 11111111111011111111111111111111111   P2      2859193
@@ -249,7 +252,7 @@ pna_pattern          22222222222222222222222222222222222</span>
 
 <span class="cm"># the runtime .cm mask — inspection / interop only, not a pipeline step:
 # upscale-train materializes it into the bundle from the .mrmp itself</span>
-<span class="cmd" data-cmd="methscope mrmp-export --top 1000 panel.mrmp panel.cm">methscope <span class="sub">mrmp-export</span> --top 1000 panel.mrmp panel.cm</span></code></pre>
+<span class="cmd" data-cmd="methscope mrmp-export --top 1000 2025_Zhou_MajorPseudo.mrmp 2025_Zhou_MajorPseudo.cm">methscope <span class="sub tip" data-tip="cmd-mrmp-export" tabindex="0">mrmp-export</span> --top 1000 2025_Zhou_MajorPseudo.mrmp 2025_Zhou_MajorPseudo.cm</span></code></pre>
       <span class="tipbox" data-tip="mrmp">
         <b>MRMPIDX1</b> <span class="tdim">— every candidate ranked, no top-K baked in</span>
 <pre class="tsch"><span class="c">hg38 · 35 samples · 29,401,795 CpGs · 2,345,190 patterns · 155 MB</span>
@@ -264,7 +267,7 @@ pna_pattern          22222222222222222222222222222222222</span>
       </span>
     </div>
     <p style="margin-top:11px">Ranking is deterministic (count desc, key asc), so a build is
-      byte-reproducible from the reference alone — hover <code class="inl">panel.mrmp</code> for the
+      byte-reproducible from the reference alone — hover the <code class="inl">.mrmp</code> for the
       on-disk scheme. The artifact is the build pipeline's currency:
       <code class="inl">upscale-featurize</code>, <code class="inl">upscale-set-units</code>, and
       <code class="inl">upscale-train</code> all read it, so the sidecar's group map and the mask a
@@ -282,9 +285,9 @@ pna_pattern          22222222222222222222222222222222222</span>
       <pre><code><span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
 <span class="cmd" data-cmd="methscope classify \
   $(methscope fetch human_hg38_celltypes) \
-  $(methscope fetch hg38_celltype)">methscope <span class="sub">classify</span> \
-  $(methscope <span class="sub">fetch</span> human_hg38_celltypes) \
-  $(methscope <span class="sub">fetch</span> <span class="tip" data-tip="ubjx" tabindex="0">hg38_celltype</span>)</span>
+  $(methscope fetch hg38_celltype)">methscope <span class="sub tip" data-tip="cmd-classify" tabindex="0">classify</span> \
+  $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_celltypes) \
+  $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> <span class="tip" data-tip="ubjx" tabindex="0">hg38_celltype</span>)</span>
 <span class="out">cell             prediction_label  confidence
 Oligodendrocyte  ODC               0.915134   # oligodendrocyte
 Pancreas-Beta    Beta              0.930708   # islet beta
@@ -294,7 +297,7 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 # the same call runs a sex / age / any bundled model</span>
 
 <span class="cm"># look inside any bundle without running it</span>
-<span class="cmd" data-cmd="methscope inspect $(methscope fetch hg38_sex)">methscope <span class="sub">inspect</span> $(methscope <span class="sub">fetch</span> hg38_sex)</span>
+<span class="cmd" data-cmd="methscope inspect $(methscope fetch hg38_sex)">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_sex)</span>
 <span class="out">container  MSBNDL1 — 3 sections, 30,931 bytes
   0  mrmp    fmt2 MRMP definition, 3 states
   1  kind    "logistic" framework mark
@@ -318,15 +321,17 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
     </div>
 
     <h3>Train <span class="m">— fit your own classifier</span></h3>
-    <pre><code><span class="cm"># features + labels -> one runnable bundle, in a single step</span>
+    <div class="tipwrap">
+      <pre><code><span class="cm"># features + labels -> one runnable bundle, in a single step</span>
 <span class="cmd" data-cmd="methscope classify-train -l labels.txt \
-  -o hg38_celltype.ubjx query.cg panel.mrmp">methscope <span class="sub">classify-train</span> -l labels.txt \
-  -o hg38_celltype.ubjx query.cg panel.mrmp</span>
+  -o hg38_celltype.ubjx query.cg 2025_Zhou_MajorPseudo.mrmp">methscope <span class="sub tip" data-tip="cmd-classify-train" tabindex="0">classify-train</span> -l labels.txt \
+  -o hg38_celltype.ubjx query.cg 2025_Zhou_MajorPseudo.mrmp</span>
 <span class="cm"># --framework xgboost | logistic | threshold</span>
 
 <span class="cm"># the same wrapping by hand: inner model + its MRMP (+ labels) -> one file</span>
-<span class="cmd" data-cmd="methscope bundle -m panel.cm -l labels.txt model.ubj -o model.ubjx">methscope <span class="sub">bundle</span> -m panel.cm -l labels.txt model.ubj -o model.ubjx</span>
-<span class="cmd" data-cmd="methscope unbundle model.ubjx        # -&gt; back to its parts">methscope <span class="sub">unbundle</span> model.ubjx        <span class="cm"># -> back to its parts</span></span></code></pre>
+<span class="cmd" data-cmd="methscope bundle -m 2025_Zhou_MajorPseudo.cm -l labels.txt model.ubj -o model.ubjx">methscope <span class="sub tip" data-tip="cmd-bundle" tabindex="0">bundle</span> -m 2025_Zhou_MajorPseudo.cm -l labels.txt model.ubj -o model.ubjx</span>
+<span class="cmd" data-cmd="methscope unbundle model.ubjx        # -&gt; back to its parts">methscope <span class="sub tip" data-tip="cmd-unbundle" tabindex="0">unbundle</span> model.ubjx        <span class="cm"># -> back to its parts</span></span></code></pre>
+    </div>
     <p style="margin-top:11px">Linear models store per-feature training means, so missing/sparse
       betas are imputed at classify time — accurate even at &lt;1% genome coverage.</p>
   </section>
@@ -337,28 +342,32 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
       patterns and is robust to extreme sparsity, so it works on cfDNA-scale coverage.</p>
 
     <h3>Deconvolve <span class="m">— with a shipped reference</span></h3>
-    <pre><code><span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
+    <div class="tipwrap">
+      <pre><code><span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
 <span class="cmd" data-cmd="methscope deconv \
   $(methscope fetch human_hg38_immune_mixture) \
-  $(methscope fetch hg38_65celltypes)">methscope <span class="sub">deconv</span> \
-  $(methscope <span class="sub">fetch</span> human_hg38_immune_mixture) \
-  $(methscope <span class="sub">fetch</span> hg38_65celltypes)</span>
+  $(methscope fetch hg38_65celltypes)">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> \
+  $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_immune_mixture) \
+  $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_65celltypes)</span>
 <span class="out">cell  … Macrophage  Mono    NK_CD56  …
 1     … 0.7486      0.2370  0.0000   …</span>
 <span class="cm"># truth 70/30; the other 63 types come back ~0</span></code></pre>
+    </div>
 
     <h3>Build a reference <span class="m">— your own .refx panel</span></h3>
-    <pre><code><span class="cm"># per-cell panel, so each cell must deconvolve to itself</span>
-<span class="cmd" data-cmd="CELLS=$(methscope fetch human_hg38_celltypes)">CELLS=$(methscope <span class="sub">fetch</span> human_hg38_celltypes)</span>
+    <div class="tipwrap">
+      <pre><code><span class="cm"># per-cell panel, so each cell must deconvolve to itself</span>
+<span class="cmd" data-cmd="CELLS=$(methscope fetch human_hg38_celltypes)">CELLS=$(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_celltypes)</span>
 <span class="cmd" data-cmd="methscope deconv-build-ref -o self.refx \
-  $CELLS $(methscope fetch hg38_celltype)">methscope <span class="sub">deconv-build-ref</span> -o self.refx \
-  $CELLS $(methscope <span class="sub">fetch</span> hg38_celltype)</span>
-<span class="cmd" data-cmd="methscope deconv $CELLS self.refx">methscope <span class="sub">deconv</span> $CELLS self.refx</span>
+  $CELLS $(methscope fetch hg38_celltype)">methscope <span class="sub tip" data-tip="cmd-deconv-build-ref" tabindex="0">deconv-build-ref</span> -o self.refx \
+  $CELLS $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_celltype)</span>
+<span class="cmd" data-cmd="methscope deconv $CELLS self.refx">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> $CELLS self.refx</span>
 <span class="out"># Oligodendrocyte  Oligodendrocyte=100%
 # Pancreas-Beta    Pancreas-Beta=100%    ... (each 100% itself)</span>
 
 <span class="cm"># --matrix emits the raw record x pattern beta TSV instead of a .refx</span>
-<span class="cmd" data-cmd="methscope deconv-build-ref --matrix query.cg panel.mrmp">methscope <span class="sub">deconv-build-ref</span> --matrix query.cg panel.mrmp</span></code></pre>
+<span class="cmd" data-cmd="methscope deconv-build-ref --matrix query.cg 2025_Zhou_MajorPseudo.mrmp">methscope <span class="sub tip" data-tip="cmd-deconv-build-ref" tabindex="0">deconv-build-ref</span> --matrix query.cg 2025_Zhou_MajorPseudo.mrmp</span></code></pre>
+    </div>
     <p style="margin-top:11px">The 65-type reference spans 58 Zhou single-cell + 7 Loyfer
       organ/blood types for whole-body / cfDNA deconvolution.</p>
   </section>
@@ -370,52 +379,54 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
       pipeline, and every step reads the same <code class="inl">.mrmp</code>.</p>
 
     <h3>Impute <span class="m">— with a shipped decoder</span></h3>
-    <pre><code><span class="cm"># impute from ~0.1% coverage, then score against the truth track</span>
+    <div class="tipwrap">
+      <pre><code><span class="cm"># impute from ~0.1% coverage, then score against the truth track</span>
 <span class="cmd" data-cmd="methscope upscale -o recon.cg \
   $(methscope fetch hg38_10k1) \
-  $(methscope fetch human_hg38_test)">methscope <span class="sub">upscale</span> -o recon.cg \
-  $(methscope <span class="sub">fetch</span> hg38_10k1) \
-  $(methscope <span class="sub">fetch</span> human_hg38_test)</span>
+  $(methscope fetch human_hg38_test)">methscope <span class="sub tip" data-tip="cmd-upscale" tabindex="0">upscale</span> -o recon.cg \
+  $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_10k1) \
+  $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_test)</span>
 <span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) \
       &lt;(yame rowsub -I 1_10000 $(methscope fetch human_hg38_test.truth) \
          | yame unpack -a - | cut -f4) \
   | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) \
-      &lt;(yame rowsub -I 1_10000 $(methscope <span class="sub">fetch</span> human_hg38_test.truth) \
+      &lt;(yame rowsub -I 1_10000 $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_test.truth) \
          | yame unpack -a - | cut -f4) \
   | awk '$2!=2{t++;if($1==$2)c++} END{printf "%d/%d (%.1f%%)\n",c,t,100*c/t}'</span>
 <span class="out">9211/9794 (94.0%)   — 94% accurate from ~0.1% input</span></code></pre>
+    </div>
 
     <h3>Train <span class="m">— featurize, group into units, fit (CUDA)</span></h3>
     <div class="tipwrap">
       <pre><code><span class="cm"># 1. featurize the truth atlas -> sampling/truth sidecar</span>
 <span class="cmd" data-cmd="methscope upscale-featurize --embed-truth \
-  atlas.cg panel.mrmp train.msur">methscope <span class="sub">upscale-featurize</span> --embed-truth \
-  atlas.cg panel.mrmp <span class="tip" data-tip="msur" tabindex="0">train.msur</span></span>
+  atlas.cg 2025_Zhou_MajorPseudo.mrmp train.msur">methscope <span class="sub tip" data-tip="cmd-upscale-featurize" tabindex="0">upscale-featurize</span> --embed-truth \
+  atlas.cg 2025_Zhou_MajorPseudo.mrmp <span class="tip" data-tip="msur" tabindex="0">train.msur</span></span>
 
 <span class="cm"># 2. group CpGs into processing units</span>
 <span class="cmd" data-cmd="methscope upscale-set-units --unit-cpgs 16384 \
-  panel.mrmp units.msui">methscope <span class="sub">upscale-set-units</span> --unit-cpgs 16384 \
-  panel.mrmp <span class="tip" data-tip="msui" tabindex="0">units.msui</span></span>
+  2025_Zhou_MajorPseudo.mrmp units.msui">methscope <span class="sub tip" data-tip="cmd-upscale-set-units" tabindex="0">upscale-set-units</span> --unit-cpgs 16384 \
+  2025_Zhou_MajorPseudo.mrmp <span class="tip" data-tip="msui" tabindex="0">units.msui</span></span>
 
 <span class="cm"># 3. train on CUDA; --split pins the exact held-out cells,
 #    else cells are cut 70/15/15 by --seed</span>
 <span class="cmd" data-cmd="make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80">make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80</span>
 <span class="cmd" data-cmd="methscope upscale-train -i train.msur \
-  --units units.msui --mrmp panel.mrmp \
+  --units units.msui --mrmp 2025_Zhou_MajorPseudo.mrmp \
   -o model.updecx --work-dir work/ \
-  --split cells.tsv">methscope <span class="sub">upscale-train</span> -i train.msur \
-  --units units.msui --mrmp panel.mrmp \
+  --split cells.tsv">methscope <span class="sub tip" data-tip="cmd-upscale-train" tabindex="0">upscale-train</span> -i train.msur \
+  --units units.msui --mrmp 2025_Zhou_MajorPseudo.mrmp \
   -o <span class="tip" data-tip="updecx" tabindex="0">model.updecx</span> --work-dir work/ \
   --split cells.tsv</span>
 <span class="cm"># split rows: &lt;cell_index&gt;TAB&lt;train|val|test&gt;, one per source cell</span>
 
 <span class="cm"># inspect reads every build artifact, detected from its magic</span>
-<span class="cmd" data-cmd="methscope inspect units.msui">methscope <span class="sub">inspect</span> units.msui</span>
+<span class="cmd" data-cmd="methscope inspect units.msui">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> units.msui</span>
 <span class="out">format            MSUIDX1 v1
 cpgs              29401795  (26841955 real + 2559840 PNA)
 units             700  (157 PNA)
 real_memberships  2345190</span>
-<span class="cmd" data-cmd="methscope inspect train.msur">methscope <span class="sub">inspect</span> train.msur</span>
+<span class="cmd" data-cmd="methscope inspect train.msur">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> train.msur</span>
 <span class="out">format            MSURAW2 v2
 cells             207
 replicates        100
@@ -470,6 +481,362 @@ embedded_truth    yes (trainable)</span></code></pre>
   Built on <a href="https://github.com/zhou-lab/YAME">YAME</a>.
   AGPL-3.0-or-later · <a href="https://github.com/zhou-lab/methscope-cli">github.com/zhou-lab/methscope-cli</a>
 </footer>
+
+<div id="helpnotes">
+    <!-- HELP:BEGIN (generated by docs/sync_help.py) -->
+      <span class="tipbox" data-tip="cmd-bundle">
+        <b>methscope bundle</b>
+<pre class="tsch">Usage:
+  methscope bundle -m &lt;ref.mrmp&gt; -o &lt;out&gt; &lt;model&gt;
+
+Purpose:
+  Bundle a model with the MRMP definition it needs into one self-contained
+  file, so a query .cg can be featurized + run without a separate .mrmp.
+  Works for any model; by convention give the output an &#x27;x&#x27; suffix:
+    booster.ubj  -&gt; booster.ubjx   (predict)
+    model.updec  -&gt; model.updecx   (upscale)
+
+Options:
+  -m &lt;ref.mrmp&gt;   the MRMP definition (a YAME .cm) to bundle (required).
+  -k &lt;kind&gt;       framework mark to record (xgboost/threshold/logistic); required
+                  for a classifier .ubjx that `predict` will run (predict rejects
+                  an unmarked bundle). Also used to re-stamp an existing model.
+  -l &lt;meta.tsv&gt;   embed class labels (a &#x27;labels&lt;TAB&gt;l1,l2,...&#x27; line) into the
+                  booster before bundling — for a raw (e.g. R-exported) .ubj.
+  -O &lt;outcpg.cm&gt;  output-CpG locations (upscale only): a YAME mask marking the
+                  CpGs the model imputes. With it, `upscale` writes a full-genome
+                  .cg; without it, a dense block .cg.
+  -o &lt;out&gt;        output bundle path (required).
+  -h              Show this help message.</pre>
+      </span>
+      <span class="tipbox" data-tip="cmd-classify">
+        <b>methscope classify</b>
+<pre class="tsch">Usage:
+  methscope classify [options] &lt;query.cg&gt; &lt;model.ubjx&gt;
+  methscope classify [options] &lt;query.cg&gt; &lt;ref.mrmp&gt; &lt;booster.ubj&gt;
+
+Purpose:
+  Predict a label (cell type, sex, ... — whatever the model was trained on)
+  and a confidence score for each query record, by featurizing the query
+  against the MRMP reference and running the booster.
+
+Arguments:
+  &lt;query.cg&gt;     Query methylome(s); &#x27;-&#x27; reads a .cg stream from stdin
+                 (cells are then named 1,2,3,... as a stream has no index).
+  &lt;model.ubjx&gt;   A self-contained bundle of the booster + its MRMP (from
+                 `train -o model.ubjx` or `bundle`) — the recommended
+                 single-file form.
+  &lt;ref.mrmp&gt;     MRMP pattern definition (a YAME .cm) to featurize the query
+                 (loose form). A bundle (.ubjx/.updecx) also works here.
+  &lt;booster.ubj&gt;  Loose booster with class labels embedded (see train / bundle -l).
+
+Options:
+  -o &lt;out.tsv&gt;   Write output to a file instead of stdout.
+  --probs        Append one column per class with its predicted probability.
+  --no-header    Suppress the header line.
+  -h             Show this help message.
+
+Output columns:
+  cell  prediction_label  confidence  [&lt;class1&gt; &lt;class2&gt; ... with --probs]</pre>
+      </span>
+      <span class="tipbox" data-tip="cmd-classify-train">
+        <b>methscope classify-train</b>
+<pre class="tsch">Usage:
+  methscope classify-train -l &lt;labels.txt&gt; -o &lt;out.ubjx&gt; [options] &lt;query.cg&gt; &lt;ref.mrmp&gt;
+
+Purpose:
+  Train a multiclass classifier for any per-record label (cell type, sex,
+  ...; fixed hyperparameters, no grid search) and write a self-describing
+  model with the class labels embedded.
+
+Arguments:
+  &lt;query.cg&gt;   Training methylome(s), one record per sample.
+  &lt;ref.mrmp&gt;   MRMP pattern definition (a YAME .cm) to featurize the query.
+               A bundle (.ubjx/.updecx) also works; its MRMP is used.
+               Features are the MRMP states; the &#x27;Pna&#x27; NA-background state is
+               excluded by default (see --include-pna).
+
+Options:
+  -l &lt;labels.txt&gt;  One label per query record, in query order (required).
+  -o &lt;out.ubjx&gt;    Output model path (required). A &#x27;.ubjx&#x27; name writes a
+                   self-contained bundle (booster + MRMP) that `predict` can
+                   run directly; a plain &#x27;.ubj&#x27; writes just the loose booster.
+                   The bundled MRMP is TRIMMED to exactly the patterns used
+                   (others folded into &#x27;Pna&#x27;), and `predict` uses that same set.
+  -p &lt;npattern&gt;    Use the first N patterns by RECURRENCE RANK. Only meaningful
+                   when patterns are named P1,P2,... (auto MRMPs); for curated
+                   named markers (e.g. Xa_hi/Xa_lo) leave it unset. Default:
+                   all non-&#x27;Pna&#x27; states.
+  --include-pna    Also use the &#x27;Pna&#x27; NA-background state as a feature
+                   (default: excluded).
+  --framework &lt;f&gt;  Model framework (default: xgboost):
+                     xgboost    gradient-boosted trees (multiclass).
+                     threshold  interpretable binary linear rule; per-feature
+                                weight = class-mean difference, decision at the
+                                midpoint of the two class score-centroids.
+                     logistic   binary L2-regularized logistic regression.
+                   threshold/logistic are binary-only and require a .ubjx output.
+  -n &lt;nrounds&gt;     Boosting rounds, xgboost only (default: round(sqrt(n_cells))).
+  -h               Show this help message.</pre>
+      </span>
+      <span class="tipbox" data-tip="cmd-deconv">
+        <b>methscope deconv</b>
+<pre class="tsch">Usage:
+  methscope deconv [options] &lt;mixture.cg&gt; &lt;panel.refx&gt;
+
+Purpose:
+  Estimate per-cell cell-type proportions by non-negative least squares
+  (NNLS) deconvolution against a cell-type signature reference.
+
+Arguments:
+  &lt;mixture.cg&gt;     Mixture methylome(s); &#x27;-&#x27; reads a .cg stream from stdin
+                   (cells are then named 1,2,3,... as a stream has no index).
+  &lt;panel.refx&gt;     A self-contained reference bundle (signature + MRMP) from
+                   `matrix --refx`. &#x27;-&#x27; reads the .refx from stdin, so you can
+                   build + deconvolve in one pipe:
+                     matrix --refx -o - pseudobulk.cg ref.mrmp \
+                       | deconv mixture.cg -
+
+Options:
+  -o &lt;out.tsv&gt;     Write output to a file instead of stdout.
+  --min-cov &lt;k&gt;    Per cell, only use patterns with &gt;= k covered CpGs in the
+                   mixture (default: 1). Higher k (e.g. 3) drops thinly-
+                   covered, noisy patterns -- helps on sparse input.
+  --no-header      Suppress the header line.
+  -h               Show this help message.
+
+Output:
+  One row per mixture cell; columns are cell types (proportions summing to 1).</pre>
+      </span>
+      <span class="tipbox" data-tip="cmd-deconv-build-ref">
+        <b>methscope deconv-build-ref</b>
+<pre class="tsch">Usage:
+  methscope deconv-build-ref [options] -o &lt;out.refx&gt; &lt;celltypes.cg&gt; &lt;ref.mrmp&gt;
+
+Purpose:
+  Build a .refx deconvolution reference: summarize each cell type against the
+  MRMP and bundle the signature matrix + its MRMP into one self-contained file
+  for `deconv mixture.cg out.refx`. Build it on per-cell-type pseudobulks so
+  rows are cell types. The reference is imputed NaN-free: NA betas take the
+  per-pattern median across cell types, and patterns &gt;30% NA are dropped.
+
+Arguments:
+  &lt;celltypes.cg&gt;  One .cg record per cell type (e.g. pseudobulks); &#x27;-&#x27; reads a
+                  stream from stdin (records named 1,2,3,... — no index).
+  &lt;ref.mrmp&gt;      MRMP pattern definition (a YAME .cm). A bundle (.ubjx/.updecx)
+                  is also accepted; its attached MRMP is used automatically.
+
+Options:
+  -o &lt;out.refx&gt;  Output reference bundle (required unless --matrix).
+  --matrix       Emit the raw record x pattern beta TSV instead of a .refx (the
+                 featurization; also reachable with `yame summary`). &#x27;--tsv&#x27; too.
+  --min-cov &lt;k&gt;  NA any beta backed by &lt; k covered CpGs (N_overlap). Default 1.
+  --no-header    Suppress the header line (--matrix TSV only).
+  -h, --help     Show this help message.</pre>
+      </span>
+      <span class="tipbox" data-tip="cmd-fetch">
+        <b>methscope fetch</b>
+<pre class="tsch">Usage: methscope fetch [options] [NAME ... | models | data | all]
+
+Download pretrained models (HuggingFace zhou-lab/methscope) and the query
+.cg example fixtures (GitHub methscope_data) into the local store. With no
+NAME it lists the catalog and what is already there. Never prompts, so it
+is safe inside a build or workflow step.
+
+Human-facing lines go to stderr; stdout is one absolute path per file, so
+$(methscope fetch NAME) resolves to a usable path and re-runs for free.
+
+  --store DIR   store location (default $METHSCOPE_DATA_DIR,
+                else ~/.cache/methscope)
+  -f, --force   re-download even if the file is already complete
+  -n, --dry-run show the plan and exit
+  -h, --help    show this help</pre>
+      </span>
+      <span class="tipbox" data-tip="cmd-inspect">
+        <b>methscope inspect</b>
+<pre class="tsch">Usage:
+  methscope inspect &lt;FILE&gt;
+
+Purpose:
+  Describe any methscope artifact without running it. The format is detected
+  from its magic:
+    .ubjx/.updecx/.refx  bundle: kind mark, section layout, model breakdown
+    .mrmp   MRMPIDX1  pattern set: dimensions, binstring parameters, top ranks
+    .msui   MSUIDX1   processing-unit index: units, memberships, CpG split
+    .msur   MSURAW2   training sidecar: cells, replicates, embedded truth
+
+Options:
+  --patterns   .mrmp only: list the top-ranked patterns
+  --top K      .mrmp only: how many to list (default 20)
+  -h           Show this help message.</pre>
+      </span>
+      <span class="tipbox" data-tip="cmd-mrmp-build">
+        <b>methscope mrmp-build</b>
+<pre class="tsch">Usage: methscope mrmp-build [options] REF.cg OUT.mrmp
+
+Reproduce YAME `rowop -o binstring` per CpG over the reference samples,
+count exact membership patterns, and rank them (count desc, key asc).
+Every candidate is ranked and every CpG keeps its exact rank, so the
+top-K cut belongs to the consumer, not here. The all-&#x27;2&#x27; sentinel is PNA.
+
+  REF.cg             discretized format-3 reference .cg (needs &lt;ref&gt;.idx)
+  OUT.mrmp           output MRMPIDX1 artifact
+
+  --mincov N         binstring -c (default 1)
+  --beta-threshold X binstring -b (default 0.5)
+  --max-ambig-frac X binstring -m (default 1.0 = off)
+  --min-major-fold X binstring -M (default 10)
+  --force            overwrite an existing output</pre>
+      </span>
+      <span class="tipbox" data-tip="cmd-mrmp-export">
+        <b>methscope mrmp-export</b>
+<pre class="tsch">Usage: methscope mrmp-export [options] IN.mrmp OUT.cm
+
+  IN.mrmp          MRMPIDX1 artifact
+  OUT.cm           per-CpG P1..PK/Pna labels as a YAME format-2 mask
+
+  --top K          rank cut for the mask and --patterns (default 1000)
+  --patterns TSV   also write top-K patterns: string&lt;tab&gt;P&lt;rank&gt;&lt;tab&gt;count
+  --counts TSV     also write every pattern (incl. PNA): count&lt;tab&gt;string
+  --pna-label NAME background label in the mask (default Pna)</pre>
+      </span>
+      <span class="tipbox" data-tip="cmd-unbundle">
+        <b>methscope unbundle</b>
+<pre class="tsch">Usage:
+  methscope unbundle [-o &lt;model_out&gt;] [--mrmp &lt;mrmp_out&gt;] &lt;bundle&gt;
+
+Purpose:
+  Unpack a bundle (.ubjx / .updecx / .refx) into its inner model, its MRMP,
+  and (if present) the output-CpG mask.
+
+  With no -o/--mrmp, output names are derived from the bundle path (the
+  original .mrmp filename is not stored): drop the &#x27;x&#x27; from the extension for
+  the model, and add sibling suffixes for the rest --
+    foo.ubjx   -&gt; foo.ubj   + foo.mrmp  (+ foo.outcpg.cm if present)
+    foo.updecx -&gt; foo.updec + foo.mrmp
+    foo.refx   -&gt; foo.ref   + foo.mrmp
+
+Options:
+  -o &lt;model_out&gt;    write the inner model here (default: derived, see above).
+  --mrmp &lt;mrmp_out&gt; write the bundled MRMP (.cm) here (default: derived).
+  -h                Show this help message.</pre>
+      </span>
+      <span class="tipbox" data-tip="cmd-upscale">
+        <b>methscope upscale</b>
+<pre class="tsch">Usage:
+  methscope upscale [options] &lt;model.updec|.updecx&gt; [input]
+
+Purpose:
+  Impute CpG methylation from a sparse methylome. Unified UPDEC2 models
+  predict the whole genome; legacy UPDEC1 block models remain readable.
+  Both inference paths are pure C and require neither CUDA nor BLAS.
+
+Arguments:
+  &lt;model&gt;   A bare decoder (.updec/.updec2) OR a bundle with the MRMP attached
+            (.updecx, from `bundle`). The form selects the input below.
+  [input]   For .updec : a feature TSV (one row per sample, n_in numeric cols).
+            For .updecx: a query .cg, featurized internally against the bundled
+            MRMP. &#x27;-&#x27; or omitted reads from stdin; for .updec a header row is
+            auto-detected and empty/NA fields are imputed with the model means.
+
+Options:
+  -o &lt;out&gt;   Write output to a file instead of stdout (.cg is binary -- use -o).
+  --probs    Emit per-CpG probabilities as TSV instead of a .cg of 0/1 calls.
+  -h         Show this help message.
+
+Output:
+  A YAME .cg (format 6), one record per input sample. UPDEC2 output is always
+  in whole-genome CpG order. For legacy UPDEC1, if the bundle carries an
+  outcpg.cm (the imputed-CpG locations), the .cg spans the whole genome with the
+  block&#x27;s CpGs called (no NA) and the rest NA; otherwise a dense block of n_out
+  CpGs. With --probs, a TSV of per-CpG probabilities (one row per sample).</pre>
+      </span>
+      <span class="tipbox" data-tip="cmd-upscale-featurize">
+        <b>methscope upscale-featurize</b>
+<pre class="tsch">Usage: methscope upscale-featurize [options] TRUTH.cg IN.mrmp OUT.msur
+
+Create a compact exact-YAME sampling sidecar for global upscale training.
+The original TRUTH.cg remains the truth store and is never copied.
+
+  TRUTH.cg         continuous format-3 YAME .cg truth store
+  IN.mrmp          MRMPIDX1 artifact (preferred) or an exported .cm
+  OUT.msur         output sidecar
+
+Options:
+  --reps N         deterministic simulations, seeds 1..N (default 100)
+  --sample N       CpGs retained per cell/replicate (default 29000)
+  --patterns N     retain feature summaries P1..PN (default 1000)
+  --in-memory      inflate the truth store once and reuse it for all replicates
+  --embed-truth    store cell-major beta as uint16 (65535=missing)
+  --manifest PATH  write provenance TSV (default OUT.msur.tsv)
+  -h, --help       show this help</pre>
+      </span>
+      <span class="tipbox" data-tip="cmd-upscale-set-units">
+        <b>methscope upscale-set-units</b>
+<pre class="tsch">Usage: methscope upscale-set-units [options] IN.mrmp OUT.msui
+       methscope upscale-set-units --binstrings F --pattern-counts F \
+                                   [options] OUT.msui
+
+Build the whole-genome processing-unit index used by UPDEC2. Real MRMP
+memberships are size-ranked and never split. PNA CpGs are implicit
+singleton memberships packed after all real memberships.
+
+  IN.mrmp               MRMPIDX1 artifact from `methscope mrmp-build`
+  OUT.msui              output MSUIDX1 index
+
+  --binstrings FILE     legacy: one 35-symbol 0/1/2 string per genomic CpG
+  --pattern-counts FILE legacy: full `uniq -c` pattern-count table
+  --unit-cpgs N         target CpGs per unit (default 16384)
+  --bin-cpgs N          deprecated alias for --unit-cpgs
+  -h, --help            show this help</pre>
+      </span>
+      <span class="tipbox" data-tip="cmd-upscale-train">
+        <b>methscope upscale-train</b>
+<pre class="tsch">Usage: methscope upscale-train -i DATA.msur --units UNITS.msui
+       --mrmp TOP1000.mrmp -o MODEL.updecx --work-dir DIR [options]
+
+Train whole-genome UPDEC2 processing units on CUDA. Each MRMP contributes
+beta plus log1p(observed-CpG count); count zero represents missingness.
+An optional frozen learned trunk is shared by every processing unit.
+
+Required:
+  -i, --data PATH          embedded-truth MSURAW2 training sidecar
+  --units PATH             whole-genome MSUIDX1 processing-unit index
+                           (from upscale-set-units)
+  --mrmp PATH              MRMPIDX1 artifact (preferred) or exported .cm;
+                           the runtime mask is bundled into the output
+  -o PATH                  self-contained output .updecx
+  --work-dir DIR           resumable unit checkpoints and bare UPDEC2
+
+Architecture:
+  --patterns N             MRMP inputs (default 1000)
+  --features MODE          beta, count, or missing (default count)
+  --trunk PATH             optional frozen UPFAC3 shared trunk
+  --pure-bottleneck N      one-membership unit dimension (default 16)
+  --mixed-bottleneck N     mixed/PNA unit dimension (default 32)
+  --mixed-mode MODE        factor or direct (default factor)
+  --activation MODE        linear or leaky (default linear)
+
+Optimization:
+  --min-steps N            earliest stopping point (default 2000)
+  --max-steps N            maximum updates per unit (default 8000)
+  --eval-every N           validation interval (default 200)
+  --patience N             non-improving checks (default 8)
+  --batch N                target CpGs per update (default 8192)
+  --eval-rows N            fixed validation rows per unit (default 8)
+  --learning-rate X        AdamW rate (default 0.001)
+  --weight-decay X         AdamW decay (default 0.00001)
+  --seed N                 deterministic seed (default 1)
+  --split FILE             curated cell split, rows &lt;cell_index&gt;TAB&lt;train|
+                           val|test&gt; (default: seeded 70/15/15 shuffle)
+  --device N               CUDA device (default 0)
+  --pilot-units FILE       train listed unit IDs only; do not assemble
+  --force                  replace final output and manifest
+  --dry-run                validate options and print configuration
+  -h, --help               show this help</pre>
+      </span>
+    <!-- HELP:END -->
+</div>
 
 </div>
 <script>
@@ -548,8 +915,11 @@ embedded_truth    yes (trainable)</span></code></pre>
       tf.style.left=left+'px';tf.style.top=top+'px';
     }
     function show(t,x,y){
-      var w=t.closest('.tipwrap');if(!w)return;
-      var b=w.querySelector('.tipbox[data-tip="'+t.dataset.tip+'"]');if(!b)return;
+      // format notes live in the block's own wrapper; subcommand help is
+      // shared, so fall back to the page-level copy in #helpnotes.
+      var w=t.closest('.tipwrap'), sel='.tipbox[data-tip="'+t.dataset.tip+'"]';
+      var b=(w&&w.querySelector(sel))||document.querySelector(sel);
+      if(!b)return;
       tf.innerHTML=b.innerHTML;tf.style.left='0px';tf.style.top='0px';
       tf.classList.add('on');place(x,y);
     }
