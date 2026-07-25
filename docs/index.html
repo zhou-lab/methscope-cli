@@ -343,13 +343,35 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 
     <h3>Train <span class="m">— fit your own classifier</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># features + labels -> one runnable bundle, in a single step</span>
-<span class="cmd" data-cmd="methscope classify-train -l labels.txt -o hg38_celltype.ubjx query.cg 2025_Zhou_MajorPseudo.mrmp">methscope <span class="sub tip" data-tip="cmd-classify-train" tabindex="0">classify-train</span> -l labels.txt -o hg38_celltype.ubjx query.cg 2025_Zhou_MajorPseudo.mrmp</span>
+      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
+# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+<span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
+<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR="."</span>
+
+<span class="cm"># the 40-cell-type chr20 reference doubles as training data:
+# label each cell by lineage, straight from the sample names</span>
+<span class="cmd" data-cmd="methscope fetch human_hg38_40_celltypes_chr20.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_40_celltypes_chr20.cg</span>
+<span class="cmd" data-cmd="methscope mrmp-build human_hg38_40_celltypes_chr20.cg chr20.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20.mrmp</span>
+<span class="cmd" data-cmd="methscope mrmp-export --top 1000 chr20.mrmp chr20.cm">methscope <span class="sub tip" data-tip="cmd-mrmp-export" tabindex="0">mrmp-export</span> --top 1000 chr20.mrmp chr20.cm</span>
+<span class="cmd" data-cmd="cut -f1 human_hg38_40_celltypes_chr20.cg.idx | sed &#x27;s/^GSM[0-9]*_//; s/-Z[0-9A-Z]*$//&#x27; | sed -E &#x27;s/.*Endothel.*|.*Endothelium.*/Endothelial/; s/.*Epithelial.*|.*Keratinocytes.*|.*Podocytes.*/Epithelial/; s/^Blood-.*|.*Macrophages.*/Immune/; s/.*Smooth-Muscle.*|Skeletal-Muscle|.*Cardiomyocyte.*/Muscle/; s/^Neuron$|.*Oligodendrocytes.*/Neural/; s/.*Fibroblasts.*|Adipocytes|Lung-Pleura/Mesenchymal/; s/^(Liver-Hepatocytes|Pancreas-Acinar|Pancreas-Beta)$/Secretory/&#x27; &gt; labels.txt">cut -f1 human_hg38_40_celltypes_chr20.cg.idx | sed &#x27;s/^GSM[0-9]*_//; s/-Z[0-9A-Z]*$//&#x27; | sed -E &#x27;s/.*Endothel.*|.*Endothelium.*/Endothelial/; s/.*Epithelial.*|.*Keratinocytes.*|.*Podocytes.*/Epithelial/; s/^Blood-.*|.*Macrophages.*/Immune/; s/.*Smooth-Muscle.*|Skeletal-Muscle|.*Cardiomyocyte.*/Muscle/; s/^Neuron$|.*Oligodendrocytes.*/Neural/; s/.*Fibroblasts.*|Adipocytes|Lung-Pleura/Mesenchymal/; s/^(Liver-Hepatocytes|Pancreas-Acinar|Pancreas-Beta)$/Secretory/&#x27; &gt; labels.txt</span>
+
+<span class="cm"># features + labels -> one runnable bundle, in a single step
+# (the positional takes the runtime .cm, not the .mrmp artifact)</span>
+<span class="cmd" data-cmd="methscope classify-train -l labels.txt -o chr20_lineage.ubjx human_hg38_40_celltypes_chr20.cg chr20.cm">methscope <span class="sub tip" data-tip="cmd-classify-train" tabindex="0">classify-train</span> -l labels.txt -o chr20_lineage.ubjx human_hg38_40_celltypes_chr20.cg chr20.cm</span>
+<span class="out">trained 7-class xgboost model on 40 cells x 1000 feature(s), 6 rounds
+  -> chr20_lineage.ubjx (booster+MRMP bundle)</span>
 <span class="cm"># --framework xgboost | logistic | threshold</span>
 
+<span class="cmd" data-cmd="methscope classify human_hg38_40_celltypes_chr20.cg chr20_lineage.ubjx">methscope <span class="sub tip" data-tip="cmd-classify" tabindex="0">classify</span> human_hg38_40_celltypes_chr20.cg chr20_lineage.ubjx</span>
+<span class="out">cell                                          prediction_label  confidence
+GSM5652176_Adipocytes-Z000000T7               Mesenchymal       0.229483
+GSM5652181_Saphenous-Vein-Endothel-Z000000RM  Endothelial       0.377817
+GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
+<span class="cm"># 40/40 here, but this is the training set — a sanity check, not a validation</span>
+
 <span class="cm"># the same wrapping by hand: inner model + its MRMP (+ labels) -> one file</span>
-<span class="cmd" data-cmd="methscope bundle -m 2025_Zhou_MajorPseudo.cm -l labels.txt model.ubj -o model.ubjx">methscope <span class="sub tip" data-tip="cmd-bundle" tabindex="0">bundle</span> -m 2025_Zhou_MajorPseudo.cm -l labels.txt model.ubj -o model.ubjx</span>
-<span class="cmd" data-cmd="methscope unbundle model.ubjx        # -&gt; back to its parts">methscope <span class="sub tip" data-tip="cmd-unbundle" tabindex="0">unbundle</span> model.ubjx        <span class="cm"># -> back to its parts</span></span></code></pre>
+<span class="cmd" data-cmd="methscope bundle -m chr20.cm -l labels.txt model.ubj -o model.ubjx">methscope <span class="sub tip" data-tip="cmd-bundle" tabindex="0">bundle</span> -m chr20.cm -l labels.txt model.ubj -o model.ubjx</span>
+<span class="cmd" data-cmd="methscope unbundle model.ubjx">methscope <span class="sub tip" data-tip="cmd-unbundle" tabindex="0">unbundle</span> model.ubjx</span></code></pre>
     </div>
     <p style="margin-top:11px">Linear models store per-feature training means, so missing/sparse
       betas are imputed at classify time — accurate even at &lt;1% genome coverage.</p>
@@ -377,7 +399,12 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 
     <h3>Build a reference <span class="m">— your own .refx panel</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cmd" data-cmd="methscope fetch hg38_celltype.ubjx human_hg38_celltypes.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_celltype.ubjx human_hg38_celltypes.cg</span>
+      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
+# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+<span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
+<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR="."</span>
+
+<span class="cmd" data-cmd="methscope fetch hg38_celltype.ubjx human_hg38_celltypes.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_celltype.ubjx human_hg38_celltypes.cg</span>
 
 <span class="cm"># per-cell panel, so each cell must deconvolve to itself</span>
 <span class="cmd" data-cmd="methscope deconv-build-ref -o self.refx human_hg38_celltypes.cg hg38_celltype.ubjx">methscope <span class="sub tip" data-tip="cmd-deconv-build-ref" tabindex="0">deconv-build-ref</span> -o self.refx human_hg38_celltypes.cg hg38_celltype.ubjx</span>
@@ -414,28 +441,44 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 
     <h3>Train <span class="m">— featurize, group into units, fit (CUDA)</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># 1. featurize the truth atlas -> sampling/truth sidecar</span>
-<span class="cmd" data-cmd="methscope upscale-featurize --embed-truth atlas.cg 2025_Zhou_MajorPseudo.mrmp train.msur">methscope <span class="sub tip" data-tip="cmd-upscale-featurize" tabindex="0">upscale-featurize</span> --embed-truth atlas.cg 2025_Zhou_MajorPseudo.mrmp <span class="tip" data-tip="msur" tabindex="0">train.msur</span></span>
+      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
+# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+<span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
+<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR="."</span>
 
-<span class="cm"># 2. group CpGs into processing units</span>
-<span class="cmd" data-cmd="methscope upscale-set-units --unit-cpgs 16384 2025_Zhou_MajorPseudo.mrmp units.msui">methscope <span class="sub tip" data-tip="cmd-upscale-set-units" tabindex="0">upscale-set-units</span> --unit-cpgs 16384 2025_Zhou_MajorPseudo.mrmp <span class="tip" data-tip="msui" tabindex="0">units.msui</span></span>
+<span class="cm"># the whole pipeline from scratch, on the 40-cell-type chr20 reference</span>
+<span class="cmd" data-cmd="methscope fetch human_hg38_40_celltypes_chr20.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_40_celltypes_chr20.cg</span>
 
-<span class="cm"># 3. train on CUDA; --split pins the exact held-out cells,
+<span class="cm"># 1. define the features</span>
+<span class="cmd" data-cmd="methscope mrmp-build human_hg38_40_celltypes_chr20.cg chr20.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20.mrmp</span>
+<span class="out">samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450</span>
+
+<span class="cm"># 2. featurize the truth atlas -> sampling/truth sidecar</span>
+<span class="cmd" data-cmd="methscope upscale-featurize --embed-truth --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp chr20.msur">methscope <span class="sub tip" data-tip="cmd-upscale-featurize" tabindex="0">upscale-featurize</span> --embed-truth --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></span>">methscope <span class="sub tip" data-tip="cmd-upscale-featurize" tabindex="0">upscale-featurize</span> --embed-truth --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></span>
+<span class="out">wrote chr20.msur and chr20.msur.tsv   # 40 cells x 20 reps, 91 MB</span>
+
+<span class="cm"># 3. group CpGs into processing units</span>
+<span class="cmd" data-cmd="methscope upscale-set-units --unit-cpgs 4096 chr20.mrmp chr20.msui">methscope <span class="sub tip" data-tip="cmd-upscale-set-units" tabindex="0">upscale-set-units</span> --unit-cpgs 4096 chr20.mrmp <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></span>">methscope <span class="sub tip" data-tip="cmd-upscale-set-units" tabindex="0">upscale-set-units</span> --unit-cpgs 4096 chr20.mrmp <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></span>
+<span class="out">units=109 pure=13 mixed=67 PNA=29 oversized=7
+unit CpGs min=1380 mean=7096.1 max=261816</span>
+
+<span class="cm"># 4. train (CUDA); --split pins the exact held-out cells,
 #    else cells are cut 70/15/15 by --seed</span>
 <span class="cmd" data-cmd="make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80">make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80</span>
-<span class="cmd" data-cmd="methscope upscale-train -i train.msur --units units.msui --mrmp 2025_Zhou_MajorPseudo.mrmp -o model.updecx --work-dir work/ --split cells.tsv">methscope <span class="sub tip" data-tip="cmd-upscale-train" tabindex="0">upscale-train</span> -i train.msur --units units.msui --mrmp 2025_Zhou_MajorPseudo.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">model.updecx</span> --work-dir work/ --split cells.tsv</span>
+<span class="cmd" data-cmd="methscope upscale-train -i chr20.msur --units chr20.msui --mrmp chr20.mrmp -o chr20.updecx --work-dir work/ --split cells.tsv">methscope <span class="sub tip" data-tip="cmd-upscale-train" tabindex="0">upscale-train</span> -i chr20.msur --units chr20.msui --mrmp chr20.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">chr20.updecx</span> --work-dir work/ --split cells.tsv</span> --work-dir work/ --split cells.tsv">methscope <span class="sub tip" data-tip="cmd-upscale-train" tabindex="0">upscale-train</span> -i chr20.msur --units chr20.msui --mrmp chr20.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">chr20.updecx</span> --work-dir work/ --split cells.tsv</span>
 <span class="cm"># split rows: &lt;cell_index&gt;TAB&lt;train|val|test&gt;, one per source cell</span>
 
 <span class="cm"># inspect reads every build artifact, detected from its magic</span>
-<span class="cmd" data-cmd="methscope inspect units.msui">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> units.msui</span>
+<span class="cmd" data-cmd="methscope inspect chr20.msui">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> chr20.msui</span>
 <span class="out">format            MSUIDX1 v1
-cpgs              29401795  (26841955 real + 2559840 PNA)
-units             700  (157 PNA)
-real_memberships  2345190</span>
-<span class="cmd" data-cmd="methscope inspect train.msur">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> train.msur</span>
+cpgs              773477  (657409 real + 116068 PNA)
+pattern_length    40
+units             109  (29 PNA)</span>
+
+<span class="cmd" data-cmd="methscope inspect chr20.msur">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> chr20.msur</span>
 <span class="out">format            MSURAW2 v2
-cells             207
-replicates        100
+cells             40
+replicates        20
 embedded_truth    yes (trainable)</span></code></pre>
       <span class="tipbox" data-tip="msur">
         <b>MSURAW2</b> <span class="tdim">— training sidecar; the truth .cg is never copied</span>
@@ -548,7 +591,7 @@ Output columns:
       <span class="tipbox" data-tip="cmd-classify-train">
         <b>methscope classify-train</b>
 <pre class="tsch">Usage:
-  methscope classify-train -l &lt;labels.txt&gt; -o &lt;out.ubjx&gt; [options] &lt;query.cg&gt; &lt;ref.mrmp&gt;
+  methscope classify-train -l &lt;labels.txt&gt; -o &lt;out.ubjx&gt; [options] &lt;query.cg&gt; &lt;ref.cm&gt;
 
 Purpose:
   Train a multiclass classifier for any per-record label (cell type, sex,
@@ -557,7 +600,7 @@ Purpose:
 
 Arguments:
   &lt;query.cg&gt;   Training methylome(s), one record per sample.
-  &lt;ref.mrmp&gt;   MRMP pattern definition (a YAME .cm) to featurize the query.
+  &lt;ref.cm&gt;     MRMP pattern definition, the runtime .cm from mrmp-export.
                A bundle (.ubjx/.updecx) also works; its MRMP is used.
                Features are the MRMP states; the &#x27;Pna&#x27; NA-background state is
                excluded by default (see --include-pna).
@@ -654,8 +697,9 @@ $(methscope fetch NAME) resolves to a usable path and re-runs for free.
 
   --store DIR   store location (default $METHSCOPE_DATA_DIR,
                 else ~/.cache/methscope)
-  -f, --force   re-download even if the file is already complete
+  -f, --force   re-download and re-verify even if already present
   -n, --dry-run show the plan and exit
+  --verify      re-check present files against their pinned sha256
   -h, --help    show this help</pre>
       </span>
       <span class="tipbox" data-tip="cmd-inspect">

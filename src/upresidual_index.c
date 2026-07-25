@@ -20,7 +20,12 @@
 #include "methscope.h"
 #include "mrmp.h"
 
-#define MSUI_PATTERN_LEN 35u
+/* Pattern length is the reference's sample count, not a constant: it comes
+ * from the .mrmp artifact (or the width of a binstring line). The MSUIDX1
+ * header has always carried it; only this builder assumed 35, which is what
+ * the whole-genome Zhou reference happens to use. */
+#define MSUI_PATTERN_LEN_MAX 40u
+static uint32_t g_pattern_len = 35u;
 #define MSUI_UNIT_PURE 1u
 #define MSUI_UNIT_PNA 2u
 #define MSUI_UNIT_OVERSIZED 4u
@@ -116,21 +121,21 @@ static uint64_t checksum_add(uint64_t h, uint64_t key, uint64_t count) {
 
 static uint64_t encode_pattern(const char *s) {
   uint64_t key = 0;
-  for (uint32_t i = 0; i < MSUI_PATTERN_LEN; ++i) {
+  for (uint32_t i = 0; i < g_pattern_len; ++i) {
     unsigned d = (unsigned)(s[i] - '0');
-    if (d > 2) fail("MRMP pattern must contain exactly 35 characters from 0,1,2");
+    if (d > 2) fail("MRMP pattern has a character outside 0,1,2");
     key = key * 3 + d;
   }
-  if (s[MSUI_PATTERN_LEN] && s[MSUI_PATTERN_LEN] != '\t' &&
-      s[MSUI_PATTERN_LEN] != ' ' && s[MSUI_PATTERN_LEN] != '\r' &&
-      s[MSUI_PATTERN_LEN] != '\n')
-    fail("MRMP pattern must contain exactly 35 characters");
+  if (s[g_pattern_len] && s[g_pattern_len] != '\t' &&
+      s[g_pattern_len] != ' ' && s[g_pattern_len] != '\r' &&
+      s[g_pattern_len] != '\n')
+    fail("MRMP pattern is longer than the reference's sample count");
   return key;
 }
 
 static uint64_t pna_key(void) {
   uint64_t key = 0;
-  for (uint32_t i = 0; i < MSUI_PATTERN_LEN; ++i) key = key * 3 + 2;
+  for (uint32_t i = 0; i < g_pattern_len; ++i) key = key * 3 + 2;
   return key;
 }
 
@@ -315,8 +320,9 @@ int main_upscale_residual_index(int argc, char **argv) {
     mh = (const mrmp_header_t *)mmap_base;
     if (memcmp(mh->magic, MRMPIDX_MAGIC, 8) || mh->version != MRMPIDX_VERSION)
       fail_path("bad MRMPIDX1 magic or version", mrmp_path);
-    if (mh->n_samples != MSUI_PATTERN_LEN)
-      fail("MRMP sample count must be 35 for this index");
+    if (!mh->n_samples || mh->n_samples > MSUI_PATTERN_LEN_MAX)
+      fail("MRMP sample count must be 1..40 (the base-3 uint64 key limit)");
+    g_pattern_len = mh->n_samples;
     if (mh->n_cpg > UINT32_MAX) fail("genomic CpG index exceeds uint32");
     if (mh->membership_offset + mh->n_cpg * sizeof(uint32_t) > mmap_bytes)
       fail_path("MRMP artifact offsets out of bounds", mrmp_path);
@@ -484,7 +490,7 @@ int main_upscale_residual_index(int argc, char **argv) {
   msui_header_t h;
   memset(&h, 0, sizeof(h));
   memcpy(h.magic, "MSUIDX1", 7);
-  h.version = 1; h.flags = 1; h.pattern_length = MSUI_PATTERN_LEN;
+  h.version = 1; h.flags = 1; h.pattern_length = g_pattern_len;
   h.target_unit_cpgs = target; h.n_units = (uint32_t)units.n;
   h.n_real_memberships = (uint32_t)n_real_groups;
   h.n_pna_units = h.n_units - n_real_units;
@@ -527,7 +533,7 @@ int main_upscale_residual_index(int argc, char **argv) {
     "real_membership_split\tfalse\npna_semantics\timplicit_singletons\n"
     "pattern_checksum\t%016" PRIx64 "\nfile_bytes\t%" PRIu64 "\n",
     mrmp_path ? mrmp_path : "", binstrings ? binstrings : "",
-    counts_path ? counts_path : "", MSUI_PATTERN_LEN, total, n_real_cpg, n_pna_cpg,
+    counts_path ? counts_path : "", g_pattern_len, total, n_real_cpg, n_pna_cpg,
     n_real_groups, h.n_units, n_real_units, pure, n_real_units - pure,
     h.n_pna_units, oversized, target, checksum, h.file_bytes);
   if (fclose(f)) fail_path("error closing manifest", manifest);

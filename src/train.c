@@ -83,7 +83,7 @@ static int train_usage(void) {
   ms_help(stderr,
     "\n"
     "Usage:\n"
-    "  methscope classify-train -l <labels.txt> -o <out.ubjx> [options] <query.cg> <ref.mrmp>\n"
+    "  methscope classify-train -l <labels.txt> -o <out.ubjx> [options] <query.cg> <ref.cm>\n"
     "\n"
     "Purpose:\n"
     "  Train a multiclass classifier for any per-record label (cell type, sex,\n"
@@ -92,7 +92,7 @@ static int train_usage(void) {
     "\n"
     "Arguments:\n"
     "  <query.cg>   Training methylome(s), one record per sample.\n"
-    "  <ref.mrmp>   MRMP pattern definition (a YAME .cm) to featurize the query.\n"
+    "  <ref.cm>     MRMP pattern definition, the runtime .cm from mrmp-export.\n"
     "               A bundle (.ubjx/.updecx) also works; its MRMP is used.\n"
     "               Features are the MRMP states; the 'Pna' NA-background state is\n"
     "               excluded by default (see --include-pna).\n"
