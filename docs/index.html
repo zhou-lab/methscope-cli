@@ -422,7 +422,8 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
   <section class="panel" id="p-upscale" role="tabpanel" aria-labelledby="t-upscale">
     <h2>Upscale / impute <span class="m">— the whole-genome decoder</span></h2>
     <p>Impute dense CpG methylation from a sparse methylome with a bundled decoder — pure-C
-      inference, no CUDA or BLAS at run time. Training that decoder is a separate, three-step
+      inference, no CUDA or BLAS at run time. Output is a <code class="inl">.cg</code> of binary
+      0/1 calls; <code class="inl">--probs</code> emits per-CpG probabilities instead. Training that decoder is a separate, three-step
       pipeline, and every step reads the same <code class="inl">.mrmp</code>.</p>
 
     <h3>Impute <span class="m">— with a shipped decoder</span></h3>
@@ -433,10 +434,12 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
 <span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR=&quot;.&quot;</span>
 <span class="cmd" data-cmd="methscope fetch hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg</span>
 
-<span class="cm"># impute from ~0.1% coverage, then score against the truth track</span>
+<span class="cm"># impute from ~0.1% coverage, then score against the truth track.
+# the .cg holds binary 0/1 calls, so this is exact-match accuracy
+# (--probs emits per-CpG probabilities as TSV instead)</span>
 <span class="cmd" data-cmd="methscope upscale -o recon.cg hg38_10k1.updecx human_hg38_test.cg">methscope <span class="sub tip" data-tip="cmd-upscale" tabindex="0">upscale</span> -o recon.cg hg38_10k1.updecx human_hg38_test.cg</span>
 <span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste <(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) <(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk '$2!=2{t++;if($1==$2)c++} END{printf "%d/%d (%.1f%%)\n",c,t,100*c/t}'</span>
-<span class="out">9211/9794 (94.0%)   — 94% accurate from ~0.1% input</span></code></pre>
+<span class="out">9211/9794 (94.0%)   — 94% of binary calls correct, from ~0.1% input</span></code></pre>
     </div>
 
     <h3>Train <span class="m">— featurize, group into units, fit (CUDA)</span></h3>
@@ -454,19 +457,13 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
 <span class="out">samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450</span>
 
 <span class="cm"># 2. featurize the truth atlas -> sampling/truth sidecar</span>
-<span class="cmd" data-cmd="methscope upscale-featurize --embed-truth --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp chr20.msur">methscope <span class="sub tip" data-tip="cmd-upscale-featurize" tabindex="0">upscale-featurize</span> --embed-truth --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></span>">methscope <span class="sub tip" data-tip="cmd-upscale-featurize" tabindex="0">upscale-featurize</span> --embed-truth --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></span>
+<span class="cmd" data-cmd="methscope upscale-featurize --embed-truth --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp chr20.msur">methscope <span class="sub tip" data-tip="cmd-upscale-featurize" tabindex="0">upscale-featurize</span> --embed-truth --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></span>
 <span class="out">wrote chr20.msur and chr20.msur.tsv   # 40 cells x 20 reps, 91 MB</span>
 
 <span class="cm"># 3. group CpGs into processing units</span>
-<span class="cmd" data-cmd="methscope upscale-set-units --unit-cpgs 4096 chr20.mrmp chr20.msui">methscope <span class="sub tip" data-tip="cmd-upscale-set-units" tabindex="0">upscale-set-units</span> --unit-cpgs 4096 chr20.mrmp <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></span>">methscope <span class="sub tip" data-tip="cmd-upscale-set-units" tabindex="0">upscale-set-units</span> --unit-cpgs 4096 chr20.mrmp <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></span>
+<span class="cmd" data-cmd="methscope upscale-set-units --unit-cpgs 4096 chr20.mrmp chr20.msui">methscope <span class="sub tip" data-tip="cmd-upscale-set-units" tabindex="0">upscale-set-units</span> --unit-cpgs 4096 chr20.mrmp <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></span>
 <span class="out">units=109 pure=13 mixed=67 PNA=29 oversized=7
 unit CpGs min=1380 mean=7096.1 max=261816</span>
-
-<span class="cm"># 4. train (CUDA); --split pins the exact held-out cells,
-#    else cells are cut 70/15/15 by --seed</span>
-<span class="cmd" data-cmd="make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80">make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80</span>
-<span class="cmd" data-cmd="methscope upscale-train -i chr20.msur --units chr20.msui --mrmp chr20.mrmp -o chr20.updecx --work-dir work/ --split cells.tsv">methscope <span class="sub tip" data-tip="cmd-upscale-train" tabindex="0">upscale-train</span> -i chr20.msur --units chr20.msui --mrmp chr20.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">chr20.updecx</span> --work-dir work/ --split cells.tsv</span> --work-dir work/ --split cells.tsv">methscope <span class="sub tip" data-tip="cmd-upscale-train" tabindex="0">upscale-train</span> -i chr20.msur --units chr20.msui --mrmp chr20.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">chr20.updecx</span> --work-dir work/ --split cells.tsv</span>
-<span class="cm"># split rows: &lt;cell_index&gt;TAB&lt;train|val|test&gt;, one per source cell</span>
 
 <span class="cm"># inspect reads every build artifact, detected from its magic</span>
 <span class="cmd" data-cmd="methscope inspect chr20.msui">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> chr20.msui</span>
@@ -516,6 +513,17 @@ embedded_truth    yes (trainable)</span></code></pre>
 <span class="k">params</span>     f32               per unit: z = act(A·x + a); logit = E·z + b
                              <span class="c">pure rank 16 · mixed/PNA rank 32</span></pre>
       </span>
+    </div>
+    <p style="margin-top:11px"><b>The fit itself needs a GPU.</b> Everything above runs anywhere
+      in about 20&nbsp;s, and <code class="inl">upscale</code> inference is pure C — but there is no
+      CPU path for training: a stock build stops with <i>CUDA backend unavailable</i>. Build with
+      <code class="inl">make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80</code> on a GPU node,
+      then:</p>
+    <div class="tipwrap">
+      <pre><code>methscope <span class="sub tip" data-tip="cmd-upscale-train" tabindex="0">upscale-train</span> -i chr20.msur --units chr20.msui --mrmp chr20.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">chr20.updecx</span> --work-dir work/ --split cells.tsv
+<span class="cm"># --split rows: &lt;cell_index&gt;TAB&lt;train|val|test&gt;, one per source cell; without
+# it, cells are cut 70/15/15 by --seed. Each unit is checkpointed under
+# --work-dir, so an interrupted run resumes where it stopped.</span></code></pre>
     </div>
   </section>
 
