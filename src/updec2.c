@@ -101,8 +101,8 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
   /* --- phase 4: preprocessing (done above) + optional shared-trunk params --- */
   uint64_t trunk_floats = 0, unit_input = h->input_dim;
   if (trunk_dim) {
-    uint64_t I = h->input_dim, H = trunk_dim;
-    if (H > UINT32_MAX || H > (UINT64_MAX - 2 * H) / (I + H)) {
+    uint64_t I = h->input_dim, H = trunk_dim;   /* both <= UINT32_MAX */
+    if (H > (UINT64_MAX - 2 * H) / (I + H)) {
       munmap(map, (size_t)file_bytes); close(fd);
       return uerr(error, error_cap, "UPDEC2 trunk dimensions overflow");
     }

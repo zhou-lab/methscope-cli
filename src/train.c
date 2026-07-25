@@ -32,19 +32,34 @@ static void tdie(const char *msg, const char *arg) {
   exit(1);
 }
 
+/* Parse a non-negative integer flag value; reject negatives, non-numeric
+ * tokens, and trailing garbage (mirrors the validated parse in src/ui.c). */
+static int parse_nonneg_int(const char *s, const char *errmsg) {
+  char *e = NULL;
+  long v = strtol(s, &e, 10);
+  if (e == s || *e != '\0' || v < 0) tdie(errmsg, s);
+  return (int)v;
+}
+
 /* read one label per line (trimmed); returns array of n strings */
 static char **read_labels(const char *path, int *n_out) {
   FILE *fp = fopen(path, "r");
   if (!fp) tdie("cannot open labels file", path);
   int   cap = 256, n = 0;
   char **v = malloc(cap * sizeof(char *));
+  if (!v) tdie("out of memory", NULL);
   char  *line = NULL; size_t line_cap = 0; ssize_t len;
   while ((len = getline(&line, &line_cap, fp)) != -1) {
     while (len && (line[len-1] == '\n' || line[len-1] == '\r' || line[len-1] == ' ' || line[len-1] == '\t'))
       line[--len] = '\0';
     char *s = line; while (*s == ' ' || *s == '\t') s++;
     if (*s == '\0') continue;                 /* skip blank lines */
-    if (n == cap) { cap *= 2; v = realloc(v, cap * sizeof(char *)); }
+    if (n == cap) {
+      cap *= 2;
+      char **tmp = realloc(v, cap * sizeof(char *));
+      if (!tmp) tdie("out of memory", NULL);
+      v = tmp;
+    }
     v[n++] = strdup(s);
   }
   free(line); fclose(fp);
@@ -130,10 +145,12 @@ int main_train(int argc, char *argv[]) {
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-l") == 0 && i+1 < argc) labels_path = argv[++i];
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out_path    = argv[++i];
-    else if (strcmp(argv[i], "-p") == 0 && i+1 < argc) npattern    = atoi(argv[++i]);
+    else if (strcmp(argv[i], "-p") == 0 && i+1 < argc)
+      npattern = parse_nonneg_int(argv[++i], "-p expects a non-negative integer");
     else if (strcmp(argv[i], "--include-pna") == 0)    include_pna = 1;
     else if (strcmp(argv[i], "--framework") == 0 && i+1 < argc) framework = argv[++i];
-    else if (strcmp(argv[i], "-n") == 0 && i+1 < argc) nrounds     = atoi(argv[++i]);
+    else if (strcmp(argv[i], "-n") == 0 && i+1 < argc)
+      nrounds = parse_nonneg_int(argv[++i], "-n expects a non-negative integer");
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       train_usage(); return 0;
     }
@@ -177,6 +194,7 @@ int main_train(int argc, char *argv[]) {
 
   /* class set = sorted unique labels (deterministic class indices) */
   char **uniq = malloc(n_lab * sizeof(char *));
+  if (!uniq) tdie("out of memory", NULL);
   for (int j = 0; j < n_lab; ++j) uniq[j] = lab[j];
   qsort(uniq, n_lab, sizeof(char *), cmp_str);
   int K = 0;
@@ -189,6 +207,7 @@ int main_train(int argc, char *argv[]) {
 
   /* per-record class index (0..K-1) = position in the sorted unique set */
   int *yidx = malloc((size_t)m->n_cells * sizeof(int));
+  if (!yidx) tdie("out of memory", NULL);
   for (int r = 0; r < m->n_cells; ++r) {
     /* binary search into the sorted class set */
     int lo = 0, hi = K - 1, idx = -1;
@@ -224,9 +243,11 @@ int main_train(int argc, char *argv[]) {
   } else {
     /* ---- xgboost framework ---- */
     float *ylab = malloc((size_t)m->n_cells * sizeof(float));
+    if (!ylab) tdie("out of memory", NULL);
     for (int r = 0; r < m->n_cells; ++r) ylab[r] = (float)yidx[r];
     bst_ulong nrow = (bst_ulong)m->n_cells, ncol = (bst_ulong)npattern;
     float *data = malloc((size_t)nrow * ncol * sizeof(float));
+    if (!data) tdie("out of memory", NULL);
     for (int r = 0; r < m->n_cells; ++r) {
       const double *src = m->M + (size_t)r * m->n_patterns;
       float        *dst = data + (size_t)r * npattern;

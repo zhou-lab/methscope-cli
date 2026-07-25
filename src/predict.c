@@ -84,7 +84,8 @@ static int predict_linear(const char *query_cg, const char *ref_mrmp,
   ms_matrix_t *m = ms_matrix_build(query_cg, ref_mrmp);
   if (m->n_patterns < lm->n_feat)
     pdie("reference .mrmp has fewer patterns than the model expects", ref_mrmp);
-  FILE *fout = out_path ? fopen(out_path, "w") : stdout;
+  FILE *fout = (out_path && strcmp(out_path, "-") != 0)
+                 ? fopen(out_path, "w") : stdout;
   if (!fout) pdie("cannot open output", out_path);
   if (!no_header) {
     fputs("cell\tprediction_label\tconfidence", fout);
@@ -207,7 +208,8 @@ int main_predict(int argc, char *argv[]) {
   char numbuf[16];
   #define LABEL(c) (labels ? labels[c] : (snprintf(numbuf, sizeof(numbuf), "%d", (c)), numbuf))
 
-  FILE *fout = out_path ? fopen(out_path, "w") : stdout;
+  FILE *fout = (out_path && strcmp(out_path, "-") != 0)
+                 ? fopen(out_path, "w") : stdout;
   if (!fout) pdie("cannot open output", out_path);
 
   if (!no_header) {

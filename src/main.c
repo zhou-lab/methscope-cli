@@ -80,7 +80,7 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "upscale")    == 0) return main_upscale(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-train") == 0) return main_upscale_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-featurize") == 0) return main_upscale_prepare(argc - 1, argv + 1);
-  if (strcmp(argv[1], "upscale-set-units") == 0) return main_upscale_residual_index(argc - 1, argv + 1);
+  if (strcmp(argv[1], "upscale-set-units") == 0) return main_upscale_set_units(argc - 1, argv + 1);
   if (strcmp(argv[1], "_upscale") == 0) return main_upscale_internal(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-factor-train") == 0 ||
       strcmp(argv[1], "upscale-residual-train") == 0) {

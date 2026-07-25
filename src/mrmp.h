@@ -12,8 +12,9 @@
  *   '0' unmethylated, '1' methylated, '2' missing/ambiguous.
  * binstring emits '2' only as an all-or-nothing per-CpG sentinel, so the sole
  * pattern containing a '2' is the all-'2' string (PNA). Every other pattern is
- * pure {0,1}. Each pattern is packed as a base-3 uint64 key (3^35 < 2^64),
- * most-significant digit = sample 0. */
+ * pure {0,1}. Each pattern is packed as a base-3 uint64 key; the build caps the
+ * reference at 40 samples (3^40 < 2^64 <= 3^41), most-significant digit =
+ * sample 0. */
 #ifndef MS_MRMP_H
 #define MS_MRMP_H
 

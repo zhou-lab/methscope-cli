@@ -66,12 +66,13 @@ typedef struct {
   uint32_t *slot;      /* slot -> pattern index + 1 (0 == empty) */
   uint64_t cap;        /* power of two */
   uint64_t mask;
+  uint64_t used;       /* occupied slots; drives the grow-at-70% rebuild */
 } phash_t;
 
 static void phash_init(phash_t *h, uint64_t expect) {
   uint64_t cap = 1024;
-  while (cap < expect * 2) cap <<= 1;   /* < 0.5 load */
-  h->cap = cap; h->mask = cap - 1;
+  while (cap < expect * 2) cap <<= 1;   /* headroom below the 0.7 load cap */
+  h->cap = cap; h->mask = cap - 1; h->used = 0;
   h->keys = xcalloc(cap, sizeof(uint64_t), "phash keys");
   h->slot = xcalloc(cap, sizeof(uint32_t), "phash slot");
 }
@@ -82,15 +83,34 @@ static uint64_t mix64(uint64_t x) {   /* splitmix64 finalizer */
   x ^= x >> 31; return x;
 }
 
+/* Double the table and re-key every occupied slot. Without this a reference
+ * with more distinct patterns than the initial table could hold would spin
+ * forever (open addressing never finds an empty slot once full), so a denser-
+ * than-expected reference must trigger a grow, not a silent hang. */
+static void phash_rebuild(phash_t *h) {
+  uint64_t ncap = h->cap << 1, nmask = ncap - 1;
+  uint64_t *nkeys = xcalloc(ncap, sizeof(uint64_t), "phash keys");
+  uint32_t *nslot = xcalloc(ncap, sizeof(uint32_t), "phash slot");
+  for (uint64_t i = 0; i < h->cap; ++i) {
+    if (!h->slot[i]) continue;
+    uint64_t j = mix64(h->keys[i]) & nmask;
+    while (nslot[j]) j = (j + 1) & nmask;
+    nkeys[j] = h->keys[i]; nslot[j] = h->slot[i];
+  }
+  free(h->keys); free(h->slot);
+  h->keys = nkeys; h->slot = nslot; h->cap = ncap; h->mask = nmask;
+}
+
 /* Return existing pattern index for key, or add via *n_pat and pat[]. */
 static uint32_t phash_intern(phash_t *h, uint64_t key,
                              mrmp_pattern_t *pat, uint64_t *n_pat) {
+  if ((h->used + 1) * 10 >= h->cap * 7) phash_rebuild(h); /* grow at 70% */
   uint64_t i = mix64(key) & h->mask;
   for (;;) {
     if (!h->slot[i]) {
       uint32_t idx = (uint32_t)(*n_pat)++;
       pat[idx].key = key; pat[idx].count = 0;
-      h->keys[i] = key; h->slot[i] = idx + 1;
+      h->keys[i] = key; h->slot[i] = idx + 1; ++h->used;
       return idx;
     }
     if (h->keys[i] == key) return h->slot[i] - 1;
@@ -277,7 +297,7 @@ int main_mrmp_build(int argc, char *argv[]) {
   uint64_t pna_key = 0;
   for (uint32_t s = 0; s < ns; ++s) pna_key = pna_key * 3 + 2;  /* all-'2' */
 
-  phash_t h; phash_init(&h, 1u << 21);          /* ~2.4M patterns, < 0.6 load */
+  phash_t h; phash_init(&h, 1u << 21);   /* ~2.4M patterns; grows past 0.7 load */
   uint64_t pat_cap = 1u << 20, n_pat = 0;
   mrmp_pattern_t *pat = xcalloc(pat_cap, sizeof(mrmp_pattern_t), "pattern table");
   uint64_t pna_cpg = 0, checksum = 1469598103934665603ULL;  /* FNV-1a offset */
@@ -391,6 +411,14 @@ typedef struct {
 #include <sys/mman.h>
 #include <unistd.h>
 
+/* True if [offset, offset + count*size) fits within `bytes`, evaluated without
+ * overflowing uint64 (offset and count come straight from the file header). */
+static int region_ok(uint64_t offset, uint64_t count, uint64_t size,
+                     uint64_t bytes) {
+  if (offset > bytes) return 0;
+  return size == 0 || count <= (bytes - offset) / size;
+}
+
 static void mrmp_open(mrmp_reader_t *r, const char *path) {
   memset(r, 0, sizeof(*r));
   int fd = open(path, O_RDONLY);
@@ -403,15 +431,31 @@ static void mrmp_open(mrmp_reader_t *r, const char *path) {
   const mrmp_header_t *h = (const mrmp_header_t *)m;
   if (memcmp(h->magic, MRMPIDX_MAGIC, 8) || h->version != MRMPIDX_VERSION)
     die("bad MRMPIDX1 magic or version", path);
-  uint64_t need = h->membership_offset + h->n_cpg * sizeof(uint32_t);
-  if (h->patterns_offset + h->n_candidates * sizeof(mrmp_pattern_t) >
-        h->membership_offset || need > (uint64_t)st.st_size)
+  /* Header counts are attacker-controlled; validate every region (overflow-safe)
+   * before dereferencing, and require the pattern block to end at or before the
+   * membership block, matching the writer's layout. */
+  uint64_t sz = (uint64_t)st.st_size;
+  if (h->n_cpg > UINT32_MAX)
+    die("MRMP artifact CpG count is implausible", path);
+  if (!region_ok(h->membership_offset, h->n_cpg, sizeof(uint32_t), sz) ||
+      !region_ok(h->patterns_offset, h->n_candidates,
+                 sizeof(mrmp_pattern_t), sz) ||
+      h->patterns_offset + h->n_candidates * sizeof(mrmp_pattern_t) >
+        h->membership_offset ||
+      h->refname_offset >= sz || h->names_offset >= sz)
     die("MRMP artifact offsets are out of bounds", path);
-  r->map = m; r->bytes = st.st_size; r->fd = fd; r->h = h;
+  r->map = m; r->bytes = sz; r->fd = fd; r->h = h;
+  /* refname and each sample name must be NUL-terminated inside the map, or the
+   * strlen walk below would run off the end of a truncated/crafted file. */
+  const char *map_end = (const char *)m + sz;
   r->refname = (const char *)m + h->refname_offset;
+  if (!memchr(r->refname, '\0', (size_t)(map_end - r->refname)))
+    die("MRMP artifact refname is not terminated", path);
   r->names = xcalloc(h->n_samples, sizeof(char *), "names index");
   const char *p = (const char *)m + h->names_offset;
   for (uint32_t s = 0; s < h->n_samples; ++s) {
+    if (p >= map_end || !memchr(p, '\0', (size_t)(map_end - p)))
+      die("MRMP artifact sample names are truncated", path);
     ((const char **)r->names)[s] = p; p += strlen(p) + 1;
   }
   r->pat = (const mrmp_pattern_t *)((const char *)m + h->patterns_offset);
@@ -559,6 +603,9 @@ void ms_mrmp_group_map(const char *artifact, uint16_t *group, uint64_t n_cpg,
   mrmp_reader_t r; mrmp_open(&r, artifact);
   if (r.h->n_cpg != n_cpg) die("MRMP artifact CpG count disagrees", artifact);
   uint32_t K = r.h->n_selected < patterns ? r.h->n_selected : patterns;
+  /* group[] is uint16 (1-based rank, 0 = PNA), so a selectable rank must fit in
+   * 15 usable bits; guard against a caller/artifact that would alias rank+1. */
+  if (K > UINT16_MAX - 1) die("MRMP selectable pattern count exceeds uint16", artifact);
   for (uint64_t i = 0; i < n_cpg; ++i) {
     uint32_t rank = r.membership[i];
     group[i] = (rank != MRMP_PNA_MEMBERSHIP && rank < K)

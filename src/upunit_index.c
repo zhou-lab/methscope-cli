@@ -243,7 +243,7 @@ static int usage(void) {
   return 1;
 }
 
-int main_upscale_residual_index(int argc, char **argv) {
+int main_upscale_set_units(int argc, char **argv) {
   const char *binstrings = NULL, *counts_path = NULL, *out_path = NULL;
   const char *mrmp_path = NULL, *pos[2] = {NULL, NULL};
   int npos = 0;

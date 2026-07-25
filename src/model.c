@@ -59,10 +59,17 @@ char **ms_booster_get_labels(BoosterHandle b, int *num_class) {
   if (!buf) die("out of memory (labels)", NULL);
   int cap = 8, k = 0;
   char **out = malloc(sizeof(char *) * cap);
+  if (!out) die("out of memory", NULL);
   char *save = NULL;
   for (char *t = strtok_r(buf, ",", &save); t; t = strtok_r(NULL, ",", &save)) {
-    if (k == cap) { cap *= 2; out = realloc(out, sizeof(char *) * cap); }
+    if (k == cap) {
+      cap *= 2;
+      char **tmp = realloc(out, sizeof(char *) * cap);
+      if (!tmp) die("out of memory", NULL);
+      out = tmp;
+    }
     out[k++] = strdup(t);
+    if (!out[k-1]) die("out of memory", NULL);
   }
   free(buf);
   *num_class = k;
@@ -99,10 +106,17 @@ static char **read_meta_labels(const char *path, int *num_class) {
     if (strcmp(key, "labels") == 0) {
       int lcap = 8;
       labels = malloc(sizeof(char *) * lcap);
+      if (!labels) die("out of memory", NULL);
       char *save = NULL;
       for (char *t = strtok_r(val, ",", &save); t; t = strtok_r(NULL, ",", &save)) {
-        if (K == lcap) { lcap *= 2; labels = realloc(labels, sizeof(char *) * lcap); }
+        if (K == lcap) {
+          lcap *= 2;
+          char **tmp = realloc(labels, sizeof(char *) * lcap);
+          if (!tmp) die("out of memory", NULL);
+          labels = tmp;
+        }
         labels[K++] = strdup(trim(t));
+        if (!labels[K-1]) die("out of memory", NULL);
       }
     }
   }

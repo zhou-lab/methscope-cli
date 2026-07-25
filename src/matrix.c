@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <errno.h>
 #include <limits.h>
 #include <unistd.h>
 #include "methscope.h"
@@ -81,6 +82,7 @@ ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm) {
   if (n_masks == 0) mdie("reference contains no records", ref_cm);
 
   char **mask_names = malloc(n_masks * sizeof(char *));
+  if (!mask_names) mdie("out of memory (mask names)", NULL);
   for (size_t k = 0; k < n_masks; ++k) {
     char b[32];
     if (snames_mask.n > (int)k) mask_names[k] = strdup(snames_mask.s[k]);
@@ -157,6 +159,7 @@ ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm) {
 
   /* ---- order columns by numeric pattern id (R parity) ---- */
   colkey_t *ck = malloc(n_raw * sizeof(colkey_t));
+  if (!ck) mdie("out of memory (colkey)", NULL);
   for (size_t i = 0; i < n_raw; ++i) { ck[i].key = pattern_numeric_key(raw_names[i]); ck[i].idx = (int)i; }
   qsort(ck, n_raw, sizeof(colkey_t), cmp_colkey);
 
@@ -385,7 +388,14 @@ int main_build_reference(int argc, char *argv[]) {
     else if (strcmp(argv[i], "--no-header") == 0) no_header = 1;
     else if (strcmp(argv[i], "--matrix") == 0 || strcmp(argv[i], "--tsv") == 0) refx = 0;
     else if (strcmp(argv[i], "--refx") == 0) refx = 1;
-    else if (strcmp(argv[i], "--min-cov") == 0 && i + 1 < argc) min_cov = atoi(argv[++i]);
+    else if (strcmp(argv[i], "--min-cov") == 0 && i + 1 < argc) {
+      const char *s = argv[++i];
+      char *end; errno = 0;
+      long v = strtol(s, &end, 10);
+      if (errno || end == s || *end != '\0' || v < 0 || v > INT_MAX)
+        mdie("--min-cov expects a non-negative integer", s);
+      min_cov = (int)v;
+    }
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       build_reference_usage(); return 0;
     }
@@ -427,7 +437,8 @@ int main_build_reference(int argc, char *argv[]) {
     fprintf(stderr, "[methscope] wrote reference bundle (%d cells x %d patterns) -> %s\n",
             m->n_cells, m->n_patterns, out_path);
   } else {
-    FILE *out = out_path ? fopen(out_path, "w") : stdout;
+    FILE *out = (out_path && strcmp(out_path, "-") != 0)
+                ? fopen(out_path, "w") : stdout;
     if (!out) mdie("cannot open output", out_path);
     ms_matrix_write_tsv(m, out, !no_header);
     if (out != stdout) fclose(out);

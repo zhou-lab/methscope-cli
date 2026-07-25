@@ -26,6 +26,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <errno.h>
+#include <limits.h>
 #include <unistd.h>
 #include "methscope.h"
 #include "nnls.h"
@@ -102,11 +104,17 @@ static dmat_t dm_read_tsv(const char *path) {
   if (len && line[len-1] == '\r') line[--len] = '\0';
   int ccap = 16, ncol = 0;
   char **cols = malloc(ccap * sizeof(char *));
+  if (!cols) ddie("out of memory", NULL);
   char *save = NULL;
   int first = 1;
   for (char *t = strtok_r(line, "\t", &save); t; t = strtok_r(NULL, "\t", &save)) {
     if (first) { first = 0; continue; }           /* skip the row-label header cell */
-    if (ncol == ccap) { ccap *= 2; cols = realloc(cols, ccap * sizeof(char *)); }
+    if (ncol == ccap) {
+      ccap *= 2;
+      char **tmp = realloc(cols, ccap * sizeof(char *));
+      if (!tmp) ddie("out of memory", NULL);
+      cols = tmp;
+    }
     cols[ncol++] = strdup(t);
   }
   if (ncol == 0) ddie("signature .ref has no pattern columns", path);
@@ -115,12 +123,20 @@ static dmat_t dm_read_tsv(const char *path) {
   int   rcap = 64, nrow = 0;
   char **rows = malloc(rcap * sizeof(char *));
   double *v   = malloc((size_t)rcap * ncol * sizeof(double));
+  if (!rows || !v) ddie("out of memory", NULL);
   while ((len = getline(&line, &cap, fp)) != -1) {
     if (len && (line[len-1] == '\n' || line[len-1] == '\r')) line[--len] = '\0';
     if (len && line[len-1] == '\r') line[--len] = '\0';
     if (len == 0) continue;
-    if (nrow == rcap) { rcap *= 2; rows = realloc(rows, rcap * sizeof(char *));
-                        v = realloc(v, (size_t)rcap * ncol * sizeof(double)); }
+    if (nrow == rcap) {
+      rcap *= 2;
+      char **rtmp = realloc(rows, rcap * sizeof(char *));
+      if (!rtmp) ddie("out of memory", NULL);
+      rows = rtmp;
+      double *vtmp = realloc(v, (size_t)rcap * ncol * sizeof(double));
+      if (!vtmp) ddie("out of memory", NULL);
+      v = vtmp;
+    }
     int col = -1;                                  /* -1 = the row-label field */
     char *sv = NULL;
     for (char *t = strtok_r(line, "\t", &sv); t; t = strtok_r(NULL, "\t", &sv)) {
@@ -221,7 +237,14 @@ int main_deconv(int argc, char *argv[]) {
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-o") == 0 && i+1 < argc) out_path = argv[++i];
     else if (strcmp(argv[i], "--no-header") == 0) no_header = 1;
-    else if (strcmp(argv[i], "--min-cov") == 0 && i+1 < argc) min_cov = atoi(argv[++i]);
+    else if (strcmp(argv[i], "--min-cov") == 0 && i+1 < argc) {
+      const char *s = argv[++i];
+      char *end; errno = 0;
+      long v = strtol(s, &end, 10);
+      if (errno || end == s || *end != '\0' || v < 0 || v > INT_MAX)
+        ddie("--min-cov expects a non-negative integer", s);
+      min_cov = (int)v;
+    }
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       deconv_usage(); return 0;
     }
@@ -274,6 +297,7 @@ int main_deconv(int argc, char *argv[]) {
    * sparse cell actually observed. ---- */
   int   *mix_col = malloc(ref.ncol * sizeof(int));   /* per used pattern */
   int   *ref_col = malloc(ref.ncol * sizeof(int));
+  if (!mix_col || !ref_col) ddie("out of memory", NULL);
   int    n_used  = 0;
   for (int rc = 0; rc < ref.ncol; ++rc) {
     const char *pname = ref.col_names[rc];
@@ -287,6 +311,7 @@ int main_deconv(int argc, char *argv[]) {
 
   /* ---- reference design matrix A: (n_used x n_ct), COLUMN-major ---- */
   double *A = malloc((size_t)n_used * n_ct * sizeof(double));
+  if (!A) ddie("out of memory", NULL);
   for (int t = 0; t < n_ct; ++t)
     for (int p = 0; p < n_used; ++p)
       A[(size_t)t * n_used + p] = ref.v[(size_t)t * ref.ncol + ref_col[p]];
@@ -304,7 +329,8 @@ int main_deconv(int argc, char *argv[]) {
   if (!A || !b || !x || !aw || !bw || !w || !zz || !ix || !Ar || !use)
     ddie("out of memory (nnls)", NULL);
 
-  FILE *out = out_path ? fopen(out_path, "w") : stdout;
+  FILE *out = (out_path && strcmp(out_path, "-") != 0)
+              ? fopen(out_path, "w") : stdout;
   if (!out) ddie("cannot open output", out_path);
   if (!no_header) {
     fputs("cell", out);

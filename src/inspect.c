@@ -156,7 +156,7 @@ int main_inspect(int argc, char *argv[]) {
                (ssize_t)((size_t)u2.n_units * sizeof(*uu)))
       idie("cannot read UPDEC2 unit directory", path);
     for (uint32_t j = 0; j < u2.n_units; ++j) {
-      /* unit flag bits (see MSUI_UNIT_* in upresidual_index.c): 2=PNA, 1=pure */
+      /* unit flag bits (see MSUI_UNIT_* in upunit_index.c): 2=PNA, 1=pure */
       if (uu[j].flags & 2) ++u2_pna;
       else if (uu[j].flags & 1) ++u2_pure;
       else ++u2_mixed;
@@ -302,12 +302,15 @@ int main_inspect(int argc, char *argv[]) {
         printf("      %-10s %d\n", "cell types", refx_cells);
         printf("      %-10s %d\n", "patterns",   refx_pat);
         char **cts = malloc((refx_cells ? refx_cells : 1) * sizeof *cts);
+        if (!cts) idie("out of memory", NULL);
         int nct = 0; size_t p = 0; int line = 0;
         while (p < mlen && nct < refx_cells) {         /* first field of each data row */
           size_t e = p; while (e < mlen && ((char *)mbuf)[e] != '\n') e++;
           if (line > 0 && e > p) {
             size_t f = p; while (f < e && ((char *)mbuf)[f] != '\t') f++;
-            char *s = malloc(f - p + 1); memcpy(s, (char *)mbuf + p, f - p); s[f - p] = '\0';
+            char *s = malloc(f - p + 1);
+            if (!s) idie("out of memory", NULL);
+            memcpy(s, (char *)mbuf + p, f - p); s[f - p] = '\0';
             cts[nct++] = s;
           }
           p = e + 1; line++;
@@ -327,16 +330,18 @@ int main_inspect(int argc, char *argv[]) {
         ms_linmodel_free(lm);
       } else {
         BoosterHandle b;
-        if (XGBoosterCreate(NULL, 0, &b) == 0 && XGBoosterLoadModelFromBuffer(b, mbuf, mlen) == 0) {
-          bst_ulong nf = 0; XGBoosterGetNumFeature(b, &nf);
-          printf("      %-10s %lu\n", "features", (unsigned long)nf);
-          int K = 0; char **labels = ms_booster_get_labels(b, &K);
-          if (labels) {
-            printf("      %-10s ", "labels"); print_labels(labels, K);
-            for (int c = 0; c < K; ++c) free(labels[c]);
-            free(labels);
-          } else printf("      %-10s (none embedded)\n", "labels");
-          XGBoosterFree(b);
+        if (XGBoosterCreate(NULL, 0, &b) == 0) {
+          if (XGBoosterLoadModelFromBuffer(b, mbuf, mlen) == 0) {
+            bst_ulong nf = 0; XGBoosterGetNumFeature(b, &nf);
+            printf("      %-10s %lu\n", "features", (unsigned long)nf);
+            int K = 0; char **labels = ms_booster_get_labels(b, &K);
+            if (labels) {
+              printf("      %-10s ", "labels"); print_labels(labels, K);
+              for (int c = 0; c < K; ++c) free(labels[c]);
+              free(labels);
+            } else printf("      %-10s (none embedded)\n", "labels");
+          }
+          XGBoosterFree(b);   /* free even when the model failed to load */
         }
       }
     } else if (strcmp(nm, "mrmp") == 0) {

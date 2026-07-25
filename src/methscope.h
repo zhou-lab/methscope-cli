@@ -110,7 +110,7 @@ int main_upscale_prepare(int argc, char *argv[]);
 /* `methscope inspect` reporters for the two upscale build artifacts. */
 void ms_msur_report(const char *path);
 void ms_msui_report(const char *path);
-int main_upscale_residual_index(int argc, char *argv[]);
+int main_upscale_set_units(int argc, char *argv[]);
 int main_upscale_trunk_train(int argc, char *argv[]);
 int main_bundle(int argc, char *argv[]);
 int main_unbundle(int argc, char *argv[]);

@@ -299,6 +299,11 @@ static long run_updec2(const char *path, uint64_t offset, uint64_t length,
       int nc = parse_row(copy, beta, (int)(need_count ? 2 * P : P));
       free(copy);
       if (nc < (int)P) udie("feature row has fewer columns than UPDEC2 expects", input_path);
+      /* Check the count-column width before the loop reads beta[P+p]; otherwise
+       * a short row would consume uninitialized entries P..2P-1. */
+      if (need_count && nc < (int)(2 * P))
+        udie("count model requires P beta columns followed by P count columns",
+             input_path);
       for (uint32_t p = 0; p < P; ++p) {
         if (need_count) {
           double n = beta[P + p];
@@ -307,9 +312,6 @@ static long run_updec2(const char *path, uint64_t offset, uint64_t length,
           count[p] = (int)n;
         } else count[p] = isnan(beta[p]) ? 0 : 1;
       }
-      if (need_count && nc < (int)(2 * P))
-        udie("count model requires P beta columns followed by P count columns",
-             input_path);
       ms_updec2_prepare_input(&m, beta, count, x);
       if (!ms_updec2_forward(&m, x, prob, z, work_n))
         udie("UPDEC2 bottleneck buffer is too small", path);

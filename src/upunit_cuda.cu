@@ -166,7 +166,6 @@ extern "C" int ms_upunit_train_cuda(const ms_upunit_config_t*c){
   }else{
     std::vector<uint32_t>cells(h->n_cells);for(uint32_t i=0;i<h->n_cells;++i)cells[i]=i;Pcg sr;seed(&sr,c->seed);for(uint32_t q=h->n_cells;q>1;--q)std::swap(cells[q-1],cells[rnd(&sr)%q]);size_t nt=h->n_cells*70/100,nv=h->n_cells*15/100;if(!nt||!nv||nt+nv>=h->n_cells)die("too few source cells for split");train.assign(cells.begin(),cells.begin()+nt);val.assign(cells.begin()+nt,cells.begin()+nt+nv);test.assign(cells.begin()+nt+nv,cells.end());
   }
-  std::vector<uint8_t>is_train(h->n_cells);for(uint32_t x:train)is_train[x]=1;
   std::vector<float>mean(F),scale(F);
   if(th){
     const float*prep=(const float*)(trunk.p+th->prep_offset);memcpy(mean.data(),prep+F,(size_t)F*4);memcpy(scale.data(),prep+2*F,(size_t)F*4);
