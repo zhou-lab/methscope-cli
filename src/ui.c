@@ -2,10 +2,23 @@
 /* Terminal helpers for `methscope fetch`, following kycg's src/ui.c.
  *
  * TWO TIERS, ON PURPOSE
- *   A raw-mode checkbox list when the terminal can drive one, and a numbered
- *   list read from a single line when it cannot -- a pipe, a dumb TERM, or a
- *   session where raw mode fails. The fallback is not a degraded mode nobody
- *   tests; it is what runs whenever the widget cannot.
+ *   A full-screen checkbox list when the terminal can drive one, and a
+ *   numbered list read from a single line when it cannot -- a pipe, a dumb
+ *   TERM, or a session where raw mode fails. The fallback is not a degraded
+ *   mode nobody tests; it is what runs whenever the widget cannot.
+ *
+ * THE ALTERNATE SCREEN
+ *   The widget takes the whole terminal (\033[?1049h) and gives it back
+ *   untouched on exit. That is what makes a fixed-height viewport reasonable:
+ *   a long catalog scrolls inside the frame instead of shoving the user's
+ *   scrollback off the top. raw_leave() is wired to atexit and to SIGINT and
+ *   SIGTERM, so a ^C during the picker cannot strand a terminal in raw mode
+ *   with a hidden cursor.
+ *
+ * KEYS
+ *   The same bindings as `kycg fetch`: arrows or j/k move, space toggles,
+ *   a/n select all or none, / filters, f fetches the checked entries, enter
+ *   accepts, q or Esc cancels.
  *
  * NEVER BLOCK A SCRIPT
  *   Every entry point here is gated on ms_ui_interactive(), which requires
@@ -20,6 +33,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -40,21 +55,47 @@ const char *ms_ui_green(void) { return color() ? "\033[32m" : ""; }
 const char *ms_ui_cyan(void)  { return color() ? "\033[36m" : ""; }
 const char *ms_ui_reset(void) { return color() ? "\033[0m"  : ""; }
 
+static void raw_off(void) {
+  if (!g_raw) return;
+  /* Leave the alternate screen first, so the terminal restores what the user
+   * had before we drew over it, then hand back cooked mode and the cursor. */
+  fputs("\033[?1049l\033[?25h", stderr);
+  tcsetattr(0, TCSAFLUSH, &g_saved);
+  fflush(stderr);
+  g_raw = 0;
+}
+static void on_signal(int sig) {
+  raw_off();
+  signal(sig, SIG_DFL);
+  raise(sig);
+}
 static int raw_on(void) {
   if (tcgetattr(0, &g_saved)) return 0;
   struct termios t = g_saved;
   t.c_lflag &= (tcflag_t)~(ICANON | ECHO);
   t.c_cc[VMIN] = 1; t.c_cc[VTIME] = 0;
-  if (tcsetattr(0, TCSANOW, &t)) return 0;
+  if (tcsetattr(0, TCSAFLUSH, &t)) return 0;
   g_raw = 1;
+  static int hooked = 0;
+  if (!hooked) {
+    atexit(raw_off);
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
+    hooked = 1;
+  }
+  fputs("\033[?1049h\033[H\033[2J\033[?25l", stderr);
+  fflush(stderr);
   return 1;
 }
-static void raw_off(void) {
-  if (g_raw) { tcsetattr(0, TCSANOW, &g_saved); g_raw = 0; }
+
+static int term_rows(void) {
+  struct winsize ws;
+  if (ioctl(2, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 4) return ws.ws_row;
+  return 24;
 }
 
 /* Key codes above the ASCII range so arrows and letters share one switch. */
-enum { K_UP = 256, K_DOWN, K_OTHER };
+enum { K_UP = 256, K_DOWN, K_PGUP, K_PGDN, K_HOME, K_END, K_OTHER };
 
 static int read_key(void) {
   int c = getchar();
@@ -63,52 +104,127 @@ static int read_key(void) {
   int a = getchar();
   if (a != '[' && a != 'O') return 27;      /* bare Esc */
   int b = getchar();
-  if (b == 'A') return K_UP;
-  if (b == 'B') return K_DOWN;
-  return K_OTHER;
+  switch (b) {
+    case 'A': return K_UP;
+    case 'B': return K_DOWN;
+    case 'H': return K_HOME;
+    case 'F': return K_END;
+    case '5': getchar(); return K_PGUP;     /* ESC [ 5 ~ */
+    case '6': getchar(); return K_PGDN;
+    default:  return K_OTHER;
+  }
 }
 
+/* Repaint the whole frame: title, a viewport over the matching rows, and a
+ * footer. Home-then-clear each line rather than clearing the screen, so the
+ * repaint does not flicker. */
 static void draw(const char *title, const char *const *items,
-                 const char *const *notes, size_t n, const int *on,
-                 size_t cur, int first) {
-  if (!first) fprintf(stderr, "\033[%zuA", n + 2);   /* rewind over the list */
-  fprintf(stderr, "\033[2K%s%s%s\n", ms_ui_bold(), title, ms_ui_reset());
-  for (size_t i = 0; i < n; ++i) {
-    fprintf(stderr, "\033[2K %s%s%s %s%s%s  %s%s%s\n",
+                 const char *const *notes, const size_t *view, size_t nview,
+                 const int *on, size_t cur, size_t top, size_t nsel,
+                 const char *filter, int filtering) {
+  int rows = term_rows();
+  int avail = rows - 4;                       /* title, blank, footer, status */
+  if (avail < 3) avail = 3;
+  fputs("\033[H", stderr);
+  fprintf(stderr, "\033[2K%s%s%s   %s%zu of %zu selected%s\n",
+          ms_ui_bold(), title, ms_ui_reset(),
+          ms_ui_dim(), nsel, nview, ms_ui_reset());
+  fprintf(stderr, "\033[2K%s%s%s\n",
+          ms_ui_dim(), filtering || (filter && *filter) ? "" : " ", ms_ui_reset());
+  if (filtering || (filter && *filter)) {
+    fprintf(stderr, "\033[2A\033[2K  %s/%s%s%s\n\n",
+            ms_ui_cyan(), ms_ui_reset(), filter, filtering ? "_" : "");
+  }
+  for (int r = 0; r < avail; ++r) {
+    size_t i = top + (size_t)r;
+    fputs("\033[2K", stderr);
+    if (i >= nview) { fputc('\n', stderr); continue; }
+    size_t k = view[i];
+    fprintf(stderr, " %s%s%s %s%s%s  %s%s%s%s\n",
             i == cur ? ms_ui_cyan() : "", i == cur ? "\xe2\x9d\xaf" : " ",
             i == cur ? ms_ui_reset() : "",
-            on[i] ? ms_ui_green() : "", on[i] ? "[x]" : "[ ]",
-            on[i] ? ms_ui_reset() : "",
-            items[i],
-            notes && notes[i] ? ms_ui_dim() : "", notes && notes[i] ? notes[i] : "");
-    if (notes && notes[i]) fprintf(stderr, "%s", ms_ui_reset());
+            on[k] ? ms_ui_green() : "", on[k] ? "[x]" : "[ ]",
+            on[k] ? ms_ui_reset() : "",
+            items[k],
+            notes && notes[k] ? ms_ui_dim() : "",
+            notes && notes[k] ? notes[k] : "", ms_ui_reset());
   }
-  fprintf(stderr, "\033[2K%s  space toggle · a all · n none · enter confirm · q cancel%s\n",
+  fprintf(stderr, "\033[2K\n\033[2K%s  arrows/jk move · space toggle · a/n all/none · "
+          "/ filter · f fetch · enter accept · q cancel%s\033[J",
           ms_ui_dim(), ms_ui_reset());
+  fflush(stderr);
+}
+
+/* Case-insensitive substring, so /chr20 finds the reference. */
+static int matches(const char *hay, const char *needle) {
+  if (!needle || !*needle) return 1;
+  size_t n = strlen(needle);
+  for (const char *p = hay; *p; ++p) {
+    size_t i = 0;
+    while (i < n && p[i] &&
+           (p[i] | 32) == (needle[i] | 32)) ++i;
+    if (i == n) return 1;
+  }
+  return 0;
 }
 
 static int *widget(const char *title, const char *const *items,
-                   const char *const *notes, size_t n, int preselect) {
+                   const char *const *notes, size_t n, int preselect,
+                   int *fetch_now) {
   if (!raw_on()) return NULL;
   int *on = calloc(n, sizeof(int));
-  if (!on) { raw_off(); return NULL; }
+  size_t *view = calloc(n, sizeof(size_t));
+  char filter[64] = {0};
+  if (!on || !view) { free(on); free(view); raw_off(); return NULL; }
   if (preselect) for (size_t i = 0; i < n; ++i) on[i] = 1;
 
-  size_t cur = 0;
-  int first = 1, cancelled = 0;
+  size_t cur = 0, top = 0;
+  int filtering = 0, cancelled = 0;
   for (;;) {
-    draw(title, items, notes, n, on, cur, first);
-    first = 0;
+    size_t nview = 0;
+    for (size_t i = 0; i < n; ++i) {
+      const char *note = notes && notes[i] ? notes[i] : "";
+      if (matches(items[i], filter) || matches(note, filter)) view[nview++] = i;
+    }
+    if (cur >= nview) cur = nview ? nview - 1 : 0;
+    int avail = term_rows() - 4; if (avail < 3) avail = 3;
+    if (cur < top) top = cur;
+    if (cur >= top + (size_t)avail) top = cur - (size_t)avail + 1;
+    size_t nsel = 0;
+    for (size_t i = 0; i < n; ++i) nsel += (size_t)(on[i] != 0);
+
+    draw(title, items, notes, view, nview, on, cur, top, nsel, filter, filtering);
     int k = read_key();
-    if (k == K_UP || k == 'k') cur = cur ? cur - 1 : n - 1;
-    else if (k == K_DOWN || k == 'j') cur = (cur + 1) % n;
-    else if (k == ' ') on[cur] = !on[cur];
-    else if (k == 'a') for (size_t i = 0; i < n; ++i) on[i] = 1;
-    else if (k == 'n') for (size_t i = 0; i < n; ++i) on[i] = 0;
-    else if (k == '\r' || k == '\n') break;
-    else if (k == 'q' || k == 27) { cancelled = 1; break; }
+
+    if (filtering) {                       /* typing into the filter box */
+      size_t fl = strlen(filter);
+      if (k == '\r' || k == '\n' || k == 27) { filtering = 0; }
+      else if (k == 127 || k == 8) { if (fl) filter[fl - 1] = '\0'; }
+      else if (k >= 32 && k < 127 && fl + 1 < sizeof(filter)) {
+        filter[fl] = (char)k; filter[fl + 1] = '\0'; cur = 0; top = 0;
+      }
+      continue;
+    }
+    switch (k) {
+      case K_UP: case 'k': if (cur) --cur; else cur = nview ? nview - 1 : 0; break;
+      case K_DOWN: case 'j': if (nview) cur = (cur + 1) % nview; break;
+      case K_PGUP: cur = cur > (size_t)avail ? cur - (size_t)avail : 0; break;
+      case K_PGDN: cur += (size_t)avail; if (cur >= nview) cur = nview ? nview - 1 : 0; break;
+      case K_HOME: cur = 0; break;
+      case K_END:  cur = nview ? nview - 1 : 0; break;
+      case ' ': if (nview) { on[view[cur]] = !on[view[cur]]; if (cur + 1 < nview) ++cur; } break;
+      case 'a': for (size_t i = 0; i < nview; ++i) on[view[i]] = 1; break;
+      case 'n': for (size_t i = 0; i < nview; ++i) on[view[i]] = 0; break;
+      case '/': filtering = 1; break;
+      case 'f': if (fetch_now) *fetch_now = 1; goto done;   /* fetch the checked */
+      case '\r': case '\n': goto done;
+      case 'q': case 27: cancelled = 1; goto done;
+      default: break;
+    }
   }
+done:
   raw_off();
+  free(view);
   if (cancelled) { free(on); return NULL; }
   return on;
 }
@@ -139,9 +255,11 @@ static int parse_selection(const char *s, int *on, size_t n) {
 }
 
 int *ms_ui_multiselect(const char *title, const char *const *items,
-                       const char *const *notes, size_t n, int preselect) {
+                       const char *const *notes, size_t n, int preselect,
+                       int *fetch_now) {
+  if (fetch_now) *fetch_now = 0;
   if (!n || !ms_ui_interactive()) return NULL;
-  int *on = widget(title, items, notes, n, preselect);
+  int *on = widget(title, items, notes, n, preselect, fetch_now);
   if (on) return on;
 
   /* No usable raw mode: number the list and read one line. */

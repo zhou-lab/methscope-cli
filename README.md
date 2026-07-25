@@ -45,9 +45,11 @@ path — and a `.cg`'s `.cg.idx` sibling rides along without being a second name
 to remember. Every entry carries a pinned SHA-256; a download that misses it is
 discarded, and `--verify` re-checks files already in the store.
 
-On a terminal a bare `fetch` shows the catalog as a checkbox list (space
-toggles, `a` all, `n` none, enter confirms, `q` cancels) and then asks once
-before downloading — browsing the catalog and choosing from it are the same
+On a terminal a bare `fetch` opens a full-screen picker over the catalog, with
+the same keys as `kycg fetch`: arrows or `j`/`k` move, space toggles, `a`/`n`
+select all or none, `/` filters, `f` fetches what is checked, enter accepts,
+`q` or Esc cancels. It uses the alternate screen, so your scrollback comes back
+untouched. Browsing the catalog and choosing from it are the same
 act, so there is no separate `list` command to drift out of step. Off a
 terminal it prints the identical catalog and exits, and a named target never
 prompts either way, so a container build or workflow step can never hang. It is

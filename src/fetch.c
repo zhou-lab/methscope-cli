@@ -386,7 +386,8 @@ static int browse_and_fetch(const char *dir, int force, int dry) {
     ++n;
   }
   fputc('\n', stderr);
-  int *pick = ms_ui_multiselect("Select what to fetch", items, note_p, (size_t)n, 0);
+  int fetch_now = 0;
+  int *pick = ms_ui_multiselect("methscope fetch", items, note_p, (size_t)n, 0, &fetch_now);
   if (!pick) { fprintf(stderr, "[methscope] fetch: nothing selected\n"); return 0; }
 
   const ms_model_t *plan[N_CATALOG];
@@ -407,7 +408,7 @@ static int browse_and_fetch(const char *dir, int force, int dry) {
   fprintf(stderr, "\n%s%d file(s), %s to download -> %s%s\n",
           ms_ui_bold(), np, sz, dir, ms_ui_reset());
   if (dry) return 0;
-  if (need && !ms_ui_confirm("Fetch now?", 1)) {
+  if (need && !fetch_now && !ms_ui_confirm("Fetch now?", 1)) {
     fprintf(stderr, "[methscope] fetch: cancelled\n");
     return 0;
   }
