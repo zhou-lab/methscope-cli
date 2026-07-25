@@ -227,6 +227,20 @@ example data (GitHub methscope_data)
 <span class="out">samples=35  CpGs=29401795  distinct patterns=2345190 (+PNA)  candidates=2345190
 PNA CpGs=2559840 (8.71%)  checksum=61d3a9e508cea26a</span>
 
+<span class="cm"># what it is: dimensions, the binstring parameters, the PNA share</span>
+<span class="cmd" data-cmd="methscope inspect panel.mrmp">methscope <span class="sub">inspect</span> panel.mrmp</span>
+<span class="out">format               MRMPIDX1 v1
+reference            ref.cg
+samples              35
+cpgs                 29401795
+distinct_candidates  2345190
+selectable_patterns  2345190
+pna_cpgs             2559840   8.7064%
+binstring            mincov=1 beta=0.500 max_ambig_frac=1.000 min_major_fold=10.000
+content_checksum     61d3a9e508cea26a
+pna_pattern          22222222222222222222222222222222222</span>
+
+<span class="cm"># --patterns adds the ranked head; --top sets how many (default 20)</span>
 <span class="cmd" data-cmd="methscope inspect panel.mrmp --patterns --top 3">methscope <span class="sub">inspect</span> panel.mrmp --patterns --top 3</span>
 <span class="out">#pattern                              label  count      (top 3 of 2345190)
 11111111111111111111111111111111111   P1     10736116
