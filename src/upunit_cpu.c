@@ -459,6 +459,10 @@ int ms_upunit_train_cpu(const ms_upunit_config_t *c) {
   const MsuiUnit *units = (const MsuiUnit *)(idx.p + ih->unit_offset);
   const uint32_t *cpg = (const uint32_t *)(idx.p + ih->cpg_offset);
   const MsuiMembership *members = (const MsuiMembership *)(idx.p + ih->membership_offset);
+  /* cpg[] indexes the per-cell truth (n_cpg entries); validate once so the
+   * training loop's truth[cpg[..]] can never read out of bounds. */
+  for (uint64_t i = 0; i < ih->n_cpg; ++i)
+    if (cpg[i] >= ih->n_cpg) cdie("MSUIDX1 cpg index out of range");
 
   /* checksums exactly as the CUDA backend computes them, so checkpoints interop */
   uint64_t isum = fnv(UINT64_C(1469598103934665603), idx.p, ih->file_bytes);

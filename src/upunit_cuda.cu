@@ -144,6 +144,8 @@ extern "C" int ms_upunit_train_cuda(const ms_upunit_config_t*c){
   uint64_t rows=(uint64_t)h->n_cells*h->n_reps,recend=h->records_offset+rows*h->record_bytes,truthbytes=(uint64_t)h->n_cells*h->n_cpg*2;
   if(recend>data.n||!range(h->truth_offset,truthbytes,data.n)||ih->file_bytes>idx.n||!range(ih->unit_offset,(uint64_t)ih->n_units*sizeof(MsuiUnit),idx.n)||!range(ih->cpg_offset,ih->n_cpg*4,idx.n)||!range(ih->membership_offset,(uint64_t)ih->n_real_memberships*sizeof(MsuiMembership),idx.n))die("truncated training payload");
   const MsuiUnit*units=(const MsuiUnit*)(idx.p+ih->unit_offset);const uint32_t*cpg=(const uint32_t*)(idx.p+ih->cpg_offset);const MsuiMembership*members=(const MsuiMembership*)(idx.p+ih->membership_offset);
+  /* cpg[] indexes per-cell truth (n_cpg entries); validate once so targets()' truth[cpg[..]] stays in bounds */
+  for(uint64_t i=0;i<ih->n_cpg;++i)if(cpg[i]>=ih->n_cpg)die("MSUIDX1 cpg index out of range");
   uint64_t isum=fnv(UINT64_C(1469598103934665603),idx.p,ih->file_bytes);
   uint64_t runsum=fnv(UINT64_C(1469598103934665603),h,sizeof(*h));
   runsum=fnv(runsum,&data.n,sizeof(data.n));runsum=fnv(runsum,&c->patterns,sizeof(c->patterns));
