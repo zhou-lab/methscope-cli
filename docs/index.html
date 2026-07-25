@@ -489,6 +489,68 @@ embedded_truth    yes (trainable)</span></code></pre>
     });
   });
 
+  // Workflow tabs. Without JS every panel stays visible, so nothing is hidden
+  // behind an interaction that never runs; js-tabs opts into one-at-a-time.
+  var tabs=[].slice.call(document.querySelectorAll('.tab[data-panel]'));
+  if(tabs.length){
+    document.documentElement.classList.add('js-tabs');
+    function select(name,focus){
+      tabs.forEach(function(t){
+        var on=t.dataset.panel===name;
+        t.setAttribute('aria-selected',on?'true':'false');
+        t.tabIndex=on?0:-1;
+        var pane=document.getElementById('p-'+t.dataset.panel);
+        if(pane)pane.classList.toggle('on',on);
+        if(on&&focus)t.focus();
+      });
+      if(history.replaceState)history.replaceState(null,'','#'+name);
+    }
+    tabs.forEach(function(t,i){
+      t.addEventListener('click',function(){select(t.dataset.panel);});
+      t.addEventListener('keydown',function(e){
+        var d=e.key==='ArrowDown'||e.key==='ArrowRight'?1:
+              e.key==='ArrowUp'||e.key==='ArrowLeft'?-1:0;
+        if(!d)return;
+        e.preventDefault();
+        select(tabs[(i+d+tabs.length)%tabs.length].dataset.panel,true);
+      });
+    });
+    var start=(location.hash||'').replace('#','');
+    select(tabs.some(function(t){return t.dataset.panel===start;})?start:tabs[0].dataset.panel);
+  }
+
+  // Format notes that follow the cursor. #tipfloat lives on <body> so no
+  // transformed ancestor can become its containing block.
+  var tips=document.querySelectorAll('.tip[data-tip]');
+  if(tips.length){
+    document.documentElement.classList.add('js-tips');   // disables the CSS fallback
+    var tf=document.createElement('div');tf.id='tipfloat';document.body.appendChild(tf);
+    var GAP=16;
+    function place(x,y){
+      var r=tf.getBoundingClientRect(),
+          left=x+GAP, top=y+GAP;
+      if(left+r.width>innerWidth-8) left=Math.max(8,x-GAP-r.width);
+      if(top+r.height>innerHeight-8) top=Math.max(8,y-GAP-r.height);
+      tf.style.left=left+'px';tf.style.top=top+'px';
+    }
+    function show(t,x,y){
+      var w=t.closest('.tipwrap');if(!w)return;
+      var b=w.querySelector('.tipbox[data-tip="'+t.dataset.tip+'"]');if(!b)return;
+      tf.innerHTML=b.innerHTML;tf.style.left='0px';tf.style.top='0px';
+      tf.classList.add('on');place(x,y);
+    }
+    function hide(){tf.classList.remove('on');}
+    tips.forEach(function(t){
+      t.addEventListener('mouseenter',function(e){show(t,e.clientX,e.clientY);});
+      t.addEventListener('mousemove',function(e){if(tf.classList.contains('on'))place(e.clientX,e.clientY);});
+      t.addEventListener('mouseleave',hide);
+      t.addEventListener('focus',function(){var r=t.getBoundingClientRect();show(t,r.left,r.bottom);});
+      t.addEventListener('blur',hide);
+    });
+    addEventListener('scroll',hide,true);
+    addEventListener('keydown',function(e){if(e.key==='Escape')hide();});
+  }
+
   // header conda-install badge: click the command to copy it (⧉ -> ✓)
   var ib=document.getElementById('install-btn');
   if(ib)ib.addEventListener('click',function(){
