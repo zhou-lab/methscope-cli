@@ -19,7 +19,7 @@
   :root[data-theme=dark]{--bg:#08110f;--fg:#e3f2ef;--muted:#8fa8a3;--line:#1c2b28;--soft:#0f1c19;--card:#0f1a18;--accent:#5eead4;--accent-2:#2dd4bf;--accent-soft:#123330;--on-accent:#06241f;--code-bg:#050d0c;--code-fg:#d7ece8;--cm:#5f7a76;--ok:#4ade80;--shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased}
-  .wrap{max-width:1520px;margin:0 auto;padding:0 22px 44px}
+  .wrap{max-width:1760px;margin:0 auto;padding:0 22px 44px}
   a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
   header{padding:32px 0 4px;margin-bottom:2px}
   h1{font-size:1.55rem;margin:0;letter-spacing:-.01em;font-weight:400;line-height:1.2;
@@ -73,8 +73,16 @@
      display:flex;align-items:baseline;gap:8px}
   .panel h3:first-of-type{margin-top:2px}
   .panel h3 .m{color:var(--muted);font-weight:400;font-size:.78rem}
+  /* Commands are written as one long line each -- no backslash continuations to
+     paste. Wide screens let them run and scroll if they must; narrow screens
+     soft-wrap instead, with the continuation indented so a wrapped command
+     still reads as one command. .tsch byte maps are aligned tables and never
+     wrap. */
   pre{position:relative;background:var(--code-bg);color:var(--code-fg);border-radius:9px;padding:11px 12px;
-     overflow-x:auto;font-size:.75rem;line-height:1.55;margin:0}
+     overflow-x:auto;font-size:.75rem;line-height:1.55;margin:0;white-space:pre}
+  @media(max-width:860px){
+    pre:not(.tsch){white-space:pre-wrap;overflow-wrap:anywhere;text-indent:-2ch;padding-left:calc(12px + 2ch)}
+  }
   pre code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
   .cm{color:var(--cm)}
   .sub{color:#2dd4bf;font-weight:700}          /* the methscope subcommand, highlighted */
@@ -225,8 +233,7 @@ example data (GitHub methscope_data)
       for hg38.</p>
     <div class="tipwrap">
       <pre><code><span class="cm"># rank every membership pattern over the reference samples</span>
-<span class="cmd" data-cmd="methscope mrmp-build 2025_Zhou_MajorPseudo.cg 2025_Zhou_MajorPseudo.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> 2025_Zhou_MajorPseudo.cg \
-  <span class="tip" data-tip="mrmp" tabindex="0">2025_Zhou_MajorPseudo.mrmp</span></span>
+<span class="cmd" data-cmd="methscope mrmp-build 2025_Zhou_MajorPseudo.cg 2025_Zhou_MajorPseudo.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> 2025_Zhou_MajorPseudo.cg <span class="tip" data-tip="mrmp" tabindex="0">2025_Zhou_MajorPseudo.mrmp</span></span>
 <span class="out">samples=35  CpGs=29401795  distinct patterns=2345190 (+PNA)  candidates=2345190
 PNA CpGs=2559840 (8.71%)  checksum=61d3a9e508cea26a</span>
 
@@ -283,11 +290,7 @@ pna_pattern          22222222222222222222222222222222222</span>
     <h3>Classify <span class="m">— with a shipped model</span></h3>
     <div class="tipwrap">
       <pre><code><span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
-<span class="cmd" data-cmd="methscope classify \
-  $(methscope fetch human_hg38_celltypes) \
-  $(methscope fetch hg38_celltype)">methscope <span class="sub tip" data-tip="cmd-classify" tabindex="0">classify</span> \
-  $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_celltypes) \
-  $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> <span class="tip" data-tip="ubjx" tabindex="0">hg38_celltype</span>)</span>
+<span class="cmd" data-cmd="methscope classify $(methscope fetch human_hg38_celltypes) $(methscope fetch hg38_celltype)">methscope <span class="sub tip" data-tip="cmd-classify" tabindex="0">classify</span> $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_celltypes) $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> <span class="tip" data-tip="ubjx" tabindex="0">hg38_celltype</span>)</span>
 <span class="out">cell             prediction_label  confidence
 Oligodendrocyte  ODC               0.915134   # oligodendrocyte
 Pancreas-Beta    Beta              0.930708   # islet beta
@@ -323,9 +326,7 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
     <h3>Train <span class="m">— fit your own classifier</span></h3>
     <div class="tipwrap">
       <pre><code><span class="cm"># features + labels -> one runnable bundle, in a single step</span>
-<span class="cmd" data-cmd="methscope classify-train -l labels.txt \
-  -o hg38_celltype.ubjx query.cg 2025_Zhou_MajorPseudo.mrmp">methscope <span class="sub tip" data-tip="cmd-classify-train" tabindex="0">classify-train</span> -l labels.txt \
-  -o hg38_celltype.ubjx query.cg 2025_Zhou_MajorPseudo.mrmp</span>
+<span class="cmd" data-cmd="methscope classify-train -l labels.txt -o hg38_celltype.ubjx query.cg 2025_Zhou_MajorPseudo.mrmp">methscope <span class="sub tip" data-tip="cmd-classify-train" tabindex="0">classify-train</span> -l labels.txt -o hg38_celltype.ubjx query.cg 2025_Zhou_MajorPseudo.mrmp</span>
 <span class="cm"># --framework xgboost | logistic | threshold</span>
 
 <span class="cm"># the same wrapping by hand: inner model + its MRMP (+ labels) -> one file</span>
@@ -344,11 +345,7 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
     <h3>Deconvolve <span class="m">— with a shipped reference</span></h3>
     <div class="tipwrap">
       <pre><code><span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
-<span class="cmd" data-cmd="methscope deconv \
-  $(methscope fetch human_hg38_immune_mixture) \
-  $(methscope fetch hg38_65celltypes)">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> \
-  $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_immune_mixture) \
-  $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_65celltypes)</span>
+<span class="cmd" data-cmd="methscope deconv $(methscope fetch human_hg38_immune_mixture) $(methscope fetch hg38_65celltypes)">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_immune_mixture) $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_65celltypes)</span>
 <span class="out">cell  … Macrophage  Mono    NK_CD56  …
 1     … 0.7486      0.2370  0.0000   …</span>
 <span class="cm"># truth 70/30; the other 63 types come back ~0</span></code></pre>
@@ -358,9 +355,7 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
     <div class="tipwrap">
       <pre><code><span class="cm"># per-cell panel, so each cell must deconvolve to itself</span>
 <span class="cmd" data-cmd="CELLS=$(methscope fetch human_hg38_celltypes)">CELLS=$(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_celltypes)</span>
-<span class="cmd" data-cmd="methscope deconv-build-ref -o self.refx \
-  $CELLS $(methscope fetch hg38_celltype)">methscope <span class="sub tip" data-tip="cmd-deconv-build-ref" tabindex="0">deconv-build-ref</span> -o self.refx \
-  $CELLS $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_celltype)</span>
+<span class="cmd" data-cmd="methscope deconv-build-ref -o self.refx $CELLS $(methscope fetch hg38_celltype)">methscope <span class="sub tip" data-tip="cmd-deconv-build-ref" tabindex="0">deconv-build-ref</span> -o self.refx $CELLS $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_celltype)</span>
 <span class="cmd" data-cmd="methscope deconv $CELLS self.refx">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> $CELLS self.refx</span>
 <span class="out"># Oligodendrocyte  Oligodendrocyte=100%
 # Pancreas-Beta    Pancreas-Beta=100%    ... (each 100% itself)</span>
@@ -381,43 +376,23 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
     <h3>Impute <span class="m">— with a shipped decoder</span></h3>
     <div class="tipwrap">
       <pre><code><span class="cm"># impute from ~0.1% coverage, then score against the truth track</span>
-<span class="cmd" data-cmd="methscope upscale -o recon.cg \
-  $(methscope fetch hg38_10k1) \
-  $(methscope fetch human_hg38_test)">methscope <span class="sub tip" data-tip="cmd-upscale" tabindex="0">upscale</span> -o recon.cg \
-  $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_10k1) \
-  $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_test)</span>
-<span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) \
-      &lt;(yame rowsub -I 1_10000 $(methscope fetch human_hg38_test.truth) \
-         | yame unpack -a - | cut -f4) \
-  | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) \
-      &lt;(yame rowsub -I 1_10000 $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_test.truth) \
-         | yame unpack -a - | cut -f4) \
-  | awk '$2!=2{t++;if($1==$2)c++} END{printf "%d/%d (%.1f%%)\n",c,t,100*c/t}'</span>
+<span class="cmd" data-cmd="methscope upscale -o recon.cg $(methscope fetch hg38_10k1) $(methscope fetch human_hg38_test)">methscope <span class="sub tip" data-tip="cmd-upscale" tabindex="0">upscale</span> -o recon.cg $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_10k1) $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_test)</span>
+<span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 $(methscope fetch human_hg38_test.truth) | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 $(methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_test.truth) | yame unpack -a - | cut -f4) | awk '$2!=2{t++;if($1==$2)c++} END{printf "%d/%d (%.1f%%)\n",c,t,100*c/t}'</span>
 <span class="out">9211/9794 (94.0%)   — 94% accurate from ~0.1% input</span></code></pre>
     </div>
 
     <h3>Train <span class="m">— featurize, group into units, fit (CUDA)</span></h3>
     <div class="tipwrap">
       <pre><code><span class="cm"># 1. featurize the truth atlas -> sampling/truth sidecar</span>
-<span class="cmd" data-cmd="methscope upscale-featurize --embed-truth \
-  atlas.cg 2025_Zhou_MajorPseudo.mrmp train.msur">methscope <span class="sub tip" data-tip="cmd-upscale-featurize" tabindex="0">upscale-featurize</span> --embed-truth \
-  atlas.cg 2025_Zhou_MajorPseudo.mrmp <span class="tip" data-tip="msur" tabindex="0">train.msur</span></span>
+<span class="cmd" data-cmd="methscope upscale-featurize --embed-truth atlas.cg 2025_Zhou_MajorPseudo.mrmp train.msur">methscope <span class="sub tip" data-tip="cmd-upscale-featurize" tabindex="0">upscale-featurize</span> --embed-truth atlas.cg 2025_Zhou_MajorPseudo.mrmp <span class="tip" data-tip="msur" tabindex="0">train.msur</span></span>
 
 <span class="cm"># 2. group CpGs into processing units</span>
-<span class="cmd" data-cmd="methscope upscale-set-units --unit-cpgs 16384 \
-  2025_Zhou_MajorPseudo.mrmp units.msui">methscope <span class="sub tip" data-tip="cmd-upscale-set-units" tabindex="0">upscale-set-units</span> --unit-cpgs 16384 \
-  2025_Zhou_MajorPseudo.mrmp <span class="tip" data-tip="msui" tabindex="0">units.msui</span></span>
+<span class="cmd" data-cmd="methscope upscale-set-units --unit-cpgs 16384 2025_Zhou_MajorPseudo.mrmp units.msui">methscope <span class="sub tip" data-tip="cmd-upscale-set-units" tabindex="0">upscale-set-units</span> --unit-cpgs 16384 2025_Zhou_MajorPseudo.mrmp <span class="tip" data-tip="msui" tabindex="0">units.msui</span></span>
 
 <span class="cm"># 3. train on CUDA; --split pins the exact held-out cells,
 #    else cells are cut 70/15/15 by --seed</span>
 <span class="cmd" data-cmd="make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80">make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80</span>
-<span class="cmd" data-cmd="methscope upscale-train -i train.msur \
-  --units units.msui --mrmp 2025_Zhou_MajorPseudo.mrmp \
-  -o model.updecx --work-dir work/ \
-  --split cells.tsv">methscope <span class="sub tip" data-tip="cmd-upscale-train" tabindex="0">upscale-train</span> -i train.msur \
-  --units units.msui --mrmp 2025_Zhou_MajorPseudo.mrmp \
-  -o <span class="tip" data-tip="updecx" tabindex="0">model.updecx</span> --work-dir work/ \
-  --split cells.tsv</span>
+<span class="cmd" data-cmd="methscope upscale-train -i train.msur --units units.msui --mrmp 2025_Zhou_MajorPseudo.mrmp -o model.updecx --work-dir work/ --split cells.tsv">methscope <span class="sub tip" data-tip="cmd-upscale-train" tabindex="0">upscale-train</span> -i train.msur --units units.msui --mrmp 2025_Zhou_MajorPseudo.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">model.updecx</span> --work-dir work/ --split cells.tsv</span>
 <span class="cm"># split rows: &lt;cell_index&gt;TAB&lt;train|val|test&gt;, one per source cell</span>
 
 <span class="cm"># inspect reads every build artifact, detected from its magic</span>
