@@ -46,31 +46,12 @@ jobs:
           conda build -c zhou-lab -c conda-forge \
             --output-folder "$RUNNER_TEMP/bld" conda-recipe/
 
-      # The runner's own glibc is far newer than what users have. Without the
-      # 2.17 sysroot pin the binary silently picks up symbols from the runner's
-      # glibc and dies at startup on normal machines -- sesame-cli shipped a
-      # package that way. Fail the build here instead of from a bug report.
+      # The runner's glibc is far newer than users'. If the sysroot pin ever
+      # comes loose, the binary silently picks up symbols no ordinary machine
+      # has and dies at startup -- how sesame-cli and tabl both shipped broken.
       - name: Check glibc floor (linux-64)
         if: matrix.name == 'linux-64'
-        run: |
-          pkg=$(ls "$RUNNER_TEMP"/bld/linux-64/*.conda | head -1)
-          work=$(mktemp -d); cd "$work"
-          python -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall('.')" "$pkg"
-          tar -xf pkg-*.tar.zst
-          rc=0
-          for b in bin/*; do
-            max=$(objdump -T "$b" 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1)
-            [ -n "$max" ] || continue          # not an ELF binary, or links nothing
-            echo "$b requires at most $max"
-            # sort -V puts the higher of the two last; if that is not 2.17, the
-            # binary needs something newer than the pinned sysroot provides.
-            if [ "$(printf '%s\nGLIBC_2.17\n' "$max" | sort -V | tail -1)" != "GLIBC_2.17" ]; then
-              echo "::error::$b requires $max, above the pinned GLIBC_2.17 floor" >&2
-              objdump -T "$b" | grep -E 'GLIBC_2\.(1[89]|[2-9][0-9])' >&2 || true
-              rc=1
-            fi
-          done
-          exit $rc
+        run: python tools/check_glibc_floor.py "$RUNNER_TEMP/bld"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
