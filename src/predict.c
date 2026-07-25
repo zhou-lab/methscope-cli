@@ -24,8 +24,8 @@
   } while (0)
 
 static void pdie(const char *msg, const char *arg) {
-  if (arg) fprintf(stderr, "[methscope] predict: %s: %s\n", msg, arg);
-  else     fprintf(stderr, "[methscope] predict: %s\n", msg);
+  if (arg) fprintf(stderr, "[methscope] classify: %s: %s\n", msg, arg);
+  else     fprintf(stderr, "[methscope] classify: %s\n", msg);
   exit(1);
 }
 
@@ -45,8 +45,8 @@ static int predict_usage(void) {
   ms_help(stderr,
     "\n"
     "Usage:\n"
-    "  methscope predict [options] <query.cg> <model.ubjx>\n"
-    "  methscope predict [options] <query.cg> <ref.mrmp> <booster.ubj>\n"
+    "  methscope classify [options] <query.cg> <model.ubjx>\n"
+    "  methscope classify [options] <query.cg> <ref.mrmp> <booster.ubj>\n"
     "\n"
     "Purpose:\n"
     "  Predict a label (cell type, sex, ... — whatever the model was trained on)\n"

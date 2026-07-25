@@ -201,7 +201,7 @@ void ms_matrix_free(ms_matrix_t *m) {
  * record): keep the states named in keep_names[], and fold EVERY other state
  * (including the original "Pna" and any pattern not kept) into a single "Pna"
  * background state. The result has exactly n_keep (+1 for "Pna" unless it is
- * already among keep_names) states. Used by `train` to bundle only the mrmp the
+ * already among keep_names) states. Used by `classify-train` to bundle only the mrmp the
  * model actually uses, so `predict` featurizes against that same trimmed set.
  *
  * Matching is BY NAME: the .cm's internal state indices follow definition order,
@@ -295,7 +295,7 @@ static int build_reference_usage(void) {
   snprintf(buf, sizeof(buf),
     "\n"
     "Usage:\n"
-    "  methscope build-reference [options] -o <out.refx> <celltypes.cg> <ref.mrmp>\n"
+    "  methscope deconv-build-ref [options] -o <out.refx> <celltypes.cg> <ref.mrmp>\n"
     "\n"
     "Purpose:\n"
     "  Build a .refx deconvolution reference: summarize each cell type against the\n"

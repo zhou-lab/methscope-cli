@@ -40,7 +40,7 @@ void         ms_matrix_write_tsv(const ms_matrix_t *m, FILE *out, int header);
 /**
  * Write a trimmed copy of an MRMP reference (.cm) keeping only the states named
  * in keep_names[], folding every other state (incl. the original "Pna") into a
- * single "Pna" background. Used by `train` to bundle exactly the mrmp the model
+ * single "Pna" background. Used by `classify-train` to bundle exactly the mrmp the model
  * uses. Matching is by name (see matrix.c).
  */
 void ms_mrmp_trim(const char *in_cm, char *const *keep_names, int n_keep,
@@ -104,6 +104,7 @@ void ms_annotate_booster(const char *in_ubj, const char *meta_tsv, const char *o
 int main_upscale(int argc, char *argv[]);
 int main_upscale_train(int argc, char *argv[]);
 int main_upscale_internal(int argc, char *argv[]);
+int main_fetch(int argc, char *argv[]);
 int main_upscale_prepare(int argc, char *argv[]);
 
 /* `methscope inspect` reporters for the two upscale build artifacts. */

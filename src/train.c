@@ -27,8 +27,8 @@
   } while (0)
 
 static void tdie(const char *msg, const char *arg) {
-  if (arg) fprintf(stderr, "[methscope] train: %s: %s\n", msg, arg);
-  else     fprintf(stderr, "[methscope] train: %s\n", msg);
+  if (arg) fprintf(stderr, "[methscope] classify-train: %s: %s\n", msg, arg);
+  else     fprintf(stderr, "[methscope] classify-train: %s\n", msg);
   exit(1);
 }
 
@@ -83,7 +83,7 @@ static int train_usage(void) {
   ms_help(stderr,
     "\n"
     "Usage:\n"
-    "  methscope train -l <labels.txt> -o <out.ubjx> [options] <query.cg> <ref.mrmp>\n"
+    "  methscope classify-train -l <labels.txt> -o <out.ubjx> [options] <query.cg> <ref.mrmp>\n"
     "\n"
     "Purpose:\n"
     "  Train a multiclass classifier for any per-record label (cell type, sex,\n"

@@ -23,7 +23,18 @@ XGB_PREFIX ?= $(CONDA_PREFIX)
 CFLAGS  += -Isrc -I$(YAME_DIR)/src -I$(YAME_DIR)/htslib -I$(XGB_PREFIX)/include
 LDFLAGS  = -L$(XGB_PREFIX)/lib -Wl,-rpath,$(XGB_PREFIX)/lib
 # Order matters: our objects, then libyame, then htslib, then xgboost, then libc.
-LIBS     = $(YAME_LIB) $(HTSLIB) -lxgboost -lpthread -lz -lm
+# libcurl is optional and only powers `fetch`. Probe by actually linking, so a
+# broken or missing install degrades to a build that still lists the catalog
+# and tells you the URL, rather than failing the whole build.
+CURL_PROBE := $(shell printf 'int main(void){return 0;}' > /tmp/ms_curl_$$$$.c && \
+  $(CC) /tmp/ms_curl_$$$$.c -L$(XGB_PREFIX)/lib -lcurl -o /dev/null 2>/dev/null && echo 1; \
+  rm -f /tmp/ms_curl_$$$$.c)
+ifeq ($(CURL_PROBE),1)
+  CFLAGS += -DMS_HAVE_CURL
+  CURL_LIB = -lcurl
+endif
+
+LIBS     = $(YAME_LIB) $(HTSLIB) -lxgboost $(CURL_LIB) -lpthread -lz -lm
 
 OS := $(shell uname)
 ifneq ($(OS),Darwin)

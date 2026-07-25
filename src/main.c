@@ -28,17 +28,20 @@ static int usage(void) {
           D, R);
   fprintf(stderr, "%sUsage%s  methscope <command> [options] [args]\n\n", D, R);
 
-  fprintf(stderr, "%sMRMP construction%s %s— the feature foundation%s\n", B, R, D, R);
+  fprintf(stderr, "%sModels%s\n", B, R);
+  CMD("fetch",        "Download pretrained models (no NAME lists the catalog)");
+
+  fprintf(stderr, "\n%sMRMP construction%s %s— the feature foundation%s\n", B, R, D, R);
   CMD("mrmp-build",   "Construct the MRMP artifact from a discretized reference .cg");
   CMD("mrmp-export",  "Emit the runtime .cm mask (and pattern / count tables)");
 
   fprintf(stderr, "\n%sClassification%s %s(cell type, sex, ...)%s\n", B, R, D, R);
-  CMD("predict",      "Classify a methylome -> labels + confidence");
-  CMD("train",        "Fit a label classifier (xgboost / threshold / logistic)");
+  CMD("classify",     "Classify a methylome -> labels + confidence");
+  CMD("classify-train","Fit a label classifier (xgboost / threshold / logistic)");
 
   fprintf(stderr, "\n%sDeconvolution%s\n", B, R);
   CMD("deconv",         "Estimate cell-type proportions (NNLS) from a mixture");
-  CMD("build-reference","Build a .refx deconvolution reference (--matrix for the raw matrix)");
+  CMD("deconv-build-ref","Build a .refx deconvolution reference (--matrix for the raw matrix)");
 
   fprintf(stderr, "\n%sUpscaling%s %s(imputation)%s\n", B, R, D, R);
   CMD("upscale",      "Impute genome-wide CpG methylation from a sparse methylome");
@@ -67,8 +70,8 @@ int main(int argc, char *argv[]) {
     printf("methscope %s (yame %s)\n", METHSCOPE_VERSION, YAME_VERSION);
     return 0;
   }
-  if (strcmp(argv[1], "predict")    == 0) return main_predict(argc - 1, argv + 1);
-  if (strcmp(argv[1], "build-reference") == 0) return main_build_reference(argc - 1, argv + 1);
+  if (strcmp(argv[1], "classify")    == 0) return main_predict(argc - 1, argv + 1);
+  if (strcmp(argv[1], "deconv-build-ref") == 0) return main_build_reference(argc - 1, argv + 1);
   if (strcmp(argv[1], "matrix")     == 0) {   /* renamed 2026-07; alias kept */
     fprintf(stderr, "[methscope] 'matrix' was renamed to 'build-reference'\n");
     return main_build_reference(argc - 1, argv + 1);
@@ -96,9 +99,10 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "[methscope] research evaluator moved to '_upscale eval'\n");
     return 1;
   }
+  if (strcmp(argv[1], "fetch")        == 0) return main_fetch(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-build")   == 0) return main_mrmp_build(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-export")  == 0) return main_mrmp_export(argc - 1, argv + 1);
-  if (strcmp(argv[1], "train")      == 0) return main_train(argc - 1, argv + 1);
+  if (strcmp(argv[1], "classify-train")      == 0) return main_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "inspect")    == 0) return main_inspect(argc - 1, argv + 1);
   if (strcmp(argv[1], "bundle")     == 0) return main_bundle(argc - 1, argv + 1);
   if (strcmp(argv[1], "unbundle")   == 0) return main_unbundle(argc - 1, argv + 1);

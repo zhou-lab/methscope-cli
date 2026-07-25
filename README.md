@@ -13,11 +13,23 @@ It builds [YAME](https://github.com/zhou-lab/YAME) as a static library
 
 ## Models
 
-**Pretrained models are hosted on HuggingFace
+Pretrained models are hosted on HuggingFace
 ([zhou-lab/methscope](https://huggingface.co/zhou-lab/methscope)) — too large for
-git. The [methscope_data](https://github.com/zhou-lab/methscope_data) repo holds
-the catalog, the query `.cg` test fixtures (`test/`), and the reproducibility
-archive.** This section defines the bundle *formats*.
+git. `methscope fetch` carries the catalog and downloads them; the
+[methscope_data](https://github.com/zhou-lab/methscope_data) repo holds the query
+`.cg` test fixtures (`test/`) and the reproducibility archive.
+
+```sh
+methscope fetch                       # list the catalog + what is already local
+methscope fetch hg38_celltype         # or a comma-separated list, or `all`
+# -> $METHSCOPE_HOME, else ~/.methscope/models (--store DIR overrides)
+```
+
+`fetch` never prompts, so it is safe inside a container build or a workflow
+step, and it is the only command that touches the network. Downloads land on a
+`.part` sibling and are renamed only once the byte count matches the catalog.
+libcurl is optional: without it the build still lists the catalog and prints the
+URL to download by hand.
 
 ## Build
 

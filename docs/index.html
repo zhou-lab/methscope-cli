@@ -150,8 +150,8 @@ git clone --recurse-submodules \
   https://github.com/zhou-lab/methscope-cli
 cd methscope-cli &amp;&amp; make
 
-<span class="cm"># pretrained models — from HuggingFace</span>
-hf download zhou-lab/methscope --local-dir models
+<span class="cm"># pretrained models — no hf client needed</span>
+methscope <span class="sub">fetch</span> all
 
 <span class="cm"># test fixtures + catalog — from GitHub</span>
 git clone \
@@ -161,6 +161,32 @@ git clone \
       no separate annotation files. Examples below use <code class="inl">models/</code>
       (from <a href="https://huggingface.co/zhou-lab/methscope">HuggingFace</a>) and
       <code class="inl">test/</code> (from the <code class="inl">methscope_data</code> checkout).</p>
+  </section>
+
+  <section class="card">
+    <h2>fetch <span class="m">— pretrained models</span></h2>
+    <p>The models are too large for git, so they live on
+      <a href="https://huggingface.co/zhou-lab/methscope">HuggingFace</a> and
+      <code class="inl">fetch</code> carries the catalog. With no name it lists what exists and
+      what is already local. It never prompts, so it is safe in a container build.</p>
+    <pre><code>methscope <span class="sub">fetch</span>
+<span class="out">store              ~/.methscope/models
+
+name               size       task                           framework    local
+hg38_celltype      24.5 MB    cell-type annotation           xgboost      -
+mm10_celltype      21.5 MB    cell-type annotation           xgboost      -
+hg38_sex           30.2 KB    sex prediction                 logistic     yes
+hg38_65celltypes   27.6 MB    deconvolution (NNLS)           refx         -
+hg38_10k1          27.7 MB    CpG upscaling (one block)      UPDEC1       -
+hg38_wg            2.8 GB     CpG upscaling (whole genome)   UPDEC2       -
+
+6 models, 2.9 GB total; 30.2 KB present</span>
+
+methscope <span class="sub">fetch</span> hg38_celltype,hg38_sex   <span class="cm"># or: all</span>
+<span class="cm"># --store DIR overrides $METHSCOPE_HOME (default ~/.methscope/models)</span></code></pre>
+    <p style="margin-top:11px">Downloads land on a <code class="inl">.part</code> sibling and are
+      renamed only once the byte count matches the catalog, so an interrupted fetch can never
+      leave a short file that later reads as a valid model.</p>
   </section>
 
   <section class="card">
@@ -199,18 +225,18 @@ methscope <span class="sub">mrmp-export</span> --top 1000 \
   </section>
 
   <section class="card">
-    <h2>train … predict <span class="m">— cell type / sex</span></h2>
+    <h2>classify-train … classify <span class="m">— cell type / sex</span></h2>
     <p>Fit a label classifier over MRMP features and bundle it with its MRMP + labels in one
       step, then classify with it. Three frameworks (<code class="inl">xgboost</code> /
       <code class="inl">logistic</code> / <code class="inl">threshold</code>); the bundle records
       which.</p>
     <pre><code><span class="cm"># fit + bundle in one step</span>
-methscope <span class="sub">train</span> -l labels.txt \
+methscope <span class="sub">classify-train</span> -l labels.txt \
   -o hg38_celltype.ubjx query.cg panel.mrmp
 <span class="cm"># --framework xgboost | logistic | threshold</span>
 
 <span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
-methscope <span class="sub">predict</span> cells.cg models/hg38_celltype.ubjx
+methscope <span class="sub">classify</span> cells.cg models/hg38_celltype.ubjx
 <span class="out">cell             prediction_label  confidence
 Oligodendrocyte  ODC               0.9151
 Pancreas-Beta    Beta              0.9307
@@ -222,12 +248,12 @@ Blood-NK         NK CD16           0.8127</span>
   </section>
 
   <section class="card">
-    <h2>build-reference … deconv <span class="m">— cell-type proportions</span></h2>
+    <h2>deconv-build-ref … deconv <span class="m">— cell-type proportions</span></h2>
     <p>Summarize per-cell-type pseudobulks against the MRMP into a self-contained
       <code class="inl">.refx</code>, then solve a mixture against it by non-negative least
       squares → a proportion per cell type. Uses all MRMP patterns; robust to extreme sparsity.</p>
     <pre><code><span class="cm"># 1. build the signature panel</span>
-methscope <span class="sub">build-reference</span> -o panel.refx \
+methscope <span class="sub">deconv-build-ref</span> -o panel.refx \
   celltypes.cg panel.mrmp
 <span class="cm"># --matrix emits the raw record x pattern beta TSV instead</span>
 
@@ -358,7 +384,7 @@ wget -q $MD/human_hg38_test.cg $MD/human_hg38_test.truth.cg          <span class
   <div class="cols">
     <div>
       <h3>1 — cell-type prediction (cross-atlas concordance)</h3>
-      <pre><code>methscope <span class="sub">predict</span> human_hg38_celltypes.cg hg38_celltype.ubjx
+      <pre><code>methscope <span class="sub">classify</span> human_hg38_celltypes.cg hg38_celltype.ubjx
 <span class="out">cell             prediction_label  confidence
 Oligodendrocyte  ODC               0.9151   # oligodendrocyte
 Pancreas-Beta    Beta              0.9307   # islet beta
@@ -369,7 +395,7 @@ Blood-Monocytes  Mono              0.8360   # monocyte</span>
     <div>
       <h3>2 — deconvolution, self-identity</h3>
       <pre><code><span class="cm"># build a per-cell .refx; each cell must deconvolve to itself</span>
-methscope <span class="sub">build-reference</span> -o self.refx \
+methscope <span class="sub">deconv-build-ref</span> -o self.refx \
   human_hg38_celltypes.cg hg38_celltype.ubjx
 methscope <span class="sub">deconv</span> human_hg38_celltypes.cg self.refx
 <span class="out"># Oligodendrocyte  Oligodendrocyte=100%
@@ -396,19 +422,6 @@ paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) \
 </section>
 
 
-<section class="full">
-  <h2>Pretrained models <span class="m">— <a href="https://github.com/zhou-lab/methscope_data">zhou-lab/methscope_data</a></span></h2>
-  <p>Each is a single runnable bundle; <code class="inl">methscope inspect &lt;model&gt;</code> prints its
-    framework, full label list, and (for linear models) per-feature weights.</p>
-  <table class="models">
-    <tr><th>file</th><th>task</th><th>framework</th><th>labels / cell types</th></tr>
-    <tr><td><code>hg38_celltype.ubjx</code></td><td>cell-type annotation</td><td>xgboost</td><td>62 human cell types</td></tr>
-    <tr><td><code>mm10_celltype.ubjx</code></td><td>cell-type annotation</td><td>xgboost</td><td>41 mouse-brain cell types</td></tr>
-    <tr><td><code>hg38_sex.ubjx</code></td><td>sex prediction</td><td>logistic</td><td>Female, Male (XCI markers)</td></tr>
-    <tr><td><code>hg38_10k1.updecx</code></td><td>CpG upscaling</td><td>MLP decoder</td><td>block 10k1 (10,000 CpGs)</td></tr>
-    <tr><td><code>hg38_65celltypes.refx</code></td><td>deconvolution (NNLS)</td><td>refx</td><td>65 types = 58 Zhou + 7 Loyfer; split MRMP, 15,300 patterns</td></tr>
-  </table>
-</section>
 
 <footer>
   MethScope — Ultra-fast Analysis of Sparse DNA Methylome via Recurrent Pattern Encoding.

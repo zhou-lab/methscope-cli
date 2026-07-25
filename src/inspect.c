@@ -208,8 +208,8 @@ int main_inspect(int argc, char *argv[]) {
   if      (is_updec2) snprintf(role, sizeof role, "whole-genome upscale decoder - run via `upscale`");
   else if (is_updec)  snprintf(role, sizeof role, "upscale decoder - run via `upscale`");
   else if (is_refx)   snprintf(role, sizeof role, "deconvolution reference - run via `deconv`");
-  else if (is_linear) snprintf(role, sizeof role, "%s linear classifier - run via `predict`", kind ? kind : "linear");
-  else                snprintf(role, sizeof role, "xgboost classifier - run via `predict`");
+  else if (is_linear) snprintf(role, sizeof role, "%s linear classifier - run via `classify`", kind ? kind : "linear");
+  else                snprintf(role, sizeof role, "xgboost classifier - run via `classify`");
 
   /* ---- container ---- */
   int nsec = 0;
