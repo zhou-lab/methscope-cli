@@ -464,12 +464,13 @@ human_hg38_test_reconstructed.cg      1     NA  global   10000     6239   10000 
 
 <span class="cm"># and see it: stack the three tracks and slice a 50-CpG window.
 # yame hprint colours the calls -- 1 methylated, 0 unmethylated, 2 unobserved</span>
-<span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -B 11625_11675 - | yame hprint -">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -B 11625_11675 - | yame hprint -</span>
-<span class="out">truth  <span class="hm">1</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">000000</span><span class="hm">1</span><span class="hu">00000000000000000000</span>
-input  <span class="hn">222222222222</span><span class="hm">1</span><span class="hn">22222222222222222222222222</span><span class="hu">0</span><span class="hn">2222222222</span>
-recon  <span class="hm">1</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">000000</span><span class="hm">1</span><span class="hu">00000000000000000000</span></span>
-<span class="cm"># two observed CpGs in this window, and the reconstruction matches the
-# truth at all 50 positions.</span></code></pre>
+<span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 232_50 - | yame hprint -">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 232_50 - | yame hprint -</span>
+<span class="out">truth  <span class="hm">11111111111111111111111111</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">00</span>
+input  <span class="hn">2222222222222222222222222222222222222</span><span class="hm">1</span><span class="hn">222222222222</span>
+recon  <span class="hm">11111111111111111111111111</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">00</span></span>
+<span class="cm"># -I is the same selector as the scoring line: block 232 at 50 CpGs, which
+# sits inside block 10k1. One CpG was observed in this window, and the
+# reconstruction matches the truth at all 50 positions.</span></code></pre>
     </div>
 
     <h3>Train <span class="m">— featurize, group into units, fit (CUDA)</span></h3>

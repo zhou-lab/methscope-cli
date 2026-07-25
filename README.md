@@ -153,21 +153,20 @@ non-public `analysis/zhou2018_upscale_eval.sh` script. See the MethScope lab jou
 [docs page](https://zhou-lab.github.io/methscope-cli/).
 
 **Visualize it.** Because the tracks are all whole-genome `.cg`, just stack them,
-slice a 50-CpG window with one `rowsub -B <beg0>_<end1>` (genome rows; block 10k1
-starts at row 10000, so 11625–11674 is a window inside it with two observed input
-CpGs), and let `yame hprint` colour the calls (`1`=methylated, `0`=unmethylated,
+slice a 50-CpG window with one `rowsub -I <block>_<size>` (block 232 at size 50
+sits inside block 10k1, and carries one observed input CpG), and let `yame hprint` colour the calls (`1`=methylated, `0`=unmethylated,
 `2`=NA — colour on by default in a recent YAME; pass `-c` to disable):
 
 ```sh
-cat human_hg38_test.truth.cg human_hg38_test.cg recon.cg \
-  | yame rowsub -B 11625_11675 - | yame hprint -
-# truth  10101111111111111101111000000100000000000000000000    dense 0/1
-# input  22222222222212222222222222222222222222202222222222    2 = NA; only 2 CpGs observed
-# recon  10101111111111111101111000000100000000000000000000    matches truth
+cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg \
+  | yame rowsub -I 232_50 - | yame hprint -
+# truth  11111111111111111111111111010111111111111110111100    dense 0/1
+# input  22222222222222222222222222222222222221222222222222    2 = NA; one CpG observed
+# recon  11111111111111111111111111010111111111111110111100    matches truth
 ```
 
-From two observed CpGs in this window, the reconstruction matches the truth
-position-for-position. `--probs` emits per-CpG probabilities as TSV instead of a
+From a single observed CpG in this window, the reconstruction matches the truth
+at all 50 positions. `--probs` emits per-CpG probabilities as TSV instead of a
 `.cg`. (Rebuild the bundle: `export_upscale_model.py … -o 10k1.updec`, then
 `bundle -m mrmp100.cm -O outcpg.cm -o 10k1.updecx 10k1.updec`, where
 `outcpg.cm` is a genome-wide YAME mask marking the block's CpGs.)
