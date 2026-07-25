@@ -88,6 +88,8 @@
   .cm{color:var(--cm)}
   .sub{color:#2dd4bf;font-weight:700}          /* the methscope subcommand, highlighted */
   .out{color:#9fc7c1}                          /* sample output */
+  /* yame hprint colours: methylated, unmethylated, unobserved */
+  .hm{color:#e5b567}.hu{color:#6c99bb}.hn{color:#6b7a78}
   code.inl{background:var(--accent-soft);color:var(--accent);padding:1px 5px;border-radius:5px;
      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.84em}
   /* Copy one command, not the block: the output lines are there to be read,
@@ -183,6 +185,10 @@
     <div class="tipwrap">
       <pre><code><span class="cm"># conda — installs the `methscope` binary</span>
 <span class="cmd" data-cmd="conda install -c zhou-lab -c conda-forge methscope">conda install -c zhou-lab -c conda-forge methscope</span>
+
+<span class="cm"># to run the examples and the analysis around them, add the two
+# tools they pipe through: yame reads and slices .cg, tabl aligns TSV</span>
+<span class="cmd" data-cmd="conda install -c zhou-lab -c conda-forge yame tabl">conda install -c zhou-lab -c conda-forge yame tabl</span>
 
 <span class="cm"># or build from source (bundles YAME)</span>
 <span class="cmd" data-cmd="git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli">git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli</span>
@@ -434,12 +440,36 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
 <span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR=&quot;.&quot;</span>
 <span class="cmd" data-cmd="methscope fetch hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg</span>
 
-<span class="cm"># impute from ~0.1% coverage, then score against the truth track.
-# the .cg holds binary 0/1 calls, so this is exact-match accuracy
-# (--probs emits per-CpG probabilities as TSV instead)</span>
-<span class="cmd" data-cmd="methscope upscale -o recon.cg hg38_10k1.updecx human_hg38_test.cg">methscope <span class="sub tip" data-tip="cmd-upscale" tabindex="0">upscale</span> -o recon.cg hg38_10k1.updecx human_hg38_test.cg</span>
-<span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste <(yame rowsub -I 1_10000 recon.cg | yame unpack -a - | cut -f4) <(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk '$2!=2{t++;if($1==$2)c++} END{printf "%d/%d (%.1f%%)\n",c,t,100*c/t}'</span>
-<span class="out">9211/9794 (94.0%)   — 94% of binary calls correct, from ~0.1% input</span></code></pre>
+<span class="cm"># what goes in: a sparse methylome</span>
+<span class="cmd" data-cmd="yame summary human_hg38_test.cg | tabl view">yame summary human_hg38_test.cg | tabl view</span>
+<span class="out">QFile               Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap   Beta
+human_hg38_test.cg      1     NA  global   29000    23857   29000      23857  0.823</span>
+
+<span class="cm"># impute the whole genome from it</span>
+<span class="cmd" data-cmd="methscope upscale -o human_hg38_test_reconstructed.cg hg38_10k1.updecx human_hg38_test.cg">methscope <span class="sub tip" data-tip="cmd-upscale" tabindex="0">upscale</span> -o human_hg38_test_reconstructed.cg hg38_10k1.updecx human_hg38_test.cg</span>
+
+<span class="cm"># what comes out</span>
+<span class="cmd" data-cmd="yame summary human_hg38_test_reconstructed.cg | tabl view">yame summary human_hg38_test_reconstructed.cg | tabl view</span>
+<span class="out">QFile                             Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap   Beta
+human_hg38_test_reconstructed.cg      1     NA  global   10000     6239   10000       6239  0.624</span>
+<span class="cm"># this decoder writes one 10,000-CpG block, so N_univ is 10,000.
+# inside that block the input carried 13 covered CpGs; the truth has 9,794
+# at beta 0.593, and the reconstruction fills all 10,000 at beta 0.624 --
+# it recovers the region's methylation level, not just its average.</span>
+
+<span class="cm"># score the calls against the truth (the .cg holds binary 0/1 calls,
+# so this is exact-match accuracy; --probs emits probabilities instead)</span>
+<span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;</span>
+<span class="out">9211/9794 (94.0%)</span>
+
+<span class="cm"># and see it: stack the three tracks and slice a 50-CpG window.
+# yame hprint colours the calls -- 1 methylated, 0 unmethylated, 2 unobserved</span>
+<span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -B 11625_11675 - | yame hprint -">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -B 11625_11675 - | yame hprint -</span>
+<span class="out">truth  <span class="hm">1</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">000000</span><span class="hm">1</span><span class="hu">00000000000000000000</span>
+input  <span class="hn">222222222222</span><span class="hm">1</span><span class="hn">22222222222222222222222222</span><span class="hu">0</span><span class="hn">2222222222</span>
+recon  <span class="hm">1</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">000000</span><span class="hm">1</span><span class="hu">00000000000000000000</span></span>
+<span class="cm"># two observed CpGs in this window, and the reconstruction matches the
+# truth at all 50 positions.</span></code></pre>
     </div>
 
     <h3>Train <span class="m">— featurize, group into units, fit (CUDA)</span></h3>
