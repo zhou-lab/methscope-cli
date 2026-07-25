@@ -73,16 +73,17 @@
      display:flex;align-items:baseline;gap:8px}
   .panel h3:first-of-type{margin-top:2px}
   .panel h3 .m{color:var(--muted);font-weight:400;font-size:.78rem}
-  /* Commands are written as one long line each -- no backslash continuations to
-     paste. Wide screens let them run and scroll if they must; narrow screens
-     soft-wrap instead, with the continuation indented so a wrapped command
-     still reads as one command. .tsch byte maps are aligned tables and never
-     wrap. */
+  /* Commands are one long line each -- no backslash continuations to paste.
+     They wrap rather than scroll at any width: a line that fits is untouched,
+     so a wide screen still shows the whole command on one line, and a narrow
+     one folds it instead of hiding the tail behind a scrollbar. Hovering the
+     command highlights every fragment, which is what shows the folded pieces
+     are one command. .tsch byte maps are aligned tables, so they keep
+     scrolling. */
   pre{position:relative;background:var(--code-bg);color:var(--code-fg);border-radius:9px;padding:11px 12px;
-     overflow-x:auto;font-size:.75rem;line-height:1.55;margin:0;white-space:pre}
-  @media(max-width:860px){
-    pre:not(.tsch){white-space:pre-wrap;overflow-wrap:anywhere;text-indent:-2ch;padding-left:calc(12px + 2ch)}
-  }
+     font-size:.75rem;line-height:1.55;margin:0}
+  pre:not(.tsch){white-space:pre-wrap;overflow-wrap:anywhere}
+  pre.tsch{overflow-x:auto;white-space:pre}
   pre code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
   .cm{color:var(--cm)}
   .sub{color:#2dd4bf;font-weight:700}          /* the methscope subcommand, highlighted */
