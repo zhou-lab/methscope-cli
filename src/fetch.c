@@ -7,13 +7,18 @@
  * command is the tie -- it carries the catalog, so `fetch` with no argument
  * both lists what exists and says which of it is already local.
  *
- *   methscope fetch                 browse the catalog and the local store
- *   methscope fetch hg38_sex        fetch one (comma-separate for several)
+ *   methscope fetch                 browse and pick, or list when not a terminal
+ *   methscope fetch hg38_sex.ubjx   fetch by name (several args, or a group)
  *   methscope fetch all             fetch everything
  *
- * It never prompts, so a container build or a workflow step cannot hang on it:
- * a bare `fetch` only lists, and a named target proceeds. Downloading is the
- * only thing in methscope that touches the network.
+ * BROWSING AND PICKING ARE THE SAME ACT
+ *   Nobody memorises eleven names, so a bare `fetch` on a terminal shows the
+ *   catalog as a checkbox list and fetches what you tick -- there is no
+ *   separate `list` command to drift out of step with this one. Off a
+ *   terminal the identical catalog is printed and nothing is downloaded, so a
+ *   container build or workflow step can never hang waiting for a keystroke.
+ *   A named target never prompts either way. Downloading is the only thing in
+ *   methscope that touches the network.
  *
  * STDOUT IS THE PATHS
  *   Every human-facing line goes to stderr; stdout carries one absolute path
@@ -43,6 +48,7 @@
 #endif
 
 #include "digest.h"
+#include "ui.h"
 #include "methscope.h"
 
 #define MS_HF_BASE "https://huggingface.co/zhou-lab/methscope/resolve/main/"
@@ -362,6 +368,70 @@ static void fetch_one(const ms_model_t *m, const char *dir, int force, int quiet
 }
 #endif /* MS_HAVE_CURL */
 
+/* Turn the printed catalog into a pick list, then hand the choices to the same
+ * download path a named target uses. */
+static int browse_and_fetch(const char *dir, int force, int dry) {
+  char labels[N_CATALOG][96], notes[N_CATALOG][64];
+  const char *items[N_CATALOG], *note_p[N_CATALOG];
+  int missing[N_CATALOG], n = 0;
+  for (int i = 0; i < N_CATALOG; ++i) {
+    const ms_model_t *m = &CATALOG[i];
+    char path[4096];
+    join(path, sizeof(path), dir, m->file);
+    int have = file_size(path) == m->bytes;
+    char sz[32]; human(m->bytes, sz, sizeof(sz));
+    snprintf(labels[n], sizeof(labels[n]), "%-34s %9s", m->name, sz);
+    snprintf(notes[n], sizeof(notes[n]), "  %s%s", m->task, have ? " (present)" : "");
+    items[n] = labels[n]; note_p[n] = notes[n]; missing[n] = !have;
+    ++n;
+  }
+  fputc('\n', stderr);
+  int *pick = ms_ui_multiselect("Select what to fetch", items, note_p, (size_t)n, 0);
+  if (!pick) { fprintf(stderr, "[methscope] fetch: nothing selected\n"); return 0; }
+
+  const ms_model_t *plan[N_CATALOG];
+  int np = 0;
+  uint64_t need = 0;
+  for (int i = 0; i < n; ++i) {
+    if (!pick[i]) continue;
+    plan[np++] = &CATALOG[i];
+    if (force || missing[i]) {
+      need += CATALOG[i].bytes;
+      if (CATALOG[i].sibling) need += CATALOG[i].sibling_bytes;
+    }
+  }
+  free(pick);
+  if (!np) { fprintf(stderr, "[methscope] fetch: nothing selected\n"); return 0; }
+
+  char sz[32]; human(need, sz, sizeof(sz));
+  fprintf(stderr, "\n%s%d file(s), %s to download -> %s%s\n",
+          ms_ui_bold(), np, sz, dir, ms_ui_reset());
+  if (dry) return 0;
+  if (need && !ms_ui_confirm("Fetch now?", 1)) {
+    fprintf(stderr, "[methscope] fetch: cancelled\n");
+    return 0;
+  }
+  mkdir_p(dir);
+#ifdef MS_HAVE_CURL
+  curl_global_init(CURL_GLOBAL_DEFAULT);
+#endif
+  for (int i = 0; i < np; ++i) {
+    fetch_one(plan[i], dir, force, 0, 0);
+    if (plan[i]->sibling) {
+      ms_model_t sib = *plan[i];
+      sib.file = plan[i]->sibling;
+      sib.sha256 = plan[i]->sibling_sha256;
+      sib.bytes = plan[i]->sibling_bytes;
+      sib.sibling = NULL;
+      fetch_one(&sib, dir, force, 1, 0);
+    }
+  }
+#ifdef MS_HAVE_CURL
+  curl_global_cleanup();
+#endif
+  return 0;
+}
+
 int main_fetch(int argc, char *argv[]) {
   const char *want[16] = {NULL}, *override = NULL;
   int n_want = 0, force = 0, dry = 0, verify = 0;
@@ -377,7 +447,11 @@ int main_fetch(int argc, char *argv[]) {
     else fdie("too many arguments", a);
   }
   const char *dir = store_dir(override);
-  if (!n_want) { browse(dir); return 0; }
+  if (!n_want) {
+    browse(dir);
+    if (!ms_ui_interactive()) return 0;          /* a script just gets the list */
+    return browse_and_fetch(dir, force, dry);
+  }
 
   /* Resolve every name before touching the network, so a typo in the third of
    * four names does not leave a half-finished store. */

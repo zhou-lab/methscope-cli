@@ -20,7 +20,8 @@ git. `methscope fetch` carries the catalog and downloads them; the
 `.cg` test fixtures (`test/`) and the reproducibility archive.
 
 ```sh
-methscope fetch                       # list the catalog + what is already local
+methscope fetch                       # a checkbox picker on a terminal;
+                                      # a plain listing anywhere else
 methscope fetch hg38_celltype.ubjx    # entries are named by their file
 methscope fetch models                # every model
 methscope fetch data                  # every example .cg fixture
@@ -44,8 +45,13 @@ path — and a `.cg`'s `.cg.idx` sibling rides along without being a second name
 to remember. Every entry carries a pinned SHA-256; a download that misses it is
 discarded, and `--verify` re-checks files already in the store.
 
-`fetch` never prompts, so it is safe inside a container build or a workflow
-step, and it is the only command that touches the network. Downloads land on a
+On a terminal a bare `fetch` shows the catalog as a checkbox list (space
+toggles, `a` all, `n` none, enter confirms, `q` cancels) and then asks once
+before downloading — browsing the catalog and choosing from it are the same
+act, so there is no separate `list` command to drift out of step. Off a
+terminal it prints the identical catalog and exits, and a named target never
+prompts either way, so a container build or workflow step can never hang. It is
+the only command that touches the network. Downloads land on a
 `.part` sibling and are renamed only once the byte count matches the catalog.
 libcurl is optional: without it the build still lists the catalog and prints the
 URL to download by hand.
