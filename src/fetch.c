@@ -60,7 +60,11 @@
  * fixtures every example runs against -- they come from a different host, so
  * each row carries its own base URL. */
 typedef struct {
-  const char *name, *file, *base, *task, *framework, *labels;
+  const char *name, *file, *base;
+  const char *genome;      /* hg38 / mm10 / hg38 chr20 */
+  const char *kind;        /* what the file is */
+  const char *runs;        /* the command that consumes it */
+  const char *detail;      /* dimensions and provenance, wrapped when shown */
   const char *sha256;          /* pinned; a download that misses it is discarded */
   uint64_t bytes;
   int is_data;
@@ -71,46 +75,74 @@ typedef struct {
 } ms_model_t;
 
 static const ms_model_t CATALOG[] = {
-  {"hg38_celltype.ubjx", "hg38_celltype.ubjx", MS_HF_BASE, "cell-type annotation",
-   "xgboost", "62 human cell types",
+  {"hg38_celltype.ubjx", "hg38_celltype.ubjx", MS_HF_BASE, "hg38",
+   "xgboost classifier (.ubjx)", "methscope classify",
+   "62 human cell types (Alpha, ASC, AT1, AT2, B Mem, B Naive, ...). Its 10,097 "
+   "MRMP feature states ride inside the bundle, so a query .cg runs directly "
+   "with no separate annotation file.",
    "e1f738290b05f824873b599894228a33b189ffbda0644ed2aad0e82e7768bc7c", 25661483, 0, NULL, NULL, 0},
-  {"mm10_celltype.ubjx", "mm10_celltype.ubjx", MS_HF_BASE, "cell-type annotation",
-   "xgboost", "41 mouse-brain cell types",
+  {"mm10_celltype.ubjx", "mm10_celltype.ubjx", MS_HF_BASE, "mm10",
+   "xgboost classifier (.ubjx)", "methscope classify",
+   "41 mouse-brain cell types. The mouse counterpart of hg38_celltype; same "
+   "self-contained bundle layout.",
    "3bbdfeabbc59c2e5810eee06c07d24c8fc9826926dd59ddd167ff46b4cb028de", 22498764, 0, NULL, NULL, 0},
-  {"hg38_sex.ubjx", "hg38_sex.ubjx", MS_HF_BASE, "sex prediction",
-   "logistic", "Female, Male (XCI markers)",
+  {"hg38_sex.ubjx", "hg38_sex.ubjx", MS_HF_BASE, "hg38",
+   "logistic classifier (.ubjx)", "methscope classify",
+   "Female / Male from two X-inactivation features (Xa_lo, Xa_hi) over a "
+   "3-state MRMP. At 30 KB it is the smallest bundle in the catalog -- the "
+   "cheapest way to check an install end to end.",
    "3d1618f6ca24d9a9d5b0fe1806673540515e5f6e7d7950e7c8873a85bb5c742b", 30931, 0, NULL, NULL, 0},
-  {"hg38_65celltypes.refx", "hg38_65celltypes.refx", MS_HF_BASE, "deconvolution (NNLS)",
-   "refx", "65 types = 58 Zhou + 7 Loyfer",
+  {"hg38_65celltypes.refx", "hg38_65celltypes.refx", MS_HF_BASE, "hg38",
+   "NNLS signature panel (.refx)", "methscope deconv",
+   "65 cell types x 15,300 split-MRMP patterns: 58 Zhou single-cell types plus "
+   "7 Loyfer organ/blood types. Built for whole-body and cfDNA deconvolution "
+   "and stays usable at very low coverage.",
    "ce16678dd410c83e3df1c6f1c9b912a796f69c77722b28fc83c5690df69a6c03", 28900711, 0, NULL, NULL, 0},
-  {"hg38_10k1.updecx", "hg38_10k1.updecx", MS_HF_BASE, "CpG upscaling (one block)",
-   "UPDEC1", "block 10k1, 10,000 CpGs",
+  {"hg38_10k1.updecx", "hg38_10k1.updecx", MS_HF_BASE, "hg38",
+   "UPDEC1 block decoder (.updecx)", "methscope upscale",
+   "Imputes one 10,000-CpG block (block 10k1) from 101 MRMP inputs, and carries "
+   "an output-CpG mask so upscale still emits a whole-genome .cg. About 94% of "
+   "binary calls correct from ~0.1% input coverage.",
    "8f7f2d6d42f64daaba5bf9cede5146fa52c0f62b5c76b3d5c6680c5c7554b1b7", 29075778, 0, NULL, NULL, 0},
-  {"hg38_wg.updecx", "hg38_wg.updecx", MS_HF_BASE, "CpG upscaling (whole genome)",
-   "UPDEC2", "700 units over 29,401,795 CpGs",
+  {"hg38_wg.updecx", "hg38_wg.updecx", MS_HF_BASE, "hg38",
+   "UPDEC2 whole-genome decoder (.updecx)", "methscope upscale",
+   "700 processing units covering all 29,401,795 hg38 CpGs from 1,000 MRMP "
+   "inputs (beta + missing), trained on the 207-sample Loyfer atlas. At 2.8 GB "
+   "it is larger than the rest of the catalog put together.",
    "4aa5968c86aeba228a2001996c6a31501fd98fc40ad383ba956c988101ae0b98", 2960796438ULL, 0, NULL, NULL, 0},
 
-  {"human_hg38_celltypes.cg", "human_hg38_celltypes.cg", MS_GH_BASE,
-   "classify / deconv input", ".cg", "4 typed Loyfer cells",
+  {"human_hg38_celltypes.cg", "human_hg38_celltypes.cg", MS_GH_BASE, "hg38",
+   "query methylomes (.cg, 4 records)", "methscope classify / deconv",
+   "4 sorted Loyfer cells -- oligodendrocyte, pancreas beta, NK, monocyte -- "
+   "with 23.6M CpGs covered and mean beta 0.847. Their names come from the "
+   ".cg.idx that is fetched alongside.",
    "705973c8cdd475dbee6947952bff38fe4dea7fb44dc400c33fa9df4a0bc29a96", 6402003, 1,
    "human_hg38_celltypes.cg.idx", "ca868d49a73c7adf650bd6d58dbe3bb7e37f1472eef9b125fa195fd7ac69bb02", 96},
-  {"human_hg38_immune_mixture.cg", "human_hg38_immune_mixture.cg", MS_GH_BASE,
-   "deconv input", ".cg", "simulated 70% macrophage / 30% monocyte",
-   "9806da825b933d2475b3e1c07a5fc399e16279eb9ccd06f5031112304edfdbd4", 3644798, 1,
-   NULL, NULL, 0},
-  {"human_hg38_test.cg", "human_hg38_test.cg", MS_GH_BASE,
-   "upscale input", ".cg", "~0.1% coverage sparse methylome",
+  {"human_hg38_immune_mixture.cg", "human_hg38_immune_mixture.cg", MS_GH_BASE, "hg38",
+   "query methylome (.cg, 1 record)", "methscope deconv",
+   "A simulated 70% macrophage / 30% monocyte mixture over 4,194,304 CpGs, mean "
+   "beta 0.790. The right answer is known, so it doubles as a deconvolution "
+   "check rather than just a demo input.",
+   "9806da825b933d2475b3e1c07a5fc399e16279eb9ccd06f5031112304edfdbd4", 3644798, 1, NULL, NULL, 0},
+  {"human_hg38_test.cg", "human_hg38_test.cg", MS_GH_BASE, "hg38",
+   "sparse query methylome (.cg)", "methscope upscale",
+   "23,857 CpGs covered out of 29.4M -- about 0.1% -- at mean beta 0.823. This "
+   "is the upscaling input; the sparsity is the point.",
    "276fce3f98a2de653009a2cb489e5f9ea699234a1b72aecd1ea3ba03795554a6", 103698, 1, NULL, NULL, 0},
-  {"human_hg38_test.truth.cg", "human_hg38_test.truth.cg", MS_GH_BASE,
-   "upscale ground truth", ".cg", "dense calls for scoring the above",
-   "63dd50e9b86b8abcb4c70c4927fd766026aa29999268f407187c16acfb7f6f6f", 1944547, 1,
-   NULL, NULL, 0},
+  {"human_hg38_test.truth.cg", "human_hg38_test.truth.cg", MS_GH_BASE, "hg38",
+   "dense truth methylome (.cg)", "scoring upscale output",
+   "The same cell sequenced deeply: 22.9M CpGs covered at mean beta 0.821. "
+   "Score upscale's binary calls against it.",
+   "63dd50e9b86b8abcb4c70c4927fd766026aa29999268f407187c16acfb7f6f6f", 1944547, 1, NULL, NULL, 0},
   {"human_hg38_40_celltypes_chr20.cg", "human_hg38_40_celltypes_chr20.cg", MS_GH_BASE,
-   "mrmp-build reference", ".cg + .cg.idx",
-   "40 Loyfer cell types, chr20 only: 773,477 CpGs, 116,450 patterns. "
-   "40 samples is mrmp-build's ceiling (a pattern packs as a base-3 uint64, "
-   "3^40 < 2^64 < 3^41); chr20 keeps it shippable",
-   "259b05d9a0708727a800817566a6c8f165a1210f45a9ffae692a8cdcbfe08f2e", 41377893, 1, "human_hg38_40_celltypes_chr20.cg.idx", "e17bb044c67853f8954caaf1c6b77bf4ae1a7f7efb05280df796581ab1a0bca7", 2182},
+   "hg38 chr20", "reference methylomes (.cg, 40 records)", "methscope mrmp-build",
+   "40 Loyfer cell types on chr20 only (773,477 CpGs): one sample per type, "
+   "spanning neurons, hepatocytes, pancreas, immune, epithelia, endothelium and "
+   "muscle. Builds 116,450 patterns in about a second. 40 samples is "
+   "mrmp-build's ceiling -- a pattern packs as a base-3 uint64 and "
+   "3^40 < 2^64 < 3^41 -- and chr20 is what keeps it small enough to ship.",
+   "259b05d9a0708727a800817566a6c8f165a1210f45a9ffae692a8cdcbfe08f2e", 41377893, 1,
+   "human_hg38_40_celltypes_chr20.cg.idx", "e17bb044c67853f8954caaf1c6b77bf4ae1a7f7efb05280df796581ab1a0bca7", 2182},
 };
 static const int N_CATALOG = (int)(sizeof(CATALOG) / sizeof(CATALOG[0]));
 
@@ -236,11 +268,10 @@ static void browse(const char *dir) {
       uint64_t on_disk = file_size(path);
       int ok = on_disk == m->bytes;
       human(m->bytes, sz, sizeof(sz));
-      printf("  %-34s %9s   %s\n", m->name, sz,
+      printf("  %-34s %-10s %9s   %s\n", m->name, m->genome, sz,
              ok ? "present" : on_disk ? "PARTIAL" : "-");
-      /* One wrapped detail line: what it is, what runs it, what is inside. */
-      printf("      %s \xc2\xb7 %s\n", m->task, m->framework);
-      wrap_detail(m->labels);
+      printf("      %s \xc2\xb7 run by: %s\n", m->kind, m->runs);
+      wrap_detail(m->detail);
       total += m->bytes;
       if (ok) have += m->bytes;
       if (m->sibling) total += m->sibling_bytes;
@@ -380,13 +411,13 @@ static int browse_and_fetch(const char *dir, int force, int dry) {
     join(path, sizeof(path), dir, m->file);
     int have = file_size(path) == m->bytes;
     char sz[32]; human(m->bytes, sz, sizeof(sz));
-    snprintf(labels[n], sizeof(labels[n]), "%-34s %9s", m->name, sz);
-    snprintf(notes[n], sizeof(notes[n]), "  %s%s", m->task, have ? " (present)" : "");
-    /* the pane text: what it is, what runs it, and the full description */
-    snprintf(details[n], sizeof(details[n]), "%s \xc2\xb7 %s \xc2\xb7 %s%s %s",
-             m->task, m->framework, m->labels,
-             m->sibling ? " (its .cg.idx comes too)" : "",
-             have ? "[already in the store]" : "");
+    snprintf(labels[n], sizeof(labels[n]), "%-34s %-10s %9s", m->name, m->genome, sz);
+    snprintf(notes[n], sizeof(notes[n]), "  %s%s", m->kind, have ? " (present)" : "");
+    /* the pane: what it is, what runs it, then the full description */
+    snprintf(details[n], sizeof(details[n]), "%s \xc2\xb7 run by: %s%s%s \xe2\x80\x94 %s",
+             m->kind, m->runs,
+             m->sibling ? " \xc2\xb7 its .cg.idx comes too" : "",
+             have ? " \xc2\xb7 already in the store" : "", m->detail);
     items[n] = labels[n]; note_p[n] = notes[n]; detail_p[n] = details[n];
     missing[n] = !have;
     ++n;
