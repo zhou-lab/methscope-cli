@@ -54,6 +54,9 @@
 #define MS_HF_BASE "https://huggingface.co/zhou-lab/methscope/resolve/main/"
 #define MS_GH_BASE \
   "https://raw.githubusercontent.com/zhou-lab/methscope_data/main/test/"
+/* The CpG coordinate track lives in kycg's knowledgebase, at a pinned tag --
+ * the only entry here whose URL names a release rather than a branch. */
+#define MS_KB_BASE "https://github.com/zhou-lab/KYCGKB_hg38/raw/v2/"
 
 /* Sizes are the published byte counts; they are the integrity check, so they
  * are updated together with a re-upload. `data` entries are the query .cg
@@ -134,6 +137,13 @@ static const ms_model_t CATALOG[] = {
    "The same cell sequenced deeply: 22.9M CpGs covered at mean beta 0.821. "
    "Score upscale's binary calls against it.",
    "63dd50e9b86b8abcb4c70c4927fd766026aa29999268f407187c16acfb7f6f6f", 1944547, 1, NULL, NULL, 0},
+  {"cpg_nocontig.cr", "cpg_nocontig.cr", MS_KB_BASE, "hg38",
+   "CpG coordinate track (.cr, format 7)", "yame hprint -R",
+   "Chromosome and position for each of the 29,401,795 hg38 CpGs, in the row "
+   "order every .cg here uses. Needed only for coordinate-aware views -- "
+   "yame hprint -R turns a row range into a real genomic region with a ruler. "
+   "From KYCGKB_hg38 at tag v2.",
+   "83cc96061b61ad3f7a83097705708b898b749ff0d00f9790b1f91a236a1298cd", 30318472, 1, NULL, NULL, 0},
   {"human_hg38_40_celltypes_chr20.cg", "human_hg38_40_celltypes_chr20.cg", MS_GH_BASE,
    "hg38 chr20", "reference methylomes (.cg, 40 records)", "methscope mrmp-build",
    "40 Loyfer cell types on chr20 only (773,477 CpGs): one sample per type, "

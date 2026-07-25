@@ -438,7 +438,7 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
 # sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
 <span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR=&quot;.&quot;</span>
-<span class="cmd" data-cmd="methscope fetch hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg</span>
+<span class="cmd" data-cmd="methscope fetch hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg cpg_nocontig.cr">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg</span>
 
 <span class="cm"># what goes in: a sparse methylome</span>
 <span class="cmd" data-cmd="yame summary human_hg38_test.cg | tabl view">yame summary human_hg38_test.cg | tabl view</span>
@@ -462,15 +462,30 @@ human_hg38_test_reconstructed.cg      1     NA  global   10000     6239   10000 
 <span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;</span>
 <span class="out">9211/9794 (94.0%)</span>
 
-<span class="cm"># and see it: stack the three tracks and slice a 50-CpG window.
-# yame hprint colours the calls -- 1 methylated, 0 unmethylated, 2 unobserved</span>
-<span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 232_50 - | yame hprint -">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 232_50 - | yame hprint -</span>
-<span class="out">truth  <span class="hm">11111111111111111111111111</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">00</span>
-input  <span class="hn">2222222222222222222222222222222222222</span><span class="hm">1</span><span class="hn">222222222222</span>
-recon  <span class="hm">11111111111111111111111111</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">00</span></span>
-<span class="cm"># -I is the same selector as the scoring line: block 232 at 50 CpGs, which
-# sits inside block 10k1. One CpG was observed in this window, and the
-# reconstruction matches the truth at all 50 positions.</span></code></pre>
+<span class="cm"># and see it: stack the three tracks over the same block the score used.
+# yame hprint colours the calls (1 methylated, 0 unmethylated, 2 unobserved);
+# -c turns colour off, which cut needs since it counts bytes, not columns</span>
+<span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1-60">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1-60</span>
+<span class="out">truth  <span class="hu">0</span><span class="hm">1</span><span class="hu">0000000</span><span class="hm">111111111111</span><span class="hu">0</span><span class="hm">11</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0000000000000000000000000000000000</span>
+input  <span class="hn">222222222222222222222222222222222222222222222222222222222222</span>
+recon  <span class="hm">11</span><span class="hu">00</span><span class="hm">11</span><span class="hu">000</span><span class="hm">111111111111</span><span class="hu">0</span><span class="hm">11</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0000000000000000000000000000000000</span></span>
+<span class="cm"># the first 60 CpGs of the block. None of them was observed, and the
+# reconstruction still gets 57 of 60 right -- the three misses are all in
+# the opening run.</span>
+
+<span class="cm"># or take the whole block at once: -R gives a coordinate-aware view that
+# window-averages to fit, so 10,000 CpGs become 60 columns of H/M/L</span>
+<span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg</span>
+<span class="cmd" data-cmd="yame index -s &lt;(printf &#x27;truth\ninput\nreconstructed\n&#x27;) three.cg">yame index -s &lt;(printf &#x27;truth\ninput\nreconstructed\n&#x27;) three.cg</span>
+<span class="cmd" data-cmd="yame hprint -c -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg">yame hprint -c -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg</span>
+<span class="out">                      chr1:921649-1151482 (10000 CpGs, win=167)
+                      |.........|.........|.........|.........|.........|.........
+                      921649    958945    995856    1033422   1067326   1112421
+truth                 LLMMLLLMHHLLHMMMHHHHLLLMHMMLHMMMHHHHHMLMMMHMHHHHHHMLMHHHMMHH
+input                 ...L.....M.L...........LH...............H..L....H...H....H..
+reconstructed         LLMMMMLMHHLLHMMMHHHHLLLHHMMLHMMMHHHHHMLMMMHMHHHHHHMLMHHHMHHH</span>
+<span class="cm"># H >0.67, M 0.33-0.67, L <0.33, . no coverage. The input row is almost
+# all gaps; truth and reconstruction track each other across the block.</span></code></pre>
     </div>
 
     <h3>Train <span class="m">— featurize, group into units, fit (CUDA)</span></h3>
