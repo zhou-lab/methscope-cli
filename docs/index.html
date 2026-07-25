@@ -234,9 +234,13 @@ example data (GitHub methscope_data)
       for a whole-genome reference. The fetchable example below is chr20 only, so it finishes in
       about a second.</p>
     <div class="tipwrap">
-      <pre><code><span class="cm"># a 40-cell-type chr20 reference, small enough to fetch (39.5 MB)</span>
+      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
+# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+<span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
+<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR=&quot;.&quot;</span>
+
+<span class="cm"># a 40-cell-type chr20 reference, small enough to fetch (39.5 MB)</span>
 <span class="cmd" data-cmd="methscope fetch human_hg38_40_celltypes_chr20.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_40_celltypes_chr20.cg</span>
-<span class="cmd" data-cmd="cd ~/.cache/methscope">cd ~/.cache/methscope</span>
 
 <span class="cmd" data-cmd="methscope mrmp-build human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</span>
 <span class="out">samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450
@@ -297,10 +301,11 @@ content_checksum     9e7f6d292a2ba946</span>
 
     <h3>Classify <span class="m">— with a shipped model</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># fetch once into the store, then work there
-# ($METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
+# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+<span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
+<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR=&quot;.&quot;</span>
 <span class="cmd" data-cmd="methscope fetch hg38_celltype.ubjx hg38_sex.ubjx human_hg38_celltypes.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_celltype.ubjx hg38_sex.ubjx human_hg38_celltypes.cg</span>
-<span class="cmd" data-cmd="cd ~/.cache/methscope">cd ~/.cache/methscope</span>
 
 <span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
 <span class="cmd" data-cmd="methscope classify human_hg38_celltypes.cg hg38_celltype.ubjx">methscope <span class="sub tip" data-tip="cmd-classify" tabindex="0">classify</span> human_hg38_celltypes.cg hg38_celltype.ubjx</span>
@@ -357,10 +362,11 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 
     <h3>Deconvolve <span class="m">— with a shipped reference</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># fetch once into the store, then work there
-# ($METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
+# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+<span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
+<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR=&quot;.&quot;</span>
 <span class="cmd" data-cmd="methscope fetch hg38_65celltypes.refx human_hg38_immune_mixture.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_65celltypes.refx human_hg38_immune_mixture.cg</span>
-<span class="cmd" data-cmd="cd ~/.cache/methscope">cd ~/.cache/methscope</span>
 
 <span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
 <span class="cmd" data-cmd="methscope deconv human_hg38_immune_mixture.cg hg38_65celltypes.refx">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> human_hg38_immune_mixture.cg hg38_65celltypes.refx</span>
@@ -372,7 +378,6 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
     <h3>Build a reference <span class="m">— your own .refx panel</span></h3>
     <div class="tipwrap">
       <pre><code><span class="cmd" data-cmd="methscope fetch hg38_celltype.ubjx human_hg38_celltypes.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_celltype.ubjx human_hg38_celltypes.cg</span>
-<span class="cmd" data-cmd="cd ~/.cache/methscope">cd ~/.cache/methscope</span>
 
 <span class="cm"># per-cell panel, so each cell must deconvolve to itself</span>
 <span class="cmd" data-cmd="methscope deconv-build-ref -o self.refx human_hg38_celltypes.cg hg38_celltype.ubjx">methscope <span class="sub tip" data-tip="cmd-deconv-build-ref" tabindex="0">deconv-build-ref</span> -o self.refx human_hg38_celltypes.cg hg38_celltype.ubjx</span>
@@ -395,10 +400,11 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 
     <h3>Impute <span class="m">— with a shipped decoder</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># fetch once into the store, then work there
-# ($METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
+# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+<span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
+<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR=&quot;.&quot;</span>
 <span class="cmd" data-cmd="methscope fetch hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg</span>
-<span class="cmd" data-cmd="cd ~/.cache/methscope">cd ~/.cache/methscope</span>
 
 <span class="cm"># impute from ~0.1% coverage, then score against the truth track</span>
 <span class="cmd" data-cmd="methscope upscale -o recon.cg hg38_10k1.updecx human_hg38_test.cg">methscope <span class="sub tip" data-tip="cmd-upscale" tabindex="0">upscale</span> -o recon.cg hg38_10k1.updecx human_hg38_test.cg</span>

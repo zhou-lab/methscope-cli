@@ -33,8 +33,9 @@ store. Human-facing lines go to stderr and stdout is one absolute path per
 requested file, so fetching also composes when a script wants a path:
 
 ```sh
+mkdir -p ~/tmp/methscope && cd ~/tmp/methscope
+export METHSCOPE_DATA_DIR="."          # fetch into the working directory
 methscope fetch hg38_celltype.ubjx human_hg38_celltypes.cg
-cd ~/.cache/methscope
 methscope classify human_hg38_celltypes.cg hg38_celltype.ubjx
 ```
 
