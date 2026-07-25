@@ -22,11 +22,13 @@
  *   the first run and just resolves on every one after, which is why the
  *   examples need no path variable at all.
  *
- * Integrity is a size check against the catalog, not a cryptographic digest --
- * enough to catch a truncated or redirected-to-HTML transfer, and honest about
- * being no more than that. Files land on a ".part" sibling and are renamed only
- * after the size matches, so an interrupted fetch can never leave a
- * short file that later reads as a valid model. */
+ * TRUST
+ *   Every entry carries a SHA-256 compiled into the registry below, so a
+ *   download is checked against a digest this binary already held rather than
+ *   one fetched alongside the file. Nothing on either host can vouch for
+ *   itself. Files land on a ".part" sibling and are renamed only after the
+ *   digest matches, so an interrupted or corrupted fetch cannot leave
+ *   something in the store that later reads as a valid model. */
 #include <errno.h>
 #include <inttypes.h>
 #include <stdint.h>
@@ -40,6 +42,7 @@
 #include <curl/curl.h>
 #endif
 
+#include "digest.h"
 #include "methscope.h"
 
 #define MS_HF_BASE "https://huggingface.co/zhou-lab/methscope/resolve/main/"
@@ -52,39 +55,56 @@
  * each row carries its own base URL. */
 typedef struct {
   const char *name, *file, *base, *task, *framework, *labels;
+  const char *sha256;          /* pinned; a download that misses it is discarded */
   uint64_t bytes;
   int is_data;
   /* A YAME .cg is unusable without its .cg.idx, so the sibling rides along
    * rather than being a second name the user has to remember. */
-  const char *sibling;
+  const char *sibling, *sibling_sha256;
   uint64_t sibling_bytes;
 } ms_model_t;
 
 static const ms_model_t CATALOG[] = {
   {"hg38_celltype", "hg38_celltype.ubjx", MS_HF_BASE, "cell-type annotation",
-   "xgboost", "62 human cell types", 25661483, 0, NULL, 0},
+   "xgboost", "62 human cell types",
+   "e1f738290b05f824873b599894228a33b189ffbda0644ed2aad0e82e7768bc7c", 25661483, 0, NULL, NULL, 0},
   {"mm10_celltype", "mm10_celltype.ubjx", MS_HF_BASE, "cell-type annotation",
-   "xgboost", "41 mouse-brain cell types", 22498764, 0, NULL, 0},
+   "xgboost", "41 mouse-brain cell types",
+   "3bbdfeabbc59c2e5810eee06c07d24c8fc9826926dd59ddd167ff46b4cb028de", 22498764, 0, NULL, NULL, 0},
   {"hg38_sex", "hg38_sex.ubjx", MS_HF_BASE, "sex prediction",
-   "logistic", "Female, Male (XCI markers)", 30931, 0, NULL, 0},
+   "logistic", "Female, Male (XCI markers)",
+   "3d1618f6ca24d9a9d5b0fe1806673540515e5f6e7d7950e7c8873a85bb5c742b", 30931, 0, NULL, NULL, 0},
   {"hg38_65celltypes", "hg38_65celltypes.refx", MS_HF_BASE, "deconvolution (NNLS)",
-   "refx", "65 types = 58 Zhou + 7 Loyfer", 28900711, 0, NULL, 0},
+   "refx", "65 types = 58 Zhou + 7 Loyfer",
+   "ce16678dd410c83e3df1c6f1c9b912a796f69c77722b28fc83c5690df69a6c03", 28900711, 0, NULL, NULL, 0},
   {"hg38_10k1", "hg38_10k1.updecx", MS_HF_BASE, "CpG upscaling (one block)",
-   "UPDEC1", "block 10k1, 10,000 CpGs", 29075778, 0, NULL, 0},
+   "UPDEC1", "block 10k1, 10,000 CpGs",
+   "8f7f2d6d42f64daaba5bf9cede5146fa52c0f62b5c76b3d5c6680c5c7554b1b7", 29075778, 0, NULL, NULL, 0},
   {"hg38_wg", "hg38_wg.updecx", MS_HF_BASE, "CpG upscaling (whole genome)",
-   "UPDEC2", "700 units over 29,401,795 CpGs", 2960796438ULL, 0, NULL, 0},
+   "UPDEC2", "700 units over 29,401,795 CpGs",
+   "4aa5968c86aeba228a2001996c6a31501fd98fc40ad383ba956c988101ae0b98", 2960796438ULL, 0, NULL, NULL, 0},
 
   {"human_hg38_celltypes", "human_hg38_celltypes.cg", MS_GH_BASE,
-   "classify / deconv input", ".cg", "4 typed Loyfer cells", 6402003, 1,
-   "human_hg38_celltypes.cg.idx", 96},
+   "classify / deconv input", ".cg", "4 typed Loyfer cells",
+   "705973c8cdd475dbee6947952bff38fe4dea7fb44dc400c33fa9df4a0bc29a96", 6402003, 1,
+   "human_hg38_celltypes.cg.idx", "ca868d49a73c7adf650bd6d58dbe3bb7e37f1472eef9b125fa195fd7ac69bb02", 96},
   {"human_hg38_immune_mixture", "human_hg38_immune_mixture.cg", MS_GH_BASE,
-   "deconv input", ".cg", "simulated 70% macrophage / 30% monocyte", 3644798, 1,
-   NULL, 0},
+   "deconv input", ".cg", "simulated 70% macrophage / 30% monocyte",
+   "9806da825b933d2475b3e1c07a5fc399e16279eb9ccd06f5031112304edfdbd4", 3644798, 1,
+   NULL, NULL, 0},
   {"human_hg38_test", "human_hg38_test.cg", MS_GH_BASE,
-   "upscale input", ".cg", "~0.1% coverage sparse methylome", 103698, 1, NULL, 0},
+   "upscale input", ".cg", "~0.1% coverage sparse methylome",
+   "276fce3f98a2de653009a2cb489e5f9ea699234a1b72aecd1ea3ba03795554a6", 103698, 1, NULL, NULL, 0},
   {"human_hg38_test.truth", "human_hg38_test.truth.cg", MS_GH_BASE,
-   "upscale ground truth", ".cg", "dense calls for scoring the above", 1944547, 1,
-   NULL, 0},
+   "upscale ground truth", ".cg", "dense calls for scoring the above",
+   "63dd50e9b86b8abcb4c70c4927fd766026aa29999268f407187c16acfb7f6f6f", 1944547, 1,
+   NULL, NULL, 0},
+  {"human_hg38_40_celltypes_chr20", "human_hg38_40_celltypes_chr20.cg", MS_GH_BASE,
+   "mrmp-build reference", ".cg + .cg.idx",
+   "40 Loyfer cell types, chr20 only: 773,477 CpGs, 116,450 patterns. "
+   "40 samples is mrmp-build's ceiling (a pattern packs as a base-3 uint64, "
+   "3^40 < 2^64 < 3^41); chr20 keeps it shippable",
+   "259b05d9a0708727a800817566a6c8f165a1210f45a9ffae692a8cdcbfe08f2e", 41377893, 1, "human_hg38_40_celltypes_chr20.cg.idx", "e17bb044c67853f8954caaf1c6b77bf4ae1a7f7efb05280df796581ab1a0bca7", 2182},
 };
 static const int N_CATALOG = (int)(sizeof(CATALOG) / sizeof(CATALOG[0]));
 
@@ -154,8 +174,9 @@ static int usage(void) {
     "$(methscope fetch NAME) resolves to a usable path and re-runs for free.\n\n"
     "  --store DIR   store location (default $METHSCOPE_DATA_DIR,\n"
     "                else ~/.cache/methscope)\n"
-    "  -f, --force   re-download even if the file is already complete\n"
+    "  -f, --force   re-download and re-verify even if already present\n"
     "  -n, --dry-run show the plan and exit\n"
+    "  --verify      re-check present files against their pinned sha256\n"
     "  -h, --help    show this help\n");
   return 1;
 }
@@ -169,6 +190,27 @@ static const ms_model_t *find_model(const char *name) {
   return NULL;
 }
 
+/* Print a description at 6-space indent, folded at ~72 columns. */
+static void wrap_detail(const char *text) {
+  const int width = 72;
+  int col = 0;
+  const char *w = text;
+  while (*w) {
+    while (*w == ' ') ++w;
+    const char *e = w;
+    while (*e && *e != ' ') ++e;
+    int len = (int)(e - w);
+    if (!len) break;
+    if (!col) { printf("      "); col = 6; }
+    else if (col + 1 + len > width) { printf("\n      "); col = 6; }
+    else { putchar(' '); ++col; }
+    fwrite(w, 1, (size_t)len, stdout);
+    col += len;
+    w = e;
+  }
+  if (col) putchar('\n');
+}
+
 static void browse(const char *dir) {
   char sz[32];
   uint64_t have = 0, total = 0;
@@ -176,7 +218,6 @@ static void browse(const char *dir) {
   for (int data = 0; data < 2; ++data) {
     printf("\n%s\n", data ? "example data (GitHub methscope_data)"
                           : "models (HuggingFace zhou-lab/methscope)");
-    printf("  %-16s %-10s %-32s %s\n", "name", "size", "task", "local");
     for (int i = 0; i < N_CATALOG; ++i) {
       const ms_model_t *m = &CATALOG[i];
       if (m->is_data != data) continue;
@@ -185,10 +226,14 @@ static void browse(const char *dir) {
       uint64_t on_disk = file_size(path);
       int ok = on_disk == m->bytes;
       human(m->bytes, sz, sizeof(sz));
-      printf("  %-16s %-10s %-32s %s\n", m->name, sz, m->task,
-             ok ? "yes" : on_disk ? "PARTIAL" : "-");
+      printf("  %-30s %9s   %s\n", m->name, sz,
+             ok ? "present" : on_disk ? "PARTIAL" : "-");
+      /* One wrapped detail line: what it is, what runs it, what is inside. */
+      printf("      %s \xc2\xb7 %s\n", m->task, m->framework);
+      wrap_detail(m->labels);
       total += m->bytes;
       if (ok) have += m->bytes;
+      if (m->sibling) total += m->sibling_bytes;
     }
   }
   human(total, sz, sizeof(sz));
@@ -201,8 +246,9 @@ static void browse(const char *dir) {
 
 #ifndef MS_HAVE_CURL
 /* Built without libcurl: the catalog still browses; only the transfer is gone. */
-static void fetch_one(const ms_model_t *m, const char *dir, int force, int quiet) {
-  (void)force; (void)quiet;
+static void fetch_one(const ms_model_t *m, const char *dir, int force, int quiet,
+                      int verify) {
+  (void)force; (void)quiet; (void)verify;
   fprintf(stderr, "[methscope] fetch: built without libcurl; download manually:\n"
           "  curl -L -o %s/%s \\\n    %s%s\n", dir, m->file, m->base, m->file);
   exit(1);
@@ -226,15 +272,32 @@ static int on_progress(void *ud, curl_off_t dltotal, curl_off_t dlnow,
 }
 
 /* Download one model to <dir>/<file> via a .part sibling. */
-static void fetch_one(const ms_model_t *m, const char *dir, int force, int quiet) {
+static void fetch_one(const ms_model_t *m, const char *dir, int force, int quiet,
+                      int verify) {
   char path[4096], part[4200], url[1024];
   join(path, sizeof(path), dir, m->file);
   if ((size_t)snprintf(part, sizeof(part), "%s.part", path) >= sizeof(part) ||
       (size_t)snprintf(url, sizeof(url), "%s%s", m->base, m->file) >= sizeof(url))
     fdie("path is too long", m->file);
 
+  /* A present file is accepted on size: re-hashing on every call would make
+   * $(methscope fetch NAME) read 2.8 GB to hand back a path. --verify asks for
+   * the digest check explicitly, and a fresh download always gets one. */
   if (!force && file_size(path) == m->bytes) {
-    fprintf(stderr, "[methscope] fetch: %s already present\n", m->name);
+    if (verify) {
+      char digest[65];
+      if (ms_sha256_file(path, digest)) fdie("cannot read for verification", path);
+      if (strcmp(digest, m->sha256)) {
+        fprintf(stderr, "[methscope] fetch: %s is CORRUPT on disk\n"
+                "  expected sha256 %s\n  got               %s\n"
+                "  re-fetch it with: methscope fetch -f %s\n",
+                m->name, m->sha256, digest, m->name);
+        exit(1);
+      }
+      fprintf(stderr, "[methscope] fetch: %s verified\n", m->name);
+    } else {
+      fprintf(stderr, "[methscope] fetch: %s already present\n", m->name);
+    }
     if (!quiet) puts(path);
     return;
   }
@@ -275,6 +338,18 @@ static void fetch_one(const ms_model_t *m, const char *dir, int force, int quiet
             PRIu64 " -- discarded\n", m->name, got, m->bytes);
     exit(1);
   }
+  char digest[65];
+  if (ms_sha256_file(part, digest)) {
+    remove(part);
+    fdie("cannot read the download back to verify it", part);
+  }
+  if (strcmp(digest, m->sha256)) {
+    remove(part);
+    fprintf(stderr, "[methscope] fetch: %s failed verification -- discarded\n"
+            "  expected sha256 %s\n  got               %s\n",
+            m->name, m->sha256, digest);
+    exit(1);
+  }
   if (rename(part, path)) fdie("cannot install downloaded model", path);
   char sz[32];
   human(got, sz, sizeof(sz));
@@ -285,13 +360,14 @@ static void fetch_one(const ms_model_t *m, const char *dir, int force, int quiet
 
 int main_fetch(int argc, char *argv[]) {
   const char *want[16] = {NULL}, *override = NULL;
-  int n_want = 0, force = 0, dry = 0;
+  int n_want = 0, force = 0, dry = 0, verify = 0;
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(); return 0; }
     else if (!strcmp(a, "--store") && i + 1 < argc) override = argv[++i];
     else if (!strcmp(a, "-f") || !strcmp(a, "--force")) force = 1;
     else if (!strcmp(a, "-n") || !strcmp(a, "--dry-run")) dry = 1;
+    else if (!strcmp(a, "--verify")) verify = 1;
     else if (a[0] == '-') { usage(); fdie("unrecognized or incomplete option", a); }
     else if (n_want < (int)(sizeof(want) / sizeof(want[0]))) want[n_want++] = a;
     else fdie("too many arguments", a);
@@ -348,13 +424,14 @@ int main_fetch(int argc, char *argv[]) {
   curl_global_init(CURL_GLOBAL_DEFAULT);
 #endif
   for (int i = 0; i < n; ++i) {
-    fetch_one(plan[i], dir, force, 0);
+    fetch_one(plan[i], dir, force, 0, verify);
     if (plan[i]->sibling) {          /* the .cg.idx is not a separate answer */
       ms_model_t sib = *plan[i];
       sib.file = plan[i]->sibling;
+      sib.sha256 = plan[i]->sibling_sha256;
       sib.bytes = plan[i]->sibling_bytes;
       sib.sibling = NULL;
-      fetch_one(&sib, dir, force, 1);
+      fetch_one(&sib, dir, force, 1, verify);
     }
   }
 #ifdef MS_HAVE_CURL
