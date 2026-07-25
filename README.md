@@ -125,10 +125,17 @@ claimed, is recorded in the training manifest, and is folded into the checkpoint
 run checksum, so one work directory cannot resume across two different splits.
 Pass the same file to `_upscale trunk-train` when a frozen trunk is involved.
 
-Build training support with
-`make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80`. Each unit is checkpointed
-under `--work-dir`, so interrupted runs resume completed units. The distributed
-model still runs through the pure-C CPU inference path without CUDA or BLAS.
+Training runs on CPU by default, threaded over units with `--threads N` — units
+are independent, which is what makes the run resumable. `make CUDA=1
+CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80` adds the GPU backend, chosen
+automatically when a device answers (`--device cpu` forces the portable one).
+
+The two backends share the UPUCK1 checkpoint and the emitted UPDEC2, so a run
+can start on CPU and finish on a GPU node. They are not bit-identical and
+cannot be: the CUDA gradient accumulates with `atomicAdd`, whose summation
+order is not fixed, so two GPU runs already differ in the last bits. On the
+40-cell-type chr20 reference (109 units) the two agree on `best_step` for every
+unit and on validation MAE to at most 3.7e-08.
 
 The three build steps are public commands: `upscale-featurize` (MSURAW2
 sidecar), `upscale-set-units` (MSUIDX1 unit index), then `upscale-train`. Only

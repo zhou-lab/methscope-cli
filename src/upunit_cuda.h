@@ -29,6 +29,7 @@ typedef struct {
   uint32_t patience;
   uint32_t batch;
   uint32_t eval_rows;
+  uint32_t threads;   /* CPU backend: worker threads over units */
   uint64_t seed;
   int device;
   double learning_rate;
@@ -37,6 +38,9 @@ typedef struct {
 
 int ms_upunit_cuda_available(void);
 int ms_upunit_train_cuda(const ms_upunit_config_t *cfg);
+/* Portable fallback: same numerics, threaded over units. Checkpoints and the
+ * emitted UPDEC2 are byte-compatible with the CUDA backend. */
+int ms_upunit_train_cpu(const ms_upunit_config_t *cfg);
 
 #ifdef __cplusplus
 }

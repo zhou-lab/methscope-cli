@@ -514,16 +514,19 @@ embedded_truth    yes (trainable)</span></code></pre>
                              <span class="c">pure rank 16 · mixed/PNA rank 32</span></pre>
       </span>
     </div>
-    <p style="margin-top:11px"><b>The fit itself needs a GPU.</b> Everything above runs anywhere
-      in about 20&nbsp;s, and <code class="inl">upscale</code> inference is pure C — but there is no
-      CPU path for training: a stock build stops with <i>CUDA backend unavailable</i>. Build with
-      <code class="inl">make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80</code> on a GPU node,
-      then:</p>
+    <p style="margin-top:11px">Training runs on CPU by default and threads over units, which are
+      independent — that is what makes the run resumable. The 109 chr20 units take ~17&nbsp;s on
+      8 threads. <code class="inl">make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80</code>
+      builds the GPU backend, which is picked automatically when a device answers; checkpoints are
+      interchangeable, so you can start on CPU and finish on a GPU node.</p>
     <div class="tipwrap">
-      <pre><code>methscope <span class="sub tip" data-tip="cmd-upscale-train" tabindex="0">upscale-train</span> -i chr20.msur --units chr20.msui --mrmp chr20.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">chr20.updecx</span> --work-dir work/ --split cells.tsv
+      <pre><code><span class="cmd" data-cmd="methscope upscale-train -i chr20.msur --units chr20.msui --mrmp chr20.mrmp -o chr20.updecx --work-dir work/ --threads 8">methscope <span class="sub tip" data-tip="cmd-upscale-train" tabindex="0">upscale-train</span> -i chr20.msur --units chr20.msui --mrmp chr20.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">chr20.updecx</span> --work-dir work/ --threads 8</span>
+<span class="out">backend=cpu; cells=40 reps=20 patterns=1000 input=2000 units=109 threads=8
+units 109/109 (resumed=0) last_val_mae=0.156606
+wrote bare UPDEC2 work/model.updec2 (109288672 bytes)</span>
 <span class="cm"># --split rows: &lt;cell_index&gt;TAB&lt;train|val|test&gt;, one per source cell; without
-# it, cells are cut 70/15/15 by --seed. Each unit is checkpointed under
-# --work-dir, so an interrupted run resumes where it stopped.</span></code></pre>
+# it, cells are cut 70/15/15 by --seed. --device cpu forces the portable
+# backend even on a GPU node.</span></code></pre>
     </div>
   </section>
 
@@ -887,7 +890,9 @@ Optimization:
   --seed N                 deterministic seed (default 1)
   --split FILE             curated cell split, rows &lt;cell_index&gt;TAB&lt;train|
                            val|test&gt; (default: seeded 70/15/15 shuffle)
-  --device N               CUDA device (default 0)
+  --device N|cpu           CUDA device (default 0), or cpu to force the
+                           portable backend
+  --threads N              CPU backend worker threads (default 1)
   --pilot-units FILE       train listed unit IDs only; do not assemble
   --force                  replace final output and manifest
   --dry-run                validate options and print configuration

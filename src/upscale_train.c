@@ -75,7 +75,9 @@ static int usage(void) {
     "  --seed N                 deterministic seed (default 1)\n"
     "  --split FILE             curated cell split, rows <cell_index>TAB<train|\n"
     "                           val|test> (default: seeded 70/15/15 shuffle)\n"
-    "  --device N               CUDA device (default 0)\n"
+    "  --device N|cpu           CUDA device (default 0), or cpu to force the\n"
+    "                           portable backend\n"
+    "  --threads N              CPU backend worker threads (default 1)\n"
     "  --pilot-units FILE       train listed unit IDs only; do not assemble\n"
     "  --force                  replace final output and manifest\n"
     "  --dry-run                validate options and print configuration\n"
@@ -94,7 +96,7 @@ static void ensure_dir(const char *path) {
 
 int main_upscale_train(int argc, char **argv) {
   const char *data = NULL, *index = NULL, *mrmp = NULL, *out = NULL, *work = NULL;
-  int force = 0, dry = 0;
+  int force = 0, dry = 0, force_cpu = 0;
   ms_upunit_config_t c;
   memset(&c, 0, sizeof(c));
   c.patterns = 1000; c.pure_bottleneck = 16; c.mixed_bottleneck = 32;
@@ -145,7 +147,12 @@ int main_upscale_train(int argc, char **argv) {
     else if (!strcmp(a, "--learning-rate") && i + 1 < argc) c.learning_rate = real(argv[++i], a);
     else if (!strcmp(a, "--weight-decay") && i + 1 < argc) c.weight_decay = real(argv[++i], a);
     else if (!strcmp(a, "--seed") && i + 1 < argc) c.seed = u64(argv[++i], a);
-    else if (!strcmp(a, "--device") && i + 1 < argc) c.device = (int)u32(argv[++i], a);
+    else if (!strcmp(a, "--device") && i + 1 < argc) {
+      const char *x = argv[++i];
+      if (!strcmp(x, "cpu")) force_cpu = 1;
+      else c.device = (int)u32(x, a);
+    }
+    else if (!strcmp(a, "--threads") && i + 1 < argc) c.threads = u32(argv[++i], a);
     else if (!strcmp(a, "--split") && i + 1 < argc) c.split_path = argv[++i];
     else if (!strcmp(a, "--pilot-units") && i + 1 < argc) c.pilot_units_path = argv[++i];
     else if (!strcmp(a, "--force")) force = 1;
@@ -196,10 +203,14 @@ int main_upscale_train(int argc, char **argv) {
     ms_mrmp_write_mask(mrmp, mask, NULL, c.patterns);
     bundled_mrmp = mask;
   }
-  if (!ms_upunit_cuda_available())
-    terr("CUDA backend unavailable; rebuild with make CUDA=1 on a GPU node", NULL);
   c.data_path = data; c.index_path = index; c.model_path = bare; c.work_dir = work;
-  int train_rc = ms_upunit_train_cuda(&c);
+  /* CUDA when it is built in and a device answers, else the portable backend.
+   * --device cpu forces the fallback even on a GPU node. */
+  int use_cpu = force_cpu || !ms_upunit_cuda_available();
+  if (use_cpu && c.trunk_path)
+    terr("--trunk needs the CUDA backend; rebuild with make CUDA=1", NULL);
+  fprintf(stderr, "[methscope] upscale-train: backend=%s\n", use_cpu ? "cpu" : "cuda");
+  int train_rc = use_cpu ? ms_upunit_train_cpu(&c) : ms_upunit_train_cuda(&c);
   if (train_rc == 2) {
     fprintf(stderr, "[methscope] upscale-train: pilot complete; no bundle assembled\n");
     return 0;
@@ -215,7 +226,7 @@ int main_upscale_train(int argc, char **argv) {
     "patterns\t%u\ninput_dim\t%u\nfeatures\t%s\ntrunk\t%s\npure_bottleneck\t%u\nmixed_mode\t%s\n"
     "mixed_bottleneck\t%u\nactivation\t%s\nmin_steps\t%u\nmax_steps\t%u\n"
     "eval_every\t%u\npatience\t%u\nbatch\t%u\neval_rows\t%u\nseed\t%" PRIu64
-    "\nlearning_rate\t%.9g\nweight_decay\t%.9g\nsplit\t%s\n",
+    "\nlearning_rate\t%.9g\nweight_decay\t%.9g\nsplit\t%s\nbackend\t%s\n",
     out, data, index, mrmp, work, c.patterns,
     (c.feature_mode == MS_UPFEATURE_BETA ? 1 : 2) * c.patterns,
     c.feature_mode == MS_UPFEATURE_COUNT ? "beta_log1p_count" :
@@ -225,7 +236,7 @@ int main_upscale_train(int argc, char **argv) {
     c.mixed_bottleneck, c.activation ? "leaky" : "linear",
     c.min_steps, c.max_steps, c.eval_every, c.patience, c.batch,
     c.eval_rows, c.seed, c.learning_rate, c.weight_decay,
-    c.split_path ? c.split_path : "");
+    c.split_path ? c.split_path : "", use_cpu ? "cpu" : "cuda");
   if (fclose(mf)) terr("cannot close training manifest", manifest);
   fprintf(stderr, "[methscope] upscale-train: complete -> %s\n", out);
   return 0;
