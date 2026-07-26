@@ -226,7 +226,7 @@
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
 
 <span class="cm"># a 40-cell-type chr20 reference (39.5 MB)</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg">yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/data/human_hg38_40_celltypes_chr20.cg">yame fetch -c -y hg38/data/human_hg38_40_celltypes_chr20.cg</span>
 <span class="cmd" data-cmd="methscope mrmp-build human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</span>
 <span class="out">samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450
 PNA CpGs=116068 (15.01%)  checksum=9e7f6d292a2ba946</span>
@@ -241,7 +241,7 @@ samples              40
 cpgs                 773477
 distinct_candidates  116450
 selectable_patterns  116450
-pna_cpgs             116068   15.0125%
+pna_cpgs             116068   15.0060%
 binstring            mincov=1 beta=0.500 max_ambig_frac=1.000 min_major_fold=10.000
 content_checksum     9e7f6d292a2ba946</span>
 
@@ -290,8 +290,8 @@ content_checksum     9e7f6d292a2ba946</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
 
 <span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/data/human_hg38_celltypes.cg">yame fetch -c hg38/data/human_hg38_celltypes.cg</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/models/hg38_celltype.ubjx">yame fetch -c hg38/models/hg38_celltype.ubjx</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/data/human_hg38_celltypes.cg">yame fetch -c -y hg38/data/human_hg38_celltypes.cg</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/models/hg38_celltype.ubjx">yame fetch -c -y hg38/models/hg38_celltype.ubjx</span>
 <span class="cmd" data-cmd="methscope classify human_hg38_celltypes.cg hg38_celltype.ubjx">methscope <span class="sub tip" data-tip="cmd-classify" tabindex="0">classify</span> human_hg38_celltypes.cg hg38_celltype.ubjx</span>
 <span class="out">cell             prediction_label  confidence
 Oligodendrocyte  ODC               0.915134   # oligodendrocyte
@@ -302,13 +302,23 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 # the same call runs a sex / age / any bundled model</span>
 
 <span class="cm"># look inside any bundle without running it</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/models/hg38_sex.ubjx">yame fetch -c hg38/models/hg38_sex.ubjx</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/models/hg38_sex.ubjx">yame fetch -c -y hg38/models/hg38_sex.ubjx</span>
 <span class="cmd" data-cmd="methscope inspect hg38_sex.ubjx">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> hg38_sex.ubjx</span>
-<span class="out">container  MSBNDL1 — 3 sections, 30,931 bytes
-  0  mrmp    fmt2 MRMP definition, 3 states
-  1  kind    "logistic" framework mark
-  2  model   methscope-linear text spec
-     labels  Female, Male</span></code></pre>
+<span class="out">container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 30,931 bytes
+
+    #  section         offset         size  content
+    0  mrmp                 0       30,653  fmt2 MRMP definition, 3 states
+    1  kind            30,761            8  "logistic" framework mark
+    2  model           30,769          154  methscope-linear text spec
+
+  [2] model      logistic linear classifier - run via `classify`
+      method     logistic
+      labels     Female, Male
+      bias       -7.50339
+      scale      1
+      features   2
+        Xa_lo        weight=-13.9125     mean=0.24253
+        Xa_hi        weight=13.6301      mean=0.752643</span></code></pre>
       <span class="tipbox" data-tip="ubjx">
         <b>MSBNDL1</b> <span class="tdim">— a classifier bundle (<code class="inl">.ubjx</code>)</span>
         <p style="margin:5px 0 0">One self-describing file: the inner model, its MRMP feature
@@ -333,7 +343,7 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 
 <span class="cm"># the 40-cell-type chr20 reference doubles as training data:
 # label each cell by lineage, straight from the sample names</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg">yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/data/human_hg38_40_celltypes_chr20.cg">yame fetch -c -y hg38/data/human_hg38_40_celltypes_chr20.cg</span>
 <span class="cmd" data-cmd="methscope mrmp-build human_hg38_40_celltypes_chr20.cg chr20.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20.mrmp</span>
 <span class="cmd" data-cmd="methscope mrmp-export --top 1000 chr20.mrmp chr20.cm">methscope <span class="sub tip" data-tip="cmd-mrmp-export" tabindex="0">mrmp-export</span> --top 1000 chr20.mrmp chr20.cm</span>
 <span class="cmd" data-cmd="cut -f1 human_hg38_40_celltypes_chr20.cg.idx | sed &#x27;s/^GSM[0-9]*_//; s/-Z[0-9A-Z]*$//&#x27; | sed -E &#x27;s/.*Endothel.*|.*Endothelium.*/Endothelial/; s/.*Epithelial.*|.*Keratinocytes.*|.*Podocytes.*/Epithelial/; s/^Blood-.*|.*Macrophages.*/Immune/; s/.*Smooth-Muscle.*|Skeletal-Muscle|.*Cardiomyocyte.*/Muscle/; s/^Neuron$|.*Oligodendrocytes.*/Neural/; s/.*Fibroblasts.*|Adipocytes|Lung-Pleura/Mesenchymal/; s/^(Liver-Hepatocytes|Pancreas-Acinar|Pancreas-Beta)$/Secretory/&#x27; &gt; labels.txt">cut -f1 human_hg38_40_celltypes_chr20.cg.idx | sed &#x27;s/^GSM[0-9]*_//; s/-Z[0-9A-Z]*$//&#x27; | sed -E &#x27;s/.*Endothel.*|.*Endothelium.*/Endothelial/; s/.*Epithelial.*|.*Keratinocytes.*|.*Podocytes.*/Epithelial/; s/^Blood-.*|.*Macrophages.*/Immune/; s/.*Smooth-Muscle.*|Skeletal-Muscle|.*Cardiomyocyte.*/Muscle/; s/^Neuron$|.*Oligodendrocytes.*/Neural/; s/.*Fibroblasts.*|Adipocytes|Lung-Pleura/Mesenchymal/; s/^(Liver-Hepatocytes|Pancreas-Acinar|Pancreas-Beta)$/Secretory/&#x27; &gt; labels.txt</span>
@@ -352,9 +362,10 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM  Endothelial       0.377817
 GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
 <span class="cm"># 40/40 here, but this is the training set — a sanity check, not a validation</span>
 
-<span class="cm"># the same wrapping by hand: inner model + its MRMP (+ labels) -> one file</span>
-<span class="cmd" data-cmd="methscope bundle -m chr20.cm -l labels.txt model.ubj -o model.ubjx">methscope <span class="sub tip" data-tip="cmd-bundle" tabindex="0">bundle</span> -m chr20.cm -l labels.txt model.ubj -o model.ubjx</span>
-<span class="cmd" data-cmd="methscope unbundle model.ubjx">methscope <span class="sub tip" data-tip="cmd-unbundle" tabindex="0">unbundle</span> model.ubjx</span></code></pre>
+<span class="cm"># the same wrapping by hand: unpack a bundle into its parts, then re-wrap
+# (unbundle writes chr20_lineage.ubj + chr20_lineage.mrmp; -k re-stamps the kind)</span>
+<span class="cmd" data-cmd="methscope unbundle chr20_lineage.ubjx">methscope <span class="sub tip" data-tip="cmd-unbundle" tabindex="0">unbundle</span> chr20_lineage.ubjx</span>
+<span class="cmd" data-cmd="methscope bundle -m chr20_lineage.mrmp -k xgboost -o rewrapped.ubjx chr20_lineage.ubj">methscope <span class="sub tip" data-tip="cmd-bundle" tabindex="0">bundle</span> -m chr20_lineage.mrmp -k xgboost -o rewrapped.ubjx chr20_lineage.ubj</span></code></pre>
     </div>
     <p style="margin-top:11px">Linear models store per-feature training means, so missing/sparse
       betas are imputed at classify time — accurate even at &lt;1% genome coverage.</p>
@@ -371,8 +382,8 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
 
 <span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/data/human_hg38_immune_mixture.cg">yame fetch -c hg38/data/human_hg38_immune_mixture.cg</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/models/hg38_65celltypes.refx">yame fetch -c hg38/models/hg38_65celltypes.refx</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/data/human_hg38_immune_mixture.cg">yame fetch -c -y hg38/data/human_hg38_immune_mixture.cg</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/models/hg38_65celltypes.refx">yame fetch -c -y hg38/models/hg38_65celltypes.refx</span>
 <span class="cmd" data-cmd="methscope deconv human_hg38_immune_mixture.cg hg38_65celltypes.refx">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> human_hg38_immune_mixture.cg hg38_65celltypes.refx</span>
 <span class="out">cell  … Macrophage  Mono    NK_CD56  …
 1     … 0.7486      0.2370  0.0000   …</span>
@@ -385,8 +396,8 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
 
 <span class="cm"># per-cell panel, so each cell must deconvolve to itself</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/data/human_hg38_celltypes.cg">yame fetch -c hg38/data/human_hg38_celltypes.cg</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/models/hg38_celltype.ubjx">yame fetch -c hg38/models/hg38_celltype.ubjx</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/data/human_hg38_celltypes.cg">yame fetch -c -y hg38/data/human_hg38_celltypes.cg</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/models/hg38_celltype.ubjx">yame fetch -c -y hg38/models/hg38_celltype.ubjx</span>
 <span class="cmd" data-cmd="methscope deconv-build-ref -o self.refx human_hg38_celltypes.cg hg38_celltype.ubjx">methscope <span class="sub tip" data-tip="cmd-deconv-build-ref" tabindex="0">deconv-build-ref</span> -o self.refx human_hg38_celltypes.cg hg38_celltype.ubjx</span>
 <span class="cmd" data-cmd="methscope deconv human_hg38_celltypes.cg self.refx">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> human_hg38_celltypes.cg self.refx</span>
 <span class="out"># Oligodendrocyte  Oligodendrocyte=100%
@@ -412,19 +423,19 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
 
 <span class="cm"># what goes in: a sparse methylome</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/data/human_hg38_test.cg">yame fetch -c hg38/data/human_hg38_test.cg</span>
-<span class="cmd" data-cmd="yame summary human_hg38_test.cg | tabl view">yame summary human_hg38_test.cg | tabl view</span>
-<span class="out">QFile               Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap   Beta
-human_hg38_test.cg      1     NA  global   29000    23857   29000      23857  0.823</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/data/human_hg38_test.cg">yame fetch -c -y hg38/data/human_hg38_test.cg</span>
+<span class="cmd" data-cmd="yame summary human_hg38_test.cg">yame summary human_hg38_test.cg</span>
+<span class="out">QFile               Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap  Log2OddsRatio   Beta  Depth
+human_hg38_test.cg      1     NA  global   29000    23857   29000      23857             NA  0.823     NA</span>
 
 <span class="cm"># impute the whole genome from it</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/models/hg38_10k1.updecx">yame fetch -c hg38/models/hg38_10k1.updecx</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/models/hg38_10k1.updecx">yame fetch -c -y hg38/models/hg38_10k1.updecx</span>
 <span class="cmd" data-cmd="methscope upscale -o human_hg38_test_reconstructed.cg hg38_10k1.updecx human_hg38_test.cg">methscope <span class="sub tip" data-tip="cmd-upscale" tabindex="0">upscale</span> -o human_hg38_test_reconstructed.cg hg38_10k1.updecx human_hg38_test.cg</span>
 
 <span class="cm"># what comes out</span>
-<span class="cmd" data-cmd="yame summary human_hg38_test_reconstructed.cg | tabl view">yame summary human_hg38_test_reconstructed.cg | tabl view</span>
-<span class="out">QFile                             Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap   Beta
-human_hg38_test_reconstructed.cg      1     NA  global   10000     6239   10000       6239  0.624</span>
+<span class="cmd" data-cmd="yame summary human_hg38_test_reconstructed.cg">yame summary human_hg38_test_reconstructed.cg</span>
+<span class="out">QFile                             Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap  Log2OddsRatio   Beta  Depth
+human_hg38_test_reconstructed.cg      1     NA  global   10000     6239   10000       6239             NA  0.624     NA</span>
 <span class="cm"># this decoder writes one 10,000-CpG block, so N_univ is 10,000.
 # inside that block the input carried 13 covered CpGs; the truth has 9,794
 # at beta 0.593, and the reconstruction fills all 10,000 at beta 0.624 --
@@ -432,7 +443,7 @@ human_hg38_test_reconstructed.cg      1     NA  global   10000     6239   10000 
 
 <span class="cm"># score the calls against the truth (the .cg holds binary 0/1 calls,
 # so this is exact-match accuracy; --probs emits probabilities instead)</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/data/human_hg38_test.truth.cg">yame fetch -c hg38/data/human_hg38_test.truth.cg</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/data/human_hg38_test.truth.cg">yame fetch -c -y hg38/data/human_hg38_test.truth.cg</span>
 <span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;</span>
 <span class="out">9211/9794 (94.0%)</span>
 
@@ -440,7 +451,7 @@ human_hg38_test_reconstructed.cg      1     NA  global   10000     6239   10000 
 # window-averages 10,000 CpGs into 60 columns; -g shows deciles</span>
 <span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg</span>
 <span class="cmd" data-cmd="yame index -s &lt;(printf &#x27;truth\ninput\nreconstructed\n&#x27;) three.cg">yame index -s &lt;(printf &#x27;truth\ninput\nreconstructed\n&#x27;) three.cg</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/KYCG/cpg_nocontig.cr">yame fetch -c hg38/KYCG/cpg_nocontig.cr</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/KYCG/cpg_nocontig.cr">yame fetch -c -y hg38/KYCG/cpg_nocontig.cr</span>
 <span class="cmd" data-cmd="yame hprint -g -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg">yame hprint -g -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg</span>
 <span class="out">                      chr1:921649-1151482 (10000 CpGs, win=167)
                       |.........|.........|.........|.........|.........|.........
@@ -474,7 +485,7 @@ recon  <span class="hm">111111</span><span class="hu">0</span><span class="hm">1
 
 <span class="cm"># the whole pipeline from scratch, on the 40-cell-type chr20 reference
 # 1. define the features</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg">yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg</span>
+<span class="cmd" data-cmd="yame fetch -c -y hg38/data/human_hg38_40_celltypes_chr20.cg">yame fetch -c -y hg38/data/human_hg38_40_celltypes_chr20.cg</span>
 <span class="cmd" data-cmd="methscope mrmp-build human_hg38_40_celltypes_chr20.cg chr20.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20.mrmp</span>
 <span class="out">samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450</span>
 
@@ -546,6 +557,10 @@ embedded_truth    yes (trainable)</span></code></pre>
 <span class="out">backend=cpu; cells=40 reps=20 patterns=1000 input=2000 units=109 threads=8
 units 109/109 (resumed=0) last_val_mae=0.156606
 wrote bare UPDEC2 work/model.updec2 (109288672 bytes)</span>
+
+<span class="cm"># the chr20 demo is small; a whole-genome decoder is memory- and GPU-heavy,
+# so submit it to a GPU node (the CUDA backend is picked up automatically):</span>
+<span class="cmd" data-cmd="sbatch -q gpu --gres=gpu:1 --mem=64G -c 8 -t 8:00:00 --wrap 'methscope upscale-train -i wg.msur --units wg.msui --mrmp wg.mrmp -o hg38_wg.updecx --work-dir work/'">sbatch -q gpu --gres=gpu:1 --mem=64G -c 8 -t 8:00:00 --wrap 'methscope upscale-train -i wg.msur --units wg.msui --mrmp wg.mrmp -o hg38_wg.updecx --work-dir work/'</span>
 <span class="cm"># --split rows: &lt;cell_index&gt;TAB&lt;train|val|test&gt;, one per source cell; without
 # it, cells are cut 70/15/15 by --seed. --device cpu forces the portable
 # backend even on a GPU node.</span></code></pre>
