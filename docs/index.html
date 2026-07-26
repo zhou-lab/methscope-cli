@@ -656,20 +656,24 @@ wrote bare UPDEC2 work/model.updec2 (109288672 bytes)</code></pre>
       el.textContent=v; el.href="https://github.com/zhou-lab/methscope-cli/releases/tag/"+v;
     }).catch(function(){});
 
-  // "Built against YAME vX.YZ": resolve the pinned submodule commit to a YAME
-  // tag, straight from the published repo -- so it tracks whatever is on main.
-  Promise.all([
-    fetch("https://api.github.com/repos/zhou-lab/methscope-cli/contents/YAME").then(function(r){ return r.ok ? r.json() : null; }),
-    fetch("https://api.github.com/repos/zhou-lab/YAME/tags?per_page=100").then(function(r){ return r.ok ? r.json() : []; })
-  ]).then(function(res){
-    var sub=res[0], ytags=res[1];
-    if(!sub || !sub.sha || !ytags.length) return;
-    var hit=ytags.find(function(t){ return t.commit && t.commit.sha===sub.sha; });
-    if(!hit) return;
-    var el=document.getElementById("yame-ver");
-    el.innerHTML='built against <a href="https://github.com/zhou-lab/YAME/releases/tag/'+hit.name+'">YAME '+hit.name+'</a>';
-    el.hidden=false;
-  }).catch(function(){});
+  // "Built against YAME vX.YZ": read the version the pinned submodule commit
+  // actually declares (YAME/src/yame_version.h at that commit), straight from the
+  // published repo -- so it tracks whatever main points at, tag or not.
+  fetch("https://api.github.com/repos/zhou-lab/methscope-cli/contents/YAME")
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(sub){
+      if(!sub || !sub.sha) return null;
+      return fetch("https://api.github.com/repos/zhou-lab/YAME/contents/src/yame_version.h?ref="+sub.sha)
+        .then(function(r){ return r.ok ? r.json() : null; });
+    })
+    .then(function(f){
+      if(!f || !f.content) return;
+      var m=atob(f.content.replace(/\s/g,"")).match(/YAME_VERSION\s+"([^"]+)"/);
+      if(!m) return;
+      var el=document.getElementById("yame-ver");
+      el.innerHTML='built against <a href="https://github.com/zhou-lab/YAME/tags">YAME '+m[1]+'</a>';
+      el.hidden=false;
+    }).catch(function(){});
 
   // --- copy helpers, shared by the block button and the per-line tabs ---
   async function clip(t){
