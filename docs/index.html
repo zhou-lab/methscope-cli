@@ -147,7 +147,7 @@
 <header>
   <div class="titlerow">
     <h1><b>Meth</b>Scope</h1>
-    <span class="badge">cli</span><span class="badge ver">v0.1.1</span>
+    <span class="badge">cli</span>
     <span class="install">
       <button id="install-btn" type="button"
               data-cmd="conda install -c zhou-lab -c conda-forge methscope"
@@ -162,8 +162,7 @@
   <p class="links">
     <a href="https://github.com/zhou-lab/methscope-cli">GitHub</a><span>·</span>
     <a href="https://huggingface.co/zhou-lab/methscope">models</a><span>·</span>
-    <a href="https://github.com/zhou-lab/YAME">YAME</a><span>·</span>
-    <a href="https://zhou-lab.github.io/MethScope/">R / MethScope</a><span>·</span>
+    <a href="https://zhou-lab.github.io/YAME/">YAME</a><span>·</span>
     hg38 · mm10 · WGBS · single-cell · spatial
   </p>
 </header>
@@ -183,8 +182,8 @@
     <h2>Install <span class="m">— the binary, and what it can fetch</span></h2>
     <p>Every model is one self-contained bundle carrying its own MRMP feature definition (and
       labels), so a query <code class="inl">.cg</code> runs directly — no separate annotation
-      files. <code class="inl">fetch</code> carries the catalog of models <i>and</i> the example
-      <code class="inl">.cg</code> fixtures; each workflow below opens by fetching just what it
+      files. Data and models are fetched with <code class="inl">yame fetch</code> into the shared
+      YAME store that every lab tool reads; each workflow below opens by fetching just what it
       needs. It never prompts, so it is safe inside a container build.</p>
     <div class="tipwrap">
       <pre><code><span class="cm"># conda — installs the `methscope` binary</span>
@@ -198,41 +197,18 @@
 <span class="cmd" data-cmd="git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli">git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli</span>
 <span class="cmd" data-cmd="cd methscope-cli &amp;&amp; make">cd methscope-cli &amp;&amp; make</span>
 
-<span class="cm"># what is available, and what is already local</span>
-<span class="cmd" data-cmd="methscope fetch">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span></span>
-<span class="out">store   ~/.cache/methscope
-
-models (HuggingFace zhou-lab/methscope)
-  name             size       task                             local
-  hg38_celltype    24.5 MB    cell-type annotation             -
-  mm10_celltype    21.5 MB    cell-type annotation             -
-  hg38_sex         30.2 KB    sex prediction                   -
-  hg38_65celltypes 27.6 MB    deconvolution (NNLS)             -
-  hg38_10k1        27.7 MB    CpG upscaling (one block)        -
-  hg38_wg          2.8 GB     CpG upscaling (whole genome)     -
-
-example data (GitHub methscope_data)
-  name             size       task                             local
-  celltypes_cg     6.1 MB     classify / deconv input          -
-  celltypes_idx    96 B       cell names for the above         -
-  immune_mixture   3.5 MB     deconv input                     -
-  upscale_query    101.3 KB   upscale input                    -
-  upscale_truth    1.9 MB     upscale ground truth             -
-
-11 entries, 2.9 GB total; 0 B present</span>
-
-<span class="cm"># groups: models | data | all</span>
-<span class="cmd" data-cmd="methscope fetch data">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> data</span>
-
-<span class="cm"># where things land: $METHSCOPE_DATA_DIR, else ~/.cache/methscope
-# (same shape as kycg's KYCG_DATA_DIR); --store DIR overrides both</span>
-<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=/shared/methscope    # optional">export METHSCOPE_DATA_DIR=/shared/methscope    <span class="cm"># optional</span></span></code></pre>
+<span class="cm"># what's available, and where it lands (browser on a TTY; TSV when piped)</span>
+<span class="cmd" data-cmd="yame fetch -l | grep methscope">yame fetch -l | grep methscope</span>
+<span class="cm"># fetch a folder into the shared store (idempotent, sha256-verified)</span>
+<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>            <span class="cm"># the example .cg fixtures (~51 MB)</span>
+<span class="cmd" data-cmd="yame fetch methscope/hg38/models">yame fetch methscope/hg38/models</span>          <span class="cm"># the model bundles (~2.9 GB incl. the whole-genome upscaler)</span>
+<span class="cm"># the store: $YAME_DATA_HOME, else ${XDG_DATA_HOME:-~/.local/share}/yame; yame fetch -d DIR overrides</span></code></pre>
     </div>
     <p style="margin-top:11px">Downloads land on a <code class="inl">.part</code> sibling and are
-      renamed only once the byte count matches the catalog, so an interrupted fetch can never leave
-      a short file that later reads as a valid model. Have <code class="inl">yame</code> on
-      <code class="inl">PATH</code> and the conda env that provided
-      <code class="inl">libxgboost</code> active.</p>
+      renamed only once the bytes verify, so an interrupted <code class="inl">yame fetch</code> can
+      never leave a short file that later reads as a valid model. Fetching now lives in
+      <code class="inl">yame</code>, so keep it on <code class="inl">PATH</code> alongside the
+      conda env that provided <code class="inl">libxgboost</code>.</p>
   </section>
 
   <section class="panel" id="p-mrmp" role="tabpanel" aria-labelledby="t-mrmp">
@@ -244,15 +220,14 @@ example data (GitHub methscope_data)
       for a whole-genome reference. The fetchable example below is chr20 only, so it finishes in
       about a second.</p>
     <div class="tipwrap">
-      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
-# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+      <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
-<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR=&quot;.&quot;</span>
+<span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
+<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>    <span class="cm"># example .cg fixtures</span>
 
-<span class="cm"># a 40-cell-type chr20 reference, small enough to fetch (39.5 MB)</span>
-<span class="cmd" data-cmd="methscope fetch human_hg38_40_celltypes_chr20.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_40_celltypes_chr20.cg</span>
-
-<span class="cmd" data-cmd="methscope mrmp-build human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</span>
+<span class="cm"># a 40-cell-type chr20 reference (39.5 MB)</span>
+<span class="cmd" data-cmd="methscope mrmp-build $D/human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> $D/human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</span>
 <span class="out">samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450
 PNA CpGs=116068 (15.01%)  checksum=9e7f6d292a2ba946</span>
 <span class="cm"># 1.3 s. 40 samples is the ceiling: a pattern packs as a base-3 uint64
@@ -305,20 +280,22 @@ content_checksum     9e7f6d292a2ba946</span>
 
   <section class="panel" id="p-classify" role="tabpanel" aria-labelledby="t-classify">
     <h2>Classify <span class="m">— cell type, sex, any label</span></h2>
-    <p>Classify a methylome against a bundled classifier. Fetching is idempotent and prints the
-      path it guarantees, so <code class="inl">$(methscope fetch NAME)</code> is usable directly as
-      an argument — the block below runs as-is on a clean machine.</p>
+    <p>Classify a methylome against a bundled classifier. Fetching is idempotent — an
+      already-present folder is skipped — so the preamble below fetches once into the shared YAME
+      store and the block runs as-is on a clean machine.</p>
 
     <h3>Classify <span class="m">— with a shipped model</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
-# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+      <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
-<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR=&quot;.&quot;</span>
-<span class="cmd" data-cmd="methscope fetch hg38_celltype.ubjx hg38_sex.ubjx human_hg38_celltypes.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_celltype.ubjx hg38_sex.ubjx human_hg38_celltypes.cg</span>
+<span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
+<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
+<span class="cmd" data-cmd="yame fetch methscope/hg38/models">yame fetch methscope/hg38/models</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>           <span class="cm"># example .cg fixtures</span>
+<span class="cmd" data-cmd="M=$YAME_DATA_HOME/methscope/models/hg38">M=$YAME_DATA_HOME/methscope/models/hg38</span>    <span class="cm"># model bundles</span>
 
 <span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
-<span class="cmd" data-cmd="methscope classify human_hg38_celltypes.cg hg38_celltype.ubjx">methscope <span class="sub tip" data-tip="cmd-classify" tabindex="0">classify</span> human_hg38_celltypes.cg hg38_celltype.ubjx</span>
+<span class="cmd" data-cmd="methscope classify $D/human_hg38_celltypes.cg $M/hg38_celltype.ubjx">methscope <span class="sub tip" data-tip="cmd-classify" tabindex="0">classify</span> $D/human_hg38_celltypes.cg $M/hg38_celltype.ubjx</span>
 <span class="out">cell             prediction_label  confidence
 Oligodendrocyte  ODC               0.915134   # oligodendrocyte
 Pancreas-Beta    Beta              0.930708   # islet beta
@@ -328,7 +305,7 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 # the same call runs a sex / age / any bundled model</span>
 
 <span class="cm"># look inside any bundle without running it</span>
-<span class="cmd" data-cmd="methscope inspect hg38_sex.ubjx">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> hg38_sex.ubjx</span>
+<span class="cmd" data-cmd="methscope inspect $M/hg38_sex.ubjx">methscope <span class="sub tip" data-tip="cmd-inspect" tabindex="0">inspect</span> $M/hg38_sex.ubjx</span>
 <span class="out">container  MSBNDL1 — 3 sections, 30,931 bytes
   0  mrmp    fmt2 MRMP definition, 3 states
   1  kind    "logistic" framework mark
@@ -353,26 +330,26 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
 
     <h3>Train <span class="m">— fit your own classifier</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
-# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+      <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
-<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR="."</span>
+<span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
+<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>    <span class="cm"># example .cg fixtures</span>
 
 <span class="cm"># the 40-cell-type chr20 reference doubles as training data:
 # label each cell by lineage, straight from the sample names</span>
-<span class="cmd" data-cmd="methscope fetch human_hg38_40_celltypes_chr20.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_40_celltypes_chr20.cg</span>
-<span class="cmd" data-cmd="methscope mrmp-build human_hg38_40_celltypes_chr20.cg chr20.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20.mrmp</span>
+<span class="cmd" data-cmd="methscope mrmp-build $D/human_hg38_40_celltypes_chr20.cg chr20.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> $D/human_hg38_40_celltypes_chr20.cg chr20.mrmp</span>
 <span class="cmd" data-cmd="methscope mrmp-export --top 1000 chr20.mrmp chr20.cm">methscope <span class="sub tip" data-tip="cmd-mrmp-export" tabindex="0">mrmp-export</span> --top 1000 chr20.mrmp chr20.cm</span>
-<span class="cmd" data-cmd="cut -f1 human_hg38_40_celltypes_chr20.cg.idx | sed &#x27;s/^GSM[0-9]*_//; s/-Z[0-9A-Z]*$//&#x27; | sed -E &#x27;s/.*Endothel.*|.*Endothelium.*/Endothelial/; s/.*Epithelial.*|.*Keratinocytes.*|.*Podocytes.*/Epithelial/; s/^Blood-.*|.*Macrophages.*/Immune/; s/.*Smooth-Muscle.*|Skeletal-Muscle|.*Cardiomyocyte.*/Muscle/; s/^Neuron$|.*Oligodendrocytes.*/Neural/; s/.*Fibroblasts.*|Adipocytes|Lung-Pleura/Mesenchymal/; s/^(Liver-Hepatocytes|Pancreas-Acinar|Pancreas-Beta)$/Secretory/&#x27; &gt; labels.txt">cut -f1 human_hg38_40_celltypes_chr20.cg.idx | sed &#x27;s/^GSM[0-9]*_//; s/-Z[0-9A-Z]*$//&#x27; | sed -E &#x27;s/.*Endothel.*|.*Endothelium.*/Endothelial/; s/.*Epithelial.*|.*Keratinocytes.*|.*Podocytes.*/Epithelial/; s/^Blood-.*|.*Macrophages.*/Immune/; s/.*Smooth-Muscle.*|Skeletal-Muscle|.*Cardiomyocyte.*/Muscle/; s/^Neuron$|.*Oligodendrocytes.*/Neural/; s/.*Fibroblasts.*|Adipocytes|Lung-Pleura/Mesenchymal/; s/^(Liver-Hepatocytes|Pancreas-Acinar|Pancreas-Beta)$/Secretory/&#x27; &gt; labels.txt</span>
+<span class="cmd" data-cmd="cut -f1 $D/human_hg38_40_celltypes_chr20.cg.idx | sed &#x27;s/^GSM[0-9]*_//; s/-Z[0-9A-Z]*$//&#x27; | sed -E &#x27;s/.*Endothel.*|.*Endothelium.*/Endothelial/; s/.*Epithelial.*|.*Keratinocytes.*|.*Podocytes.*/Epithelial/; s/^Blood-.*|.*Macrophages.*/Immune/; s/.*Smooth-Muscle.*|Skeletal-Muscle|.*Cardiomyocyte.*/Muscle/; s/^Neuron$|.*Oligodendrocytes.*/Neural/; s/.*Fibroblasts.*|Adipocytes|Lung-Pleura/Mesenchymal/; s/^(Liver-Hepatocytes|Pancreas-Acinar|Pancreas-Beta)$/Secretory/&#x27; &gt; labels.txt">cut -f1 $D/human_hg38_40_celltypes_chr20.cg.idx | sed &#x27;s/^GSM[0-9]*_//; s/-Z[0-9A-Z]*$//&#x27; | sed -E &#x27;s/.*Endothel.*|.*Endothelium.*/Endothelial/; s/.*Epithelial.*|.*Keratinocytes.*|.*Podocytes.*/Epithelial/; s/^Blood-.*|.*Macrophages.*/Immune/; s/.*Smooth-Muscle.*|Skeletal-Muscle|.*Cardiomyocyte.*/Muscle/; s/^Neuron$|.*Oligodendrocytes.*/Neural/; s/.*Fibroblasts.*|Adipocytes|Lung-Pleura/Mesenchymal/; s/^(Liver-Hepatocytes|Pancreas-Acinar|Pancreas-Beta)$/Secretory/&#x27; &gt; labels.txt</span>
 
 <span class="cm"># features + labels -> one runnable bundle, in a single step
 # (the positional takes the runtime .cm, not the .mrmp artifact)</span>
-<span class="cmd" data-cmd="methscope classify-train -l labels.txt -o chr20_lineage.ubjx human_hg38_40_celltypes_chr20.cg chr20.cm">methscope <span class="sub tip" data-tip="cmd-classify-train" tabindex="0">classify-train</span> -l labels.txt -o chr20_lineage.ubjx human_hg38_40_celltypes_chr20.cg chr20.cm</span>
+<span class="cmd" data-cmd="methscope classify-train -l labels.txt -o chr20_lineage.ubjx $D/human_hg38_40_celltypes_chr20.cg chr20.cm">methscope <span class="sub tip" data-tip="cmd-classify-train" tabindex="0">classify-train</span> -l labels.txt -o chr20_lineage.ubjx $D/human_hg38_40_celltypes_chr20.cg chr20.cm</span>
 <span class="out">trained 7-class xgboost model on 40 cells x 1000 feature(s), 6 rounds
   -> chr20_lineage.ubjx (booster+MRMP bundle)</span>
 <span class="cm"># --framework xgboost | logistic | threshold</span>
 
-<span class="cmd" data-cmd="methscope classify human_hg38_40_celltypes_chr20.cg chr20_lineage.ubjx">methscope <span class="sub tip" data-tip="cmd-classify" tabindex="0">classify</span> human_hg38_40_celltypes_chr20.cg chr20_lineage.ubjx</span>
+<span class="cmd" data-cmd="methscope classify $D/human_hg38_40_celltypes_chr20.cg chr20_lineage.ubjx">methscope <span class="sub tip" data-tip="cmd-classify" tabindex="0">classify</span> $D/human_hg38_40_celltypes_chr20.cg chr20_lineage.ubjx</span>
 <span class="out">cell                                          prediction_label  confidence
 GSM5652176_Adipocytes-Z000000T7               Mesenchymal       0.229483
 GSM5652181_Saphenous-Vein-Endothel-Z000000RM  Endothelial       0.377817
@@ -394,14 +371,16 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
 
     <h3>Deconvolve <span class="m">— with a shipped reference</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
-# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+      <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
-<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR=&quot;.&quot;</span>
-<span class="cmd" data-cmd="methscope fetch hg38_65celltypes.refx human_hg38_immune_mixture.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_65celltypes.refx human_hg38_immune_mixture.cg</span>
+<span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
+<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
+<span class="cmd" data-cmd="yame fetch methscope/hg38/models">yame fetch methscope/hg38/models</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>           <span class="cm"># example .cg fixtures</span>
+<span class="cmd" data-cmd="M=$YAME_DATA_HOME/methscope/models/hg38">M=$YAME_DATA_HOME/methscope/models/hg38</span>    <span class="cm"># model bundles</span>
 
 <span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
-<span class="cmd" data-cmd="methscope deconv human_hg38_immune_mixture.cg hg38_65celltypes.refx">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> human_hg38_immune_mixture.cg hg38_65celltypes.refx</span>
+<span class="cmd" data-cmd="methscope deconv $D/human_hg38_immune_mixture.cg $M/hg38_65celltypes.refx">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> $D/human_hg38_immune_mixture.cg $M/hg38_65celltypes.refx</span>
 <span class="out">cell  … Macrophage  Mono    NK_CD56  …
 1     … 0.7486      0.2370  0.0000   …</span>
 <span class="cm"># truth 70/30; the other 63 types come back ~0</span></code></pre>
@@ -409,16 +388,17 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
 
     <h3>Build a reference <span class="m">— your own .refx panel</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
-# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+      <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
-<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR="."</span>
-
-<span class="cmd" data-cmd="methscope fetch hg38_celltype.ubjx human_hg38_celltypes.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_celltype.ubjx human_hg38_celltypes.cg</span>
+<span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
+<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
+<span class="cmd" data-cmd="yame fetch methscope/hg38/models">yame fetch methscope/hg38/models</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>           <span class="cm"># example .cg fixtures</span>
+<span class="cmd" data-cmd="M=$YAME_DATA_HOME/methscope/models/hg38">M=$YAME_DATA_HOME/methscope/models/hg38</span>    <span class="cm"># model bundles</span>
 
 <span class="cm"># per-cell panel, so each cell must deconvolve to itself</span>
-<span class="cmd" data-cmd="methscope deconv-build-ref -o self.refx human_hg38_celltypes.cg hg38_celltype.ubjx">methscope <span class="sub tip" data-tip="cmd-deconv-build-ref" tabindex="0">deconv-build-ref</span> -o self.refx human_hg38_celltypes.cg hg38_celltype.ubjx</span>
-<span class="cmd" data-cmd="methscope deconv human_hg38_celltypes.cg self.refx">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> human_hg38_celltypes.cg self.refx</span>
+<span class="cmd" data-cmd="methscope deconv-build-ref -o self.refx $D/human_hg38_celltypes.cg $M/hg38_celltype.ubjx">methscope <span class="sub tip" data-tip="cmd-deconv-build-ref" tabindex="0">deconv-build-ref</span> -o self.refx $D/human_hg38_celltypes.cg $M/hg38_celltype.ubjx</span>
+<span class="cmd" data-cmd="methscope deconv $D/human_hg38_celltypes.cg self.refx">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> $D/human_hg38_celltypes.cg self.refx</span>
 <span class="out"># Oligodendrocyte  Oligodendrocyte=100%
 # Pancreas-Beta    Pancreas-Beta=100%    ... (each 100% itself)</span>
 
@@ -438,19 +418,23 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
 
     <h3>Impute <span class="m">— with a shipped decoder</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
-# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+      <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
-<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR=&quot;.&quot;</span>
-<span class="cmd" data-cmd="methscope fetch hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg cpg_nocontig.cr">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> hg38_10k1.updecx human_hg38_test.cg human_hg38_test.truth.cg cpg_nocontig.cr</span>
+<span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
+<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
+<span class="cmd" data-cmd="yame fetch methscope/hg38/models">yame fetch methscope/hg38/models</span>
+<span class="cmd" data-cmd="yame fetch KYCGKB/hg38">yame fetch KYCGKB/hg38</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>            <span class="cm"># example .cg fixtures</span>
+<span class="cmd" data-cmd="M=$YAME_DATA_HOME/methscope/models/hg38">M=$YAME_DATA_HOME/methscope/models/hg38</span>     <span class="cm"># model bundles</span>
+<span class="cmd" data-cmd="KB=$YAME_DATA_HOME/KYCGKB/hg38">KB=$YAME_DATA_HOME/KYCGKB/hg38</span>              <span class="cm"># CpG-set knowledge base</span>
 
 <span class="cm"># what goes in: a sparse methylome</span>
-<span class="cmd" data-cmd="yame summary human_hg38_test.cg | tabl view">yame summary human_hg38_test.cg | tabl view</span>
+<span class="cmd" data-cmd="yame summary $D/human_hg38_test.cg | tabl view">yame summary $D/human_hg38_test.cg | tabl view</span>
 <span class="out">QFile               Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap   Beta
 human_hg38_test.cg      1     NA  global   29000    23857   29000      23857  0.823</span>
 
 <span class="cm"># impute the whole genome from it</span>
-<span class="cmd" data-cmd="methscope upscale -o human_hg38_test_reconstructed.cg hg38_10k1.updecx human_hg38_test.cg">methscope <span class="sub tip" data-tip="cmd-upscale" tabindex="0">upscale</span> -o human_hg38_test_reconstructed.cg hg38_10k1.updecx human_hg38_test.cg</span>
+<span class="cmd" data-cmd="methscope upscale -o human_hg38_test_reconstructed.cg $M/hg38_10k1.updecx $D/human_hg38_test.cg">methscope <span class="sub tip" data-tip="cmd-upscale" tabindex="0">upscale</span> -o human_hg38_test_reconstructed.cg $M/hg38_10k1.updecx $D/human_hg38_test.cg</span>
 
 <span class="cm"># what comes out</span>
 <span class="cmd" data-cmd="yame summary human_hg38_test_reconstructed.cg | tabl view">yame summary human_hg38_test_reconstructed.cg | tabl view</span>
@@ -463,14 +447,14 @@ human_hg38_test_reconstructed.cg      1     NA  global   10000     6239   10000 
 
 <span class="cm"># score the calls against the truth (the .cg holds binary 0/1 calls,
 # so this is exact-match accuracy; --probs emits probabilities instead)</span>
-<span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;</span>
+<span class="cmd" data-cmd="paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 $D/human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;">paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 $D/human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;</span>
 <span class="out">9211/9794 (94.0%)</span>
 
 <span class="cm"># see the whole block first. -R makes the view coordinate-aware and
 # window-averages 10,000 CpGs into 60 columns; -g shows deciles</span>
-<span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg</span>
+<span class="cmd" data-cmd="cat $D/human_hg38_test.truth.cg $D/human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg">cat $D/human_hg38_test.truth.cg $D/human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg</span>
 <span class="cmd" data-cmd="yame index -s &lt;(printf &#x27;truth\ninput\nreconstructed\n&#x27;) three.cg">yame index -s &lt;(printf &#x27;truth\ninput\nreconstructed\n&#x27;) three.cg</span>
-<span class="cmd" data-cmd="yame hprint -g -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg">yame hprint -g -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg</span>
+<span class="cmd" data-cmd="yame hprint -g -R $KB/cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg">yame hprint -g -R $KB/cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg</span>
 <span class="out">                      chr1:921649-1151482 (10000 CpGs, win=167)
                       |.........|.........|.........|.........|.........|.........
                       921649    958945    995856    1033422   1067326   1112421
@@ -487,7 +471,7 @@ reconstructed         <span class="g1">1</span><span class="g0">0</span><span cl
 <span class="cm"># then zoom to single CpGs over the same block the score used -- the same
 # rowsub -I as above. -c turns colour off, which cut needs since it counts
 # bytes, not columns</span>
-<span class="cmd" data-cmd="cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1621-1680">cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1621-1680</span>
+<span class="cmd" data-cmd="cat $D/human_hg38_test.truth.cg $D/human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1621-1680">cat $D/human_hg38_test.truth.cg $D/human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1621-1680</span>
 <span class="out">truth  <span class="hm">111111</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">000000</span><span class="hm">1</span><span class="hu">0000000000000000000000000</span>
 input  <span class="hn">22222222222222222</span><span class="hm">1</span><span class="hn">22222222222222222222222222</span><span class="hu">0</span><span class="hn">222222222222222</span>
 recon  <span class="hm">111111</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">000000</span><span class="hm">1</span><span class="hu">0000000000000000000000000</span></span>
@@ -498,20 +482,19 @@ recon  <span class="hm">111111</span><span class="hu">0</span><span class="hm">1
 
     <h3>Train <span class="m">— featurize, group into units, fit (CUDA)</span></h3>
     <div class="tipwrap">
-      <pre><code><span class="cm"># work in a scratch dir and fetch into it, so inputs and outputs
-# sit together (the store is $METHSCOPE_DATA_DIR, else ~/.cache/methscope)</span>
+      <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
-<span class="cmd" data-cmd="export METHSCOPE_DATA_DIR=&quot;.&quot;">export METHSCOPE_DATA_DIR="."</span>
+<span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
+<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>    <span class="cm"># example .cg fixtures</span>
 
-<span class="cm"># the whole pipeline from scratch, on the 40-cell-type chr20 reference</span>
-<span class="cmd" data-cmd="methscope fetch human_hg38_40_celltypes_chr20.cg">methscope <span class="sub tip" data-tip="cmd-fetch" tabindex="0">fetch</span> human_hg38_40_celltypes_chr20.cg</span>
-
-<span class="cm"># 1. define the features</span>
-<span class="cmd" data-cmd="methscope mrmp-build human_hg38_40_celltypes_chr20.cg chr20.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20.mrmp</span>
+<span class="cm"># the whole pipeline from scratch, on the 40-cell-type chr20 reference
+# 1. define the features</span>
+<span class="cmd" data-cmd="methscope mrmp-build $D/human_hg38_40_celltypes_chr20.cg chr20.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> $D/human_hg38_40_celltypes_chr20.cg chr20.mrmp</span>
 <span class="out">samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450</span>
 
 <span class="cm"># 2. featurize the truth atlas -> sampling/truth sidecar</span>
-<span class="cmd" data-cmd="methscope upscale-featurize --embed-truth --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp chr20.msur">methscope <span class="sub tip" data-tip="cmd-upscale-featurize" tabindex="0">upscale-featurize</span> --embed-truth --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></span>
+<span class="cmd" data-cmd="methscope upscale-featurize --embed-truth --reps 20 --sample 8000 $D/human_hg38_40_celltypes_chr20.cg chr20.mrmp chr20.msur">methscope <span class="sub tip" data-tip="cmd-upscale-featurize" tabindex="0">upscale-featurize</span> --embed-truth --reps 20 --sample 8000 $D/human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></span>
 <span class="out">wrote chr20.msur and chr20.msur.tsv   # 40 cells x 20 reps, 91 MB</span>
 
 <span class="cm"># 3. group CpGs into processing units</span>
@@ -747,28 +730,6 @@ Options:
   --min-cov &lt;k&gt;  NA any beta backed by &lt; k covered CpGs (N_overlap). Default 1.
   --no-header    Suppress the header line (--matrix TSV only).
   -h, --help     Show this help message.</pre>
-      </span>
-      <span class="tipbox" data-tip="cmd-fetch">
-        <b>methscope fetch</b>
-<pre class="tsch">Usage: methscope fetch [options] [NAME ... | models | data | all]
-
-Download pretrained models (HuggingFace zhou-lab/methscope) and the query
-.cg example fixtures (GitHub methscope_data) into the local store.
-
-With no NAME: a full-screen picker on a terminal (arrows/jk move, space
-toggles, a/n all/none, / filters, f fetches, q or Esc cancels), and a plain
-listing everywhere else. A named target never prompts, so a build or a
-workflow step can never wait for input.
-
-Human-facing lines go to stderr; stdout is one absolute path per file, so
-$(methscope fetch NAME) resolves to a usable path and re-runs for free.
-
-  --store DIR   store location (default $METHSCOPE_DATA_DIR,
-                else ~/.cache/methscope)
-  -f, --force   re-download and re-verify even if already present
-  -n, --dry-run show the plan and exit
-  --verify      re-check present files against their pinned sha256
-  -h, --help    show this help</pre>
       </span>
       <span class="tipbox" data-tip="cmd-inspect">
         <b>methscope inspect</b>
