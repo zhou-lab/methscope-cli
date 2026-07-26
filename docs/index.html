@@ -94,6 +94,20 @@
   pre:hover .copy,.copy:focus{opacity:1}
   .copy:hover{background:rgba(20,58,55,.98)}
   .copy.ok{color:var(--ok);opacity:1}
+  /* per-line copy: hover a command line and a small tab appears at its right,
+     copying just that line; works inside the zoom overlay too. The block copy
+     steps aside while a line is hovered. */
+  .ln{display:block;position:relative;min-height:1.5em}
+  .linecopy{position:absolute;top:0;right:2px;opacity:0;cursor:pointer;
+     border:1px solid rgba(255,255,255,.16);background:rgba(12,40,38,.92);color:var(--code-fg);
+     border-radius:4px;padding:0 5px;line-height:1.4;
+     font:600 .66rem ui-monospace,SFMono-Regular,Menlo,monospace;transition:opacity .12s,background .12s}
+  .linecopy::before{content:"⧉"}
+  .linecopy.ok::before{content:"✓"}
+  .linecopy.ok{opacity:1;color:var(--ok)}
+  .ln:hover>.linecopy{opacity:.8}
+  .linecopy:hover{opacity:1;background:rgba(20,58,55,.98)}
+  pre:has(.ln:hover) .copy{opacity:0}
   .note{margin:10px 0 0;padding:9px 11px;border-left:3px solid var(--accent);background:var(--soft);
      border-radius:0 8px 8px 0;font-size:.79rem;color:var(--muted);line-height:1.5}
   .note b{color:var(--fg)}
@@ -612,27 +626,80 @@ wrote bare UPDEC2 work/model.updec2 (109288672 bytes)</code></pre>
     setTimeout(function(){ btn.classList.remove('done'); },1200);
   });
 
-  // Every command block is copyable. Result blocks are what came back, so they
-  // get no button -- copying them would be copying the answer. Schematics are
-  // drawings, not commands, so they are skipped too.
+  // --- copy helpers, shared by the block button and the per-line tabs ---
+  async function clip(t){
+    try{ await navigator.clipboard.writeText(t); }
+    catch(e){
+      var ta=document.createElement('textarea');
+      ta.value=t; document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); } finally{ ta.remove(); }
+    }
+  }
+  // Split a code element's children into one node array per source line, keeping
+  // spans intact and splitting any that straddle a newline (multi-line comments).
+  function splitLines(code){
+    var lines=[[]], i, parts;
+    function put(n){ lines[lines.length-1].push(n); }
+    Array.prototype.slice.call(code.childNodes).forEach(function(node){
+      if(node.nodeType===3){
+        parts=node.nodeValue.split('\n');
+        for(i=0;i<parts.length;i++){ if(i>0) lines.push([]); if(parts[i]!=='') put(document.createTextNode(parts[i])); }
+      } else if(node.nodeType===1){
+        var txt=node.textContent;
+        if(txt.indexOf('\n')===-1){ put(node.cloneNode(true)); }
+        else { parts=txt.split('\n');
+          for(i=0;i<parts.length;i++){ if(i>0) lines.push([]); var s=node.cloneNode(false); s.textContent=parts[i]; put(s); } }
+      }
+    });
+    if(lines.length && lines[lines.length-1].length===0) lines.pop();
+    return lines;
+  }
+  // A line's command text, minus any trailing comment and the copy tab itself.
+  function lineText(ln){
+    var c=ln.cloneNode(true);
+    c.querySelectorAll('.linecopy,.cm').forEach(function(x){ x.remove(); });
+    return c.textContent.replace(/\s+$/,'');
+  }
+  // Wrap each line of a command block; tag real command lines with a copy tab.
+  function wrapLines(code){
+    var lines=splitLines(code); code.innerHTML='';
+    lines.forEach(function(nodes){
+      var ln=document.createElement('span'); ln.className='ln';
+      nodes.forEach(function(n){ ln.appendChild(n); });
+      var t=ln.textContent.trim();
+      if(t!=='' && t.charAt(0)!=='#'){
+        var lb=document.createElement('button');
+        lb.className='linecopy'; lb.type='button'; lb.title='copy this line';
+        ln.appendChild(lb);
+      }
+      code.appendChild(ln);
+    });
+  }
+  // Every command block: wrap its lines, then add the whole-block copy button.
+  // Result blocks are what came back, so they get none -- copying them would be
+  // copying the answer; schematics are drawings, not commands, so skip those too.
   document.querySelectorAll('.card pre:not(.res)').forEach(function(pre){
     if(pre.closest('figure.dia')) return;
     var code=pre.querySelector('code');
     if(!code) return;
+    wrapLines(code);
     var b=document.createElement('button');
     b.className='copy'; b.type='button'; b.textContent='copy';
     b.addEventListener('click', async function(){
-      var txt=code.innerText;
-      try{ await navigator.clipboard.writeText(txt); }
-      catch(e){
-        var ta=document.createElement('textarea');
-        ta.value=txt; document.body.appendChild(ta); ta.select();
-        try{ document.execCommand('copy'); } finally{ ta.remove(); }
-      }
+      await clip(code.innerText);
       b.textContent='copied'; b.classList.add('ok');
       setTimeout(function(){ b.textContent='copy'; b.classList.remove('ok'); },1200);
     });
     pre.appendChild(b);
+  });
+  // Per-line copy tabs -- delegated on the document so the zoom overlay's cloned
+  // lines work without re-binding.
+  document.addEventListener('click', async function(ev){
+    var lb=ev.target.closest('.linecopy'); if(!lb) return;
+    ev.stopPropagation();
+    var ln=lb.closest('.ln'); if(!ln) return;
+    await clip(lineText(ln));
+    lb.classList.add('ok'); setTimeout(function(){ lb.classList.remove('ok'); },1200);
   });
 
   // Horizontal tab bar. Each [role=tablist] drives its own group.
@@ -670,7 +737,10 @@ wrote bare UPDEC2 work/model.updec2 (109288672 bytes)</code></pre>
     document.body.appendChild(lens);
     var box=lens.querySelector(".box");
     var close=function(){ lens.classList.remove("on"); };
-    lens.addEventListener("click",close);
+    lens.addEventListener("click",function(e){
+      if(e.target.closest("button")) return;   // let a per-line copy tab click through
+      close();
+    });
     document.addEventListener("keydown",function(e){
       if(e.key==="Escape") close();
     });
@@ -680,7 +750,7 @@ wrote bare UPDEC2 work/model.updec2 (109288672 bytes)</code></pre>
         var sel=window.getSelection();               // don't hijack a text selection
         if(sel && !sel.isCollapsed && node.contains(sel.anchorNode)) return;
         var clone=node.cloneNode(true);
-        clone.querySelectorAll("button").forEach(function(x){ x.remove(); });
+        clone.querySelectorAll(".copy").forEach(function(x){ x.remove(); });  // keep per-line tabs
         box.innerHTML="";
         box.appendChild(clone);
         lens.classList.add("on");
