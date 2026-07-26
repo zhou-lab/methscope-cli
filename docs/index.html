@@ -27,6 +27,10 @@
   h1 b{font-weight:800}
   .badge{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
      color:var(--accent);background:var(--accent-soft);border:1px solid var(--line);padding:2px 8px;border-radius:20px;vertical-align:middle}
+  .badge-ver{text-transform:none;letter-spacing:.02em;margin-left:2px;text-decoration:none;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .badge-ver:hover{background:var(--accent);color:var(--on-accent)}
+  .builtver{font-size:.76rem;color:var(--muted);margin:.3em 0 0}
+  .builtver a{font-weight:600}
   .titlerow{display:flex;align-items:center;flex-wrap:wrap;gap:5px 9px}
   /* header conda-install badge: copy-able command + anaconda.org link */
   .install{display:inline-flex;align-items:stretch;gap:0;border:1px solid var(--accent);border-radius:6px;overflow:hidden;margin-left:4px}
@@ -159,6 +163,7 @@
   <div class="titlerow">
     <h1><b>Meth</b>Scope</h1>
     <span class="badge">cli</span>
+    <a class="badge badge-ver" id="ver" href="https://github.com/zhou-lab/methscope-cli/tags">latest</a>
     <span class="install">
       <button id="install-btn" type="button"
               data-cmd="conda install -c zhou-lab -c conda-forge methscope"
@@ -176,6 +181,7 @@
     <a href="https://zhou-lab.github.io/YAME/">YAME</a><span>·</span>
     hg38 · mm10 · WGBS · single-cell · spatial
   </p>
+  <p class="builtver" id="yame-ver" hidden></p>
 </header>
 
 <nav class="tabs" role="tablist" aria-label="Workflows">
@@ -632,6 +638,38 @@ wrote bare UPDEC2 work/model.updec2 (109288672 bytes)</code></pre>
     btn.classList.add('done');
     setTimeout(function(){ btn.classList.remove('done'); },1200);
   });
+
+  // Latest release tag, from GitHub. Sorted numerically (alphabetically v0.1.10
+  // would sort under v0.1.9); offline or rate-limited the badge keeps "latest".
+  var semver=function(v){ return v.replace(/^v/,"").split(".").map(Number); };
+  var newestTag=function(tags){
+    return tags.map(function(t){ return t.name; }).filter(function(n){ return /^v\d/.test(n); })
+      .sort(function(a,b){ var A=semver(a),B=semver(b);
+        for(var i=0;i<Math.max(A.length,B.length);++i){ var d=(B[i]||0)-(A[i]||0); if(d) return d; }
+        return 0; })[0];
+  };
+  fetch("https://api.github.com/repos/zhou-lab/methscope-cli/tags?per_page=100")
+    .then(function(r){ return r.ok ? r.json() : []; })
+    .then(function(tags){
+      var v=newestTag(tags); if(!v) return;
+      var el=document.getElementById("ver");
+      el.textContent=v; el.href="https://github.com/zhou-lab/methscope-cli/releases/tag/"+v;
+    }).catch(function(){});
+
+  // "Built against YAME vX.YZ": resolve the pinned submodule commit to a YAME
+  // tag, straight from the published repo -- so it tracks whatever is on main.
+  Promise.all([
+    fetch("https://api.github.com/repos/zhou-lab/methscope-cli/contents/YAME").then(function(r){ return r.ok ? r.json() : null; }),
+    fetch("https://api.github.com/repos/zhou-lab/YAME/tags?per_page=100").then(function(r){ return r.ok ? r.json() : []; })
+  ]).then(function(res){
+    var sub=res[0], ytags=res[1];
+    if(!sub || !sub.sha || !ytags.length) return;
+    var hit=ytags.find(function(t){ return t.commit && t.commit.sha===sub.sha; });
+    if(!hit) return;
+    var el=document.getElementById("yame-ver");
+    el.innerHTML='built against <a href="https://github.com/zhou-lab/YAME/releases/tag/'+hit.name+'">YAME '+hit.name+'</a>';
+    el.hidden=false;
+  }).catch(function(){});
 
   // --- copy helpers, shared by the block button and the per-line tabs ---
   async function clip(t){
