@@ -22,24 +22,12 @@ XGB_PREFIX ?= $(CONDA_PREFIX)
 
 CFLAGS  += -Isrc -I$(YAME_DIR)/src -I$(YAME_DIR)/htslib -I$(XGB_PREFIX)/include
 LDFLAGS  = -L$(XGB_PREFIX)/lib -Wl,-rpath,$(XGB_PREFIX)/lib
-# Order matters: our objects, then libyame, then htslib, then xgboost, then libc.
-# libcurl is optional and only powers `fetch`. Probe by actually linking, so a
-# broken or missing install degrades to a build that still lists the catalog
-# and tells you the URL, rather than failing the whole build.
-CURL_PROBE := $(shell printf 'int main(void){return 0;}' > /tmp/ms_curl_$$$$.c && \
-  $(CC) /tmp/ms_curl_$$$$.c -L$(XGB_PREFIX)/lib -lcurl -o /dev/null 2>/dev/null && echo 1; \
-  rm -f /tmp/ms_curl_$$$$.c)
-ifeq ($(CURL_PROBE),1)
-  CFLAGS += -DMS_HAVE_CURL
-  CURL_LIB = -lcurl
-endif
-
-LIBS     = $(YAME_LIB) $(HTSLIB) -lxgboost $(CURL_LIB) -lpthread -lz -lm
-
-OS := $(shell uname)
-ifneq ($(OS),Darwin)
-  LIBS += -lrt
-endif
+# libyame + htslib + zlib/pthread/curl/rt come from `yame-config --libs` -- the
+# one authoritative answer for linking libyame.a (a build product of
+# `make -C YAME lib`, so it is evaluated on the link line, not at parse time,
+# and picks the same libcurl YAME itself was built against). methscope adds only
+# libxgboost (+ the CUDA runtime under CUDA=1).
+LIBS     = -lxgboost
 
 SRC = $(wildcard src/*.c)
 OBJ = $(SRC:.c=.o)
@@ -84,7 +72,7 @@ src/nnls.o: src/nnls.c
 # otherwise track as prerequisites. Relink so switching CUDA=0/1 can never
 # leave a stale binary from the other build mode.
 $(PROG): $(OBJ) $(YAME_LIB) $(HTSLIB) force-link
-	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDFLAGS) $(LIBS)
+	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDFLAGS) $(LIBS) $$($(YAME_DIR)/yame-config --libs)
 
 force-link:
 

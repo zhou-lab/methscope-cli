@@ -7,10 +7,12 @@
  * GNU Affero General Public License v3.0 or later.
  */
 #include <stdio.h>
+#include <stdlib.h>       /* getenv */
 #include <string.h>
 #include <unistd.h>       /* isatty */
 #include "methscope.h"
 #include "mrmp.h"
+#include "assets.h"       /* yame_assets_root -- the shared store methscope reads */
 #include "yame_version.h" /* YAME version this binary was built against */
 
 /* Grouped, ANSI-styled overview. Colors are emitted only when stderr is a TTY,
@@ -22,14 +24,18 @@ static int usage(void) {
   const char *D = tty ? "\033[2m"    : ""; /* dim: version, hints */
   const char *R = tty ? "\033[0m"    : "";
 #define CMD(n, d) fprintf(stderr, "  %s%-17s%s %s\n", A, n, R, d)
-  fprintf(stderr, "\n%smethscope%s %sv%s · built against YAME %s%s\n",
-          A, R, D, METHSCOPE_VERSION, YAME_VERSION, R);
-  fprintf(stderr, "%spure-C analysis of sparse DNA methylomes via MRMP encoding%s\n\n",
-          D, R);
-  fprintf(stderr, "%sUsage%s  methscope <command> [options] [args]\n\n", D, R);
+  char store[4096];
+  yame_assets_root(NULL, NULL, store, sizeof(store));
+  const char *dh = getenv("YAME_DATA_HOME");
+  fprintf(stderr, "\n%smethscope%s %sv%s%s\n", A, R, D, METHSCOPE_VERSION, R);
+  fprintf(stderr, "%sDNA methylome analysis via MRMP encoding%s\n", D, R);
+  fprintf(stderr, "%sbuilt against YAME %s%s\n", D, YAME_VERSION, R);
+  fprintf(stderr, "%sYAME_DATA_HOME%s  %s %s%s%s\n", B, R, store, D,
+          dh && *dh ? "(from $YAME_DATA_HOME)" : "(unset; -d overrides)", R);
+  fprintf(stderr, "\n%sUsage%s  methscope <command> [options] [args]\n\n", D, R);
 
-  fprintf(stderr, "%sModels%s\n", B, R);
-  CMD("fetch",        "Download pretrained models (no NAME lists the catalog)");
+  fprintf(stderr, "%sModels & data%s %s— fetched with 'yame fetch methscope/...'%s\n",
+          B, R, D, R);
 
   fprintf(stderr, "\n%sMRMP construction%s %s— the feature foundation%s\n", B, R, D, R);
   CMD("mrmp-build",   "Construct the MRMP artifact from a discretized reference .cg");
@@ -99,7 +105,11 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "[methscope] 'upscale-hybrid-eval' was removed (deprecated hybrid model)\n");
     return 1;
   }
-  if (strcmp(argv[1], "fetch")        == 0) return main_fetch(argc - 1, argv + 1);
+  if (strcmp(argv[1], "fetch") == 0) {   /* retired: YAME's registry now covers methscope data */
+    fprintf(stderr, "[methscope] 'methscope fetch' was retired; use YAME's shared store:\n"
+                    "  yame fetch methscope/hg38/models    # or hg38/data, mm10/models\n");
+    return 1;
+  }
   if (strcmp(argv[1], "mrmp-build")   == 0) return main_mrmp_build(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-export")  == 0) return main_mrmp_export(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-train")      == 0) return main_train(argc - 1, argv + 1);

@@ -104,7 +104,6 @@ void ms_annotate_booster(const char *in_ubj, const char *meta_tsv, const char *o
 int main_upscale(int argc, char *argv[]);
 int main_upscale_train(int argc, char *argv[]);
 int main_upscale_internal(int argc, char *argv[]);
-int main_fetch(int argc, char *argv[]);
 int main_upscale_prepare(int argc, char *argv[]);
 
 /* `methscope inspect` reporters for the two upscale build artifacts. */
