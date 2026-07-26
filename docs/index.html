@@ -108,6 +108,13 @@
   .ln:hover>.linecopy{opacity:.8}
   .linecopy:hover{opacity:1;background:rgba(20,58,55,.98)}
   pre:has(.ln:hover) .copy{opacity:0}
+  /* hover-tooltip on a filename token: the on-disk schematic pops next to it */
+  .tip{cursor:help;border-bottom:1px dotted #2dd4bf}
+  .tip:hover{border-bottom-style:solid}
+  #tipfloat{position:fixed;z-index:70;display:none;max-width:min(94vw,560px);max-height:72vh;
+     overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow)}
+  #tipfloat.on{display:block}
+  #tipfloat figure.dia{margin:0;border:0}
   .note{margin:10px 0 0;padding:9px 11px;border-left:3px solid var(--accent);background:var(--soft);
      border-radius:0 8px 8px 0;font-size:.79rem;color:var(--muted);line-height:1.5}
   .note b{color:var(--fg)}
@@ -522,28 +529,27 @@ yame fetch -c -y hg38/data/human_hg38_40_celltypes_chr20.cg
 methscope <span class="sub">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20.mrmp</code></pre>
   <pre class="res"><code>samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450</code></pre>
   <pre><code><span class="cm"># 2. featurize the truth atlas -> sampling/truth sidecar</span>
-methscope <span class="sub">upscale-featurize</span> --embed-truth --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp chr20.msur</code></pre>
+methscope <span class="sub">upscale-featurize</span> --embed-truth --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></code></pre>
   <pre class="res"><code>wrote chr20.msur and chr20.msur.tsv   # 40 cells x 20 reps, 91 MB</code></pre>
   <pre><code><span class="cm"># 3. group CpGs into processing units</span>
-methscope <span class="sub">upscale-set-units</span> --unit-cpgs 4096 chr20.mrmp chr20.msui</code></pre>
+methscope <span class="sub">upscale-set-units</span> --unit-cpgs 4096 chr20.mrmp <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></code></pre>
   <pre class="res"><code>units=109 pure=13 mixed=67 PNA=29 oversized=7
 unit CpGs min=1380 mean=7096.1 max=261816</code></pre>
   <p><code class="inl">inspect</code> reads every build artifact, detected from its magic.</p>
-  <pre><code>methscope <span class="sub">inspect</span> chr20.msui</code></pre>
+  <pre><code>methscope <span class="sub">inspect</span> <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></code></pre>
   <pre class="res"><code>format            MSUIDX1 v1
 cpgs              773477  (657409 real + 116068 PNA)
 pattern_length    40
 units             109  (29 PNA)</code></pre>
-  <pre><code>methscope <span class="sub">inspect</span> chr20.msur</code></pre>
+  <pre><code>methscope <span class="sub">inspect</span> <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></code></pre>
   <pre class="res"><code>format            MSURAW2 v2
 cells             40
 replicates        20
 embedded_truth    yes (trainable)</code></pre>
 </section>
 
-<section class="card">
-  <h2>On disk <span class="m">— MSURAW2 · MSUIDX1 · UPDEC2</span></h2>
-  <figure class="dia">
+<div id="tipsrc" hidden>
+  <div data-tip-src="msur"><figure class="dia">
 <pre><span class="c">hg38 · 207 cells × 100 reps · 29,401,795 CpGs · 15.0 GB</span>
 
 <span class="k">offset</span>            <span class="k">section</span>                              <span class="k">size</span>
@@ -555,8 +561,8 @@ embedded_truth    yes (trainable)</code></pre>
 12,231,146,792    records     124,000 B × 20,700          2.6 GB
                               <span class="c">1000 beta + 1000 count + 29,000 CpG ids</span></pre>
 <figcaption><b>MSURAW2</b> — training sidecar; the truth <code>.cg</code> is never copied.</figcaption>
-  </figure>
-  <figure class="dia">
+  </figure></div>
+  <div data-tip-src="msui"><figure class="dia">
 <pre><span class="c">hg38 · 16,384 CpGs/unit · 700 units · 2,345,190 memberships · 174 MB</span>
 
 <span class="k">header</span>     26,841,955 real CpGs + 2,559,840 PNA; checksum ties it to .mrmp
@@ -567,8 +573,8 @@ embedded_truth    yes (trainable)</code></pre>
 <span class="k">cpg</span>        4 B × 29,401,795   output slot → genomic CpG index
 <span class="k">membership</span> 24 B × 2,345,190   {key, offset, count, unit}</pre>
 <figcaption><b>MSUIDX1</b> — memberships size-ranked, never split.</figcaption>
-  </figure>
-  <figure class="dia">
+  </figure></div>
+  <div data-tip-src="updecx"><figure class="dia">
 <pre><span class="c">hg38 · 1000 MRMP in · 700 units · 29,401,795 CpGs out · 2.8 GB</span>
 
 <span class="k">header</span>     patterns, input_dim, n_units, activation, section offsets
@@ -578,14 +584,14 @@ embedded_truth    yes (trainable)</code></pre>
 <span class="k">params</span>     f32               per unit: z = act(A·x + a); logit = E·z + b
                              <span class="c">pure rank 16 · mixed/PNA rank 32</span></pre>
 <figcaption><b>UPDEC2</b> — in an MSBNDL1 bundle with its runtime <code>.cm</code> mask.</figcaption>
-  </figure>
-</section>
+  </figure></div>
+</div>
 
 <section class="card">
   <h2>Train — fit the decoder <span class="m">— CPU or CUDA</span></h2>
   <p>Training runs on CPU by default and threads over units, which are independent — that is what
     makes the run resumable. The 109 chr20 units take ~17&nbsp;s on 8 threads.</p>
-  <pre><code>methscope <span class="sub">upscale-train</span> -i chr20.msur --units chr20.msui --mrmp chr20.mrmp -o chr20.updecx --work-dir work/ --threads 8</code></pre>
+  <pre><code>methscope <span class="sub">upscale-train</span> -i <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span> --units <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span> --mrmp chr20.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">chr20.updecx</span> --work-dir work/ --threads 8</code></pre>
   <pre class="res"><code>backend=cpu; cells=40 reps=20 patterns=1000 input=2000 units=109 threads=8
 units 109/109 (resumed=0) last_val_mae=0.156606
 wrote bare UPDEC2 work/model.updec2 (109288672 bytes)</code></pre>
@@ -756,6 +762,34 @@ wrote bare UPDEC2 work/model.updec2 (109288672 bytes)</code></pre>
         lens.classList.add("on");
       });
     });
+  })();
+
+  // --- filename tooltips: hover a .msur/.msui/.updecx token and its on-disk
+  // schematic pops beside it. Sources live in the hidden #tipsrc block; handlers
+  // are delegated so tokens inside the zoom overlay work too. ---
+  (function(){
+    var srcs={};
+    document.querySelectorAll('#tipsrc [data-tip-src]').forEach(function(d){
+      srcs[d.getAttribute('data-tip-src')]=d.innerHTML;
+    });
+    var flo=document.createElement('div'); flo.id='tipfloat'; document.body.appendChild(flo);
+    var hideT;
+    function place(el){
+      var html=srcs[el.getAttribute('data-tip')]; if(!html) return;
+      flo.innerHTML=html; flo.classList.add('on');
+      var r=el.getBoundingClientRect(), f=flo.getBoundingClientRect();
+      var top=r.bottom+8; if(top+f.height>window.innerHeight-8) top=Math.max(8,r.top-f.height-8);
+      var left=Math.min(Math.max(8,r.left),window.innerWidth-f.width-8);
+      flo.style.top=top+'px'; flo.style.left=left+'px';
+    }
+    function hide(){ flo.classList.remove('on'); }
+    document.addEventListener('mouseover',function(e){ var t=e.target.closest('.tip'); if(t){ clearTimeout(hideT); place(t); } });
+    document.addEventListener('mouseout',function(e){ if(e.target.closest('.tip')){ hideT=setTimeout(hide,140); } });
+    document.addEventListener('focusin',function(e){ var t=e.target.closest('.tip'); if(t){ clearTimeout(hideT); place(t); } });
+    document.addEventListener('focusout',function(e){ if(e.target.closest('.tip')) hide(); });
+    flo.addEventListener('mouseover',function(){ clearTimeout(hideT); });
+    flo.addEventListener('mouseout',function(){ hideT=setTimeout(hide,140); });
+    document.addEventListener('keydown',function(e){ if(e.key==='Escape') hide(); });
   })();
 })();
 </script>
