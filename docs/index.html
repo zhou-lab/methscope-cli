@@ -242,7 +242,7 @@ conda install -c zhou-lab -c conda-forge yame</code></pre>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 <span class="cm"># a 40-cell-type chr20 reference (39.5 MB)</span>
-yame fetch -c -y hg38/data/human_hg38_40_celltypes_chr20.cg
+yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
 methscope <span class="sub">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</code></pre>
   <pre class="res"><code>samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450
 PNA CpGs=116068 (15.01%)  checksum=9e7f6d292a2ba946</code></pre>
@@ -320,8 +320,8 @@ content_checksum     9e7f6d292a2ba946</code></pre>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 <span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
-yame fetch -c -y hg38/data/human_hg38_celltypes.cg
-yame fetch -c -y hg38/models/hg38_celltype.ubjx
+yame fetch -c hg38/data/human_hg38_celltypes.cg
+yame fetch -c hg38/models/hg38_celltype.ubjx
 methscope <span class="sub">classify</span> human_hg38_celltypes.cg hg38_celltype.ubjx</code></pre>
   <pre class="res"><code>cell             prediction_label  confidence
 Oligodendrocyte  ODC               0.915134   # oligodendrocyte
@@ -335,7 +335,7 @@ Blood-Monocytes  Mono              0.835970   # monocyte</code></pre>
 
 <section class="card">
   <h2>Inspect a bundle <span class="m">— look inside without running it</span></h2>
-  <pre><code>yame fetch -c -y hg38/models/hg38_sex.ubjx
+  <pre><code>yame fetch -c hg38/models/hg38_sex.ubjx
 methscope <span class="sub">inspect</span> hg38_sex.ubjx</code></pre>
   <pre class="res"><code>container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 30,931 bytes
 
@@ -374,7 +374,7 @@ methscope <span class="sub">inspect</span> hg38_sex.ubjx</code></pre>
   <pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
-yame fetch -c -y hg38/data/human_hg38_40_celltypes_chr20.cg
+yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
 methscope <span class="sub">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20.mrmp
 methscope <span class="sub">mrmp-export</span> --top 1000 chr20.mrmp chr20.cm
 cut -f1 human_hg38_40_celltypes_chr20.cg.idx | sed &#x27;s/^GSM[0-9]*_//; s/-Z[0-9A-Z]*$//&#x27; | sed -E &#x27;s/.*Endothel.*|.*Endothelium.*/Endothelial/; s/.*Epithelial.*|.*Keratinocytes.*|.*Podocytes.*/Epithelial/; s/^Blood-.*|.*Macrophages.*/Immune/; s/.*Smooth-Muscle.*|Skeletal-Muscle|.*Cardiomyocyte.*/Muscle/; s/^Neuron$|.*Oligodendrocytes.*/Neural/; s/.*Fibroblasts.*|Adipocytes|Lung-Pleura/Mesenchymal/; s/^(Liver-Hepatocytes|Pancreas-Acinar|Pancreas-Beta)$/Secretory/&#x27; &gt; labels.txt</code></pre>
@@ -415,8 +415,8 @@ methscope <span class="sub">bundle</span> -m chr20_lineage.mrmp -k xgboost -o re
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 <span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
-yame fetch -c -y hg38/data/human_hg38_immune_mixture.cg
-yame fetch -c -y hg38/models/hg38_65celltypes.refx
+yame fetch -c hg38/data/human_hg38_immune_mixture.cg
+yame fetch -c hg38/models/hg38_65celltypes.refx
 methscope <span class="sub">deconv</span> human_hg38_immune_mixture.cg hg38_65celltypes.refx</code></pre>
   <pre class="res"><code>cell  … Macrophage  Mono    NK_CD56  …
 1     … 0.7486      0.2370  0.0000   …</code></pre>
@@ -427,8 +427,8 @@ methscope <span class="sub">deconv</span> human_hg38_immune_mixture.cg hg38_65ce
 <section class="card">
   <h2>Build your own .refx <span class="m">— a per-cell panel</span></h2>
   <p>Per-cell panel, so each cell must deconvolve to itself.</p>
-  <pre><code>yame fetch -c -y hg38/data/human_hg38_celltypes.cg
-yame fetch -c -y hg38/models/hg38_celltype.ubjx
+  <pre><code>yame fetch -c hg38/data/human_hg38_celltypes.cg
+yame fetch -c hg38/models/hg38_celltype.ubjx
 methscope <span class="sub">deconv-build-ref</span> -o self.refx human_hg38_celltypes.cg hg38_celltype.ubjx
 methscope <span class="sub">deconv</span> human_hg38_celltypes.cg self.refx</code></pre>
   <pre class="res"><code># Oligodendrocyte  Oligodendrocyte=100%
@@ -453,12 +453,12 @@ methscope <span class="sub">deconv</span> human_hg38_celltypes.cg self.refx</cod
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 <span class="cm"># what goes in: a sparse methylome</span>
-yame fetch -c -y hg38/data/human_hg38_test.cg
+yame fetch -c hg38/data/human_hg38_test.cg
 yame summary human_hg38_test.cg</code></pre>
   <pre class="res"><code>QFile               Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap  Log2OddsRatio   Beta  Depth
 human_hg38_test.cg      1     NA  global   29000    23857   29000      23857             NA  0.823     NA</code></pre>
   <pre><code><span class="cm"># impute the whole genome from it</span>
-yame fetch -c -y hg38/models/hg38_10k1.updecx
+yame fetch -c hg38/models/hg38_10k1.updecx
 methscope <span class="sub">upscale</span> -o human_hg38_test_reconstructed.cg hg38_10k1.updecx human_hg38_test.cg
 
 <span class="cm"># what comes out</span>
@@ -476,19 +476,20 @@ human_hg38_test_reconstructed.cg      1     NA  global   10000     6239   10000 
   <p>Score the calls against the truth (the <code class="inl">.cg</code> holds binary 0/1 calls,
     so this is exact-match accuracy; <code class="inl">--probs</code> emits probabilities
     instead).</p>
-  <pre><code>yame fetch -c -y hg38/data/human_hg38_test.truth.cg
+  <pre><code>yame fetch -c hg38/data/human_hg38_test.truth.cg
 paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;</code></pre>
   <pre class="res"><code>9211/9794 (94.0%)</code></pre>
 </section>
 
 <section class="card">
   <h2>Whole-block view <span class="m">— deciles, coordinate-aware</span></h2>
-  <p>See the whole block first. <code class="inl">-R</code> makes the view coordinate-aware and
-    window-averages 10,000 CpGs into 60 columns; <code class="inl">-g</code> shows deciles.</p>
+  <p>See the whole block first. The view is coordinate-aware — <code class="inl">hprint</code>
+    resolves the hg38 coordinate track from the store (fetched below), window-averaging 10,000 CpGs
+    into 60 columns; <code class="inl">-g</code> shows deciles.</p>
   <pre><code>cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg
 yame index -s &lt;(printf &#x27;truth\ninput\nreconstructed\n&#x27;) three.cg
-yame fetch -c -y hg38/KYCG/cpg_nocontig.cr
-yame hprint -g -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg</code></pre>
+yame fetch hg38/cpg_nocontig.cr
+yame hprint -g -r chr1:921649-1151482 -w 60 three.cg</code></pre>
   <pre class="res term"><code>                      chr1:921649-1151482 (10000 CpGs, win=167)
                       |.........|.........|.........|.........|.........|.........
                       921649    958945    995856    1033422   1067326   1112421
@@ -525,7 +526,7 @@ mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 <span class="cm"># the whole pipeline from scratch, on the 40-cell-type chr20 reference
 # 1. define the features</span>
-yame fetch -c -y hg38/data/human_hg38_40_celltypes_chr20.cg
+yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
 methscope <span class="sub">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20.mrmp</code></pre>
   <pre class="res"><code>samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450</code></pre>
   <pre><code><span class="cm"># 2. featurize the truth atlas -> sampling/truth sidecar</span>
