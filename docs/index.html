@@ -7,16 +7,16 @@
 <meta name="description" content="methscope-cli: ultra-fast analysis of sparse DNA methylomes via MRMP (Most Recurrent Methylation Pattern) encoding — cell-type annotation, deconvolution, and CpG upscaling as a single C binary.">
 <style>
   :root{
-    --bg:#fdfcfa;--fg:#231d14;--muted:#6b6156;--line:#ece5dc;--soft:#f6f1e8;--card:#ffffff;
-    --accent:#b45309;--accent-2:#d97706;--accent-soft:#fbe9c8;--on-accent:#ffffff;--code-bg:#1b1409;--code-fg:#f1e9dd;--cm:#998a74;--ok:#16a34a;--warn:#dc2626;
-    --shadow:0 1px 2px rgba(45,32,12,.04),0 6px 20px rgba(45,32,12,.05);
+    --bg:#fcfdfe;--fg:#1a2028;--muted:#5b6672;--line:#e5e9ee;--soft:#eff2f6;--card:#ffffff;
+    --accent:#475569;--accent-2:#64748b;--accent-soft:#e9edf3;--on-accent:#ffffff;--code-bg:#131a24;--code-fg:#e8edf2;--cm:#7c8a99;--ok:#16a34a;--warn:#dc2626;
+    --shadow:0 1px 2px rgba(20,30,45,.04),0 6px 20px rgba(20,30,45,.05);
   }
   @media (prefers-color-scheme:dark){:root{
-    --bg:#100c06;--fg:#f1e9dd;--muted:#a99a86;--line:#2b2317;--soft:#191206;--card:#171106;
-    --accent:#fbbf24;--accent-2:#fcd34d;--accent-soft:#332810;--on-accent:#1f1503;--code-bg:#0d0904;--code-fg:#ece2d3;--cm:#857866;--ok:#4ade80;--warn:#f87171;
+    --bg:#0b0e13;--fg:#dce3ec;--muted:#8b97a6;--line:#212832;--soft:#11161e;--card:#141a22;
+    --accent:#94a3b8;--accent-2:#cbd5e1;--accent-soft:#1e293b;--on-accent:#0b1220;--code-bg:#0a0f17;--code-fg:#dce3ec;--cm:#6b7688;--ok:#4ade80;--warn:#f87171;
     --shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}}
-  :root[data-theme=light]{--bg:#fdfcfa;--fg:#231d14;--muted:#6b6156;--line:#ece5dc;--soft:#f6f1e8;--card:#fff;--accent:#b45309;--accent-2:#d97706;--accent-soft:#fbe9c8;--on-accent:#ffffff;--code-bg:#1b1409;--code-fg:#f1e9dd;--cm:#998a74;--ok:#16a34a;--warn:#dc2626;--shadow:0 1px 2px rgba(45,32,12,.04),0 6px 20px rgba(45,32,12,.05);}
-  :root[data-theme=dark]{--bg:#100c06;--fg:#f1e9dd;--muted:#a99a86;--line:#2b2317;--soft:#191206;--card:#171106;--accent:#fbbf24;--accent-2:#fcd34d;--accent-soft:#332810;--on-accent:#1f1503;--code-bg:#0d0904;--code-fg:#ece2d3;--cm:#857866;--ok:#4ade80;--warn:#f87171;--shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}
+  :root[data-theme=light]{--bg:#fcfdfe;--fg:#1a2028;--muted:#5b6672;--line:#e5e9ee;--soft:#eff2f6;--card:#fff;--accent:#475569;--accent-2:#64748b;--accent-soft:#e9edf3;--on-accent:#ffffff;--code-bg:#131a24;--code-fg:#e8edf2;--cm:#7c8a99;--ok:#16a34a;--warn:#dc2626;--shadow:0 1px 2px rgba(20,30,45,.04),0 6px 20px rgba(20,30,45,.05);}
+  :root[data-theme=dark]{--bg:#0b0e13;--fg:#dce3ec;--muted:#8b97a6;--line:#212832;--soft:#11161e;--card:#141a22;--accent:#94a3b8;--accent-2:#cbd5e1;--accent-soft:#1e293b;--on-accent:#0b1220;--code-bg:#0a0f17;--code-fg:#dce3ec;--cm:#6b7688;--ok:#4ade80;--warn:#f87171;--shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased;font-size:.94rem}
   .wrap{max-width:1480px;margin:0 auto;padding:0 22px 44px}
@@ -92,7 +92,7 @@
      stays visible; a plain-text result uses the lighter .res background */
   .card pre.res.term{background:var(--code-bg);color:var(--code-fg);border:1px solid var(--line)}
   .cm{color:var(--cm)}
-  .sub{color:#fbbf24;font-weight:700}          /* the methscope subcommand, highlighted */
+  .sub{color:#94a3b8;font-weight:700}          /* the methscope subcommand, highlighted */
   /* yame hprint colours: methylated, unmethylated, unobserved */
   .hm{color:#e5b567}.hu{color:#6c99bb}.hn{color:#6b7a78}
   /* yame hprint -g deciles: 0 unmethylated (blue) .. 9 methylated (red) */
@@ -102,27 +102,27 @@
   code.inl{background:var(--accent-soft);color:var(--accent);padding:1px 5px;border-radius:5px;
      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.84em}
   .copy{position:absolute;top:6px;right:6px;font:600 .63rem ui-monospace,SFMono-Regular,Menlo,monospace;
-     color:var(--code-fg);background:rgba(40,30,12,.95);border:1px solid rgba(255,255,255,.18);border-radius:6px;
+     color:var(--code-fg);background:rgba(20,30,45,.95);border:1px solid rgba(255,255,255,.18);border-radius:6px;
      padding:2px 8px;cursor:pointer;opacity:0;transition:opacity .14s,background .14s;box-shadow:0 1px 6px rgba(0,0,0,.3)}
   pre:hover .copy,.copy:focus{opacity:1}
-  .copy:hover{background:rgba(58,44,20,.98)}
+  .copy:hover{background:rgba(42,52,66,.98)}
   .copy.ok{color:var(--ok);opacity:1}
   /* per-line copy: hover a command line and a small tab appears at its right,
      copying just that line; works inside the zoom overlay too. The block copy
      steps aside while a line is hovered. */
   .ln{display:block;position:relative;min-height:1.5em}
   .linecopy{position:absolute;top:0;right:2px;opacity:0;cursor:pointer;
-     border:1px solid rgba(255,255,255,.16);background:rgba(40,30,12,.92);color:var(--code-fg);
+     border:1px solid rgba(255,255,255,.16);background:rgba(20,30,45,.92);color:var(--code-fg);
      border-radius:4px;padding:0 5px;line-height:1.4;
      font:600 .66rem ui-monospace,SFMono-Regular,Menlo,monospace;transition:opacity .12s,background .12s}
   .linecopy::before{content:"⧉"}
   .linecopy.ok::before{content:"✓"}
   .linecopy.ok{opacity:1;color:var(--ok)}
   .ln:hover>.linecopy{opacity:.8}
-  .linecopy:hover{opacity:1;background:rgba(58,44,20,.98)}
+  .linecopy:hover{opacity:1;background:rgba(42,52,66,.98)}
   pre:has(.ln:hover) .copy{opacity:0}
   /* hover-tooltip on a filename token: the on-disk schematic pops next to it */
-  .tip{cursor:help;border-bottom:1px dotted #fbbf24}
+  .tip{cursor:help;border-bottom:1px dotted #94a3b8}
   .tip:hover{border-bottom-style:solid}
   #tipfloat{position:fixed;z-index:70;display:none;max-width:min(94vw,560px);max-height:72vh;
      overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow)}
