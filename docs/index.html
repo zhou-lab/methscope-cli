@@ -199,19 +199,12 @@
       <pre><code><span class="cm"># conda — installs the `methscope` binary</span>
 <span class="cmd" data-cmd="conda install -c zhou-lab -c conda-forge methscope">conda install -c zhou-lab -c conda-forge methscope</span>
 
-<span class="cm"># to run the examples and the analysis around them, add the two
-# tools they pipe through: yame reads and slices .cg, tabl aligns TSV</span>
-<span class="cmd" data-cmd="conda install -c zhou-lab -c conda-forge yame tabl">conda install -c zhou-lab -c conda-forge yame tabl</span>
-
 <span class="cm"># or build from source (bundles YAME)</span>
 <span class="cmd" data-cmd="git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli">git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli</span>
 <span class="cmd" data-cmd="cd methscope-cli &amp;&amp; make">cd methscope-cli &amp;&amp; make</span>
 
-<span class="cm"># what's available, and where it lands (browser on a TTY; TSV when piped)</span>
-<span class="cmd" data-cmd="yame fetch -l -g methscope">yame fetch -l -g methscope</span>
-<span class="cm"># each workflow below fetches just the file it needs into the current dir:</span>
-<span class="cmd" data-cmd="yame fetch -c hg38/models/hg38_celltype.ubjx">yame fetch -c hg38/models/hg38_celltype.ubjx</span>      <span class="cm"># -c: cwd, digest-checked, .idx rides along</span>
-<span class="cm"># drop -c to populate the shared store instead ($YAME_DATA_HOME, else ~/.local/share/yame)</span></code></pre>
+<span class="cm"># install yame to fetch prebuilt model and test data</span>
+<span class="cmd" data-cmd="conda install -c zhou-lab -c conda-forge yame">conda install -c zhou-lab -c conda-forge yame</span></code></pre>
     </div>
     <p style="margin-top:11px">Downloads land on a <code class="inl">.part</code> sibling and are
       renamed only once the bytes verify, so an interrupted <code class="inl">yame fetch</code> can
