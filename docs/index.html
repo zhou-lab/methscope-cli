@@ -207,10 +207,10 @@
 <span class="cmd" data-cmd="cd methscope-cli &amp;&amp; make">cd methscope-cli &amp;&amp; make</span>
 
 <span class="cm"># what's available, and where it lands (browser on a TTY; TSV when piped)</span>
-<span class="cmd" data-cmd="yame fetch -l | grep methscope">yame fetch -l | grep methscope</span>
+<span class="cmd" data-cmd="yame fetch -l -g methscope">yame fetch -l -g methscope</span>
 <span class="cm"># fetch a folder into the shared store (idempotent, sha256-verified)</span>
-<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>            <span class="cm"># the example .cg fixtures (~51 MB)</span>
-<span class="cmd" data-cmd="yame fetch methscope/hg38/models">yame fetch methscope/hg38/models</span>          <span class="cm"># the model bundles (~2.9 GB incl. the whole-genome upscaler)</span>
+<span class="cmd" data-cmd="yame fetch hg38/data">yame fetch hg38/data</span>            <span class="cm"># the example .cg fixtures (~51 MB)</span>
+<span class="cmd" data-cmd="yame fetch hg38/models">yame fetch hg38/models</span>          <span class="cm"># the model bundles (~2.9 GB incl. the whole-genome upscaler)</span>
 <span class="cm"># the store: $YAME_DATA_HOME, else ${XDG_DATA_HOME:-~/.local/share}/yame; yame fetch -d DIR overrides</span></code></pre>
     </div>
     <p style="margin-top:11px">Downloads land on a <code class="inl">.part</code> sibling and are
@@ -232,8 +232,8 @@
       <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
 <span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
-<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
-<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>    <span class="cm"># example .cg fixtures</span>
+<span class="cmd" data-cmd="yame fetch hg38/data">yame fetch hg38/data</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/hg38/data">D=$YAME_DATA_HOME/hg38/data</span>    <span class="cm"># example .cg fixtures</span>
 
 <span class="cm"># a 40-cell-type chr20 reference (39.5 MB)</span>
 <span class="cmd" data-cmd="methscope mrmp-build $D/human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp">methscope <span class="sub tip" data-tip="cmd-mrmp-build" tabindex="0">mrmp-build</span> $D/human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</span>
@@ -298,10 +298,10 @@ content_checksum     9e7f6d292a2ba946</span>
       <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
 <span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
-<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
-<span class="cmd" data-cmd="yame fetch methscope/hg38/models">yame fetch methscope/hg38/models</span>
-<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>           <span class="cm"># example .cg fixtures</span>
-<span class="cmd" data-cmd="M=$YAME_DATA_HOME/methscope/models/hg38">M=$YAME_DATA_HOME/methscope/models/hg38</span>    <span class="cm"># model bundles</span>
+<span class="cmd" data-cmd="yame fetch hg38/data">yame fetch hg38/data</span>
+<span class="cmd" data-cmd="yame fetch hg38/models">yame fetch hg38/models</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/hg38/data">D=$YAME_DATA_HOME/hg38/data</span>           <span class="cm"># example .cg fixtures</span>
+<span class="cmd" data-cmd="M=$YAME_DATA_HOME/hg38/models">M=$YAME_DATA_HOME/hg38/models</span>    <span class="cm"># model bundles</span>
 
 <span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
 <span class="cmd" data-cmd="methscope classify $D/human_hg38_celltypes.cg $M/hg38_celltype.ubjx">methscope <span class="sub tip" data-tip="cmd-classify" tabindex="0">classify</span> $D/human_hg38_celltypes.cg $M/hg38_celltype.ubjx</span>
@@ -342,8 +342,8 @@ Blood-Monocytes  Mono              0.835970   # monocyte</span>
       <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
 <span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
-<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
-<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>    <span class="cm"># example .cg fixtures</span>
+<span class="cmd" data-cmd="yame fetch hg38/data">yame fetch hg38/data</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/hg38/data">D=$YAME_DATA_HOME/hg38/data</span>    <span class="cm"># example .cg fixtures</span>
 
 <span class="cm"># the 40-cell-type chr20 reference doubles as training data:
 # label each cell by lineage, straight from the sample names</span>
@@ -383,10 +383,10 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
       <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
 <span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
-<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
-<span class="cmd" data-cmd="yame fetch methscope/hg38/models">yame fetch methscope/hg38/models</span>
-<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>           <span class="cm"># example .cg fixtures</span>
-<span class="cmd" data-cmd="M=$YAME_DATA_HOME/methscope/models/hg38">M=$YAME_DATA_HOME/methscope/models/hg38</span>    <span class="cm"># model bundles</span>
+<span class="cmd" data-cmd="yame fetch hg38/data">yame fetch hg38/data</span>
+<span class="cmd" data-cmd="yame fetch hg38/models">yame fetch hg38/models</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/hg38/data">D=$YAME_DATA_HOME/hg38/data</span>           <span class="cm"># example .cg fixtures</span>
+<span class="cmd" data-cmd="M=$YAME_DATA_HOME/hg38/models">M=$YAME_DATA_HOME/hg38/models</span>    <span class="cm"># model bundles</span>
 
 <span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
 <span class="cmd" data-cmd="methscope deconv $D/human_hg38_immune_mixture.cg $M/hg38_65celltypes.refx">methscope <span class="sub tip" data-tip="cmd-deconv" tabindex="0">deconv</span> $D/human_hg38_immune_mixture.cg $M/hg38_65celltypes.refx</span>
@@ -400,10 +400,10 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
       <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
 <span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
-<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
-<span class="cmd" data-cmd="yame fetch methscope/hg38/models">yame fetch methscope/hg38/models</span>
-<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>           <span class="cm"># example .cg fixtures</span>
-<span class="cmd" data-cmd="M=$YAME_DATA_HOME/methscope/models/hg38">M=$YAME_DATA_HOME/methscope/models/hg38</span>    <span class="cm"># model bundles</span>
+<span class="cmd" data-cmd="yame fetch hg38/data">yame fetch hg38/data</span>
+<span class="cmd" data-cmd="yame fetch hg38/models">yame fetch hg38/models</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/hg38/data">D=$YAME_DATA_HOME/hg38/data</span>           <span class="cm"># example .cg fixtures</span>
+<span class="cmd" data-cmd="M=$YAME_DATA_HOME/hg38/models">M=$YAME_DATA_HOME/hg38/models</span>    <span class="cm"># model bundles</span>
 
 <span class="cm"># per-cell panel, so each cell must deconvolve to itself</span>
 <span class="cmd" data-cmd="methscope deconv-build-ref -o self.refx $D/human_hg38_celltypes.cg $M/hg38_celltype.ubjx">methscope <span class="sub tip" data-tip="cmd-deconv-build-ref" tabindex="0">deconv-build-ref</span> -o self.refx $D/human_hg38_celltypes.cg $M/hg38_celltype.ubjx</span>
@@ -430,12 +430,12 @@ GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</span>
       <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
 <span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
-<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
-<span class="cmd" data-cmd="yame fetch methscope/hg38/models">yame fetch methscope/hg38/models</span>
-<span class="cmd" data-cmd="yame fetch KYCGKB/hg38">yame fetch KYCGKB/hg38</span>
-<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>            <span class="cm"># example .cg fixtures</span>
-<span class="cmd" data-cmd="M=$YAME_DATA_HOME/methscope/models/hg38">M=$YAME_DATA_HOME/methscope/models/hg38</span>     <span class="cm"># model bundles</span>
-<span class="cmd" data-cmd="KB=$YAME_DATA_HOME/KYCGKB/hg38">KB=$YAME_DATA_HOME/KYCGKB/hg38</span>              <span class="cm"># CpG-set knowledge base</span>
+<span class="cmd" data-cmd="yame fetch hg38/data">yame fetch hg38/data</span>
+<span class="cmd" data-cmd="yame fetch hg38/models">yame fetch hg38/models</span>
+<span class="cmd" data-cmd="yame fetch hg38/KYCG/cpg_nocontig.cr">yame fetch hg38/KYCG/cpg_nocontig.cr</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/hg38/data">D=$YAME_DATA_HOME/hg38/data</span>            <span class="cm"># example .cg fixtures</span>
+<span class="cmd" data-cmd="M=$YAME_DATA_HOME/hg38/models">M=$YAME_DATA_HOME/hg38/models</span>     <span class="cm"># model bundles</span>
+<span class="cmd" data-cmd="KB=$YAME_DATA_HOME/hg38/KYCG">KB=$YAME_DATA_HOME/hg38/KYCG</span>              <span class="cm"># CpG-set knowledge base</span>
 
 <span class="cm"># what goes in: a sparse methylome</span>
 <span class="cmd" data-cmd="yame summary $D/human_hg38_test.cg | tabl view">yame summary $D/human_hg38_test.cg | tabl view</span>
@@ -494,8 +494,8 @@ recon  <span class="hm">111111</span><span class="hu">0</span><span class="hm">1
       <pre><code><span class="cm"># scratch dir for outputs; fetch inputs into a self-contained YAME store</span>
 <span class="cmd" data-cmd="mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope">mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope</span>
 <span class="cmd" data-cmd="export YAME_DATA_HOME=$PWD/store">export YAME_DATA_HOME=$PWD/store</span>
-<span class="cmd" data-cmd="yame fetch methscope/hg38/data">yame fetch methscope/hg38/data</span>
-<span class="cmd" data-cmd="D=$YAME_DATA_HOME/methscope/hg38">D=$YAME_DATA_HOME/methscope/hg38</span>    <span class="cm"># example .cg fixtures</span>
+<span class="cmd" data-cmd="yame fetch hg38/data">yame fetch hg38/data</span>
+<span class="cmd" data-cmd="D=$YAME_DATA_HOME/hg38/data">D=$YAME_DATA_HOME/hg38/data</span>    <span class="cm"># example .cg fixtures</span>
 
 <span class="cm"># the whole pipeline from scratch, on the 40-cell-type chr20 reference
 # 1. define the features</span>
