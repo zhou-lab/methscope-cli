@@ -560,7 +560,7 @@ embedded_truth    yes (trainable)</code></pre>
                               <span class="c">beta×65534, 65535 = missing (--embed-truth)</span>
 12,231,146,792    records     124,000 B × 20,700          2.6 GB
                               <span class="c">1000 beta + 1000 count + 29,000 CpG ids</span></pre>
-<figcaption><b>MSURAW2</b> — training sidecar; the truth <code>.cg</code> is never copied.</figcaption>
+<figcaption><b>Featurized Simulation for Training</b> (MSURAW2) — training sidecar; the truth <code>.cg</code> is never copied.</figcaption>
   </figure></div>
   <div data-tip-src="msui"><figure class="dia">
 <pre><span class="c">hg38 · 16,384 CpGs/unit · 700 units · 2,345,190 memberships · 174 MB</span>
@@ -572,7 +572,7 @@ embedded_truth    yes (trainable)</code></pre>
              u2   2,214,235 CpGs  <span class="c">pure  (P3, all-0)</span>
 <span class="k">cpg</span>        4 B × 29,401,795   output slot → genomic CpG index
 <span class="k">membership</span> 24 B × 2,345,190   {key, offset, count, unit}</pre>
-<figcaption><b>MSUIDX1</b> — memberships size-ranked, never split.</figcaption>
+<figcaption><b>Processing Unit Setting</b> (MSUIDX1) — memberships size-ranked, never split.</figcaption>
   </figure></div>
   <div data-tip-src="updecx"><figure class="dia">
 <pre><span class="c">hg38 · 1000 MRMP in · 700 units · 29,401,795 CpGs out · 2.8 GB</span>
@@ -583,7 +583,7 @@ embedded_truth    yes (trainable)</code></pre>
 <span class="k">cpg</span>        4 B × 29,401,795  output slot → genomic CpG index
 <span class="k">params</span>     f32               per unit: z = act(A·x + a); logit = E·z + b
                              <span class="c">pure rank 16 · mixed/PNA rank 32</span></pre>
-<figcaption><b>UPDEC2</b> — in an MSBNDL1 bundle with its runtime <code>.cm</code> mask.</figcaption>
+<figcaption><b>Bundled Upscale Model</b> (UPDEC2) — in an MSBNDL1 bundle with its runtime <code>.cm</code> mask.</figcaption>
   </figure></div>
 </div>
 
