@@ -14,12 +14,12 @@ extern "C" {
 #define MS_UPSPLIT_TEST 2u
 
 /* Read an explicit train/val/test assignment for the n_cells source cells of a
- * MSURAW2 sidecar and fill label[0..n_cells-1] with MS_UPSPLIT_*.  Any error is
+ * MSURAW2 msur and fill label[0..n_cells-1] with MS_UPSPLIT_*.  Any error is
  * fatal; `who` is the calling subcommand used in the message prefix. */
 void ms_upsplit_load(const char *who, const char *path, uint32_t n_cells,
                      uint8_t *label);
 
-/* Validate a split file against the cell count of a MSURAW2 sidecar, so a bad
+/* Validate a split file against the cell count of a MSURAW2 msur, so a bad
  * split fails on the login node instead of after CUDA has been claimed. */
 void ms_upsplit_check(const char *who, const char *msur_path, const char *path);
 

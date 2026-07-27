@@ -297,7 +297,7 @@ content_checksum     9e7f6d292a2ba946</code></pre>
   <p>Ranking is deterministic (count desc, key asc), so a build is byte-reproducible from the
     reference alone. The artifact is the build pipeline's currency:
     <code class="inl">upscale-featurize</code>, <code class="inl">upscale-set-units</code>, and
-    <code class="inl">upscale-train</code> all read it, so the sidecar's group map and the mask a
+    <code class="inl">upscale-train</code> all read it, so the msur's group map and the mask a
     model ships cannot drift apart.</p>
 </section>
 
@@ -543,8 +543,8 @@ mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
 methscope <span class="sub">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20.mrmp</code></pre>
   <pre class="res"><code>samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450</code></pre>
-  <pre><code><span class="cm"># 2. featurize the truth atlas -> sampling/truth sidecar</span>
-methscope <span class="sub">upscale-featurize</span> --embed-truth --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></code></pre>
+  <pre><code><span class="cm"># 2. featurize the truth atlas -> sampling/truth msur</span>
+methscope <span class="sub">upscale-featurize</span> --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></code></pre>
   <pre class="res"><code>wrote chr20.msur and chr20.msur.tsv   # 40 cells x 20 reps, 91 MB</code></pre>
   <pre><code><span class="cm"># 3. group CpGs into processing units</span>
 methscope <span class="sub">upscale-set-units</span> --unit-cpgs 4096 chr20.mrmp <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></code></pre>
@@ -572,10 +572,10 @@ embedded_truth    yes (trainable)</code></pre>
 72                groups      u16 × 29.4M                58.8 MB
                               <span class="c">CpG → 1..1000, 0 = PNA</span>
 58,803,662        truth       u16 × 207 × 29.4M          12.2 GB
-                              <span class="c">beta×65534, 65535 = missing (--embed-truth)</span>
+                              <span class="c">beta×65534, 65535 = missing (always embedded)</span>
 12,231,146,792    records     124,000 B × 20,700          2.6 GB
                               <span class="c">1000 beta + 1000 count + 29,000 CpG ids</span></pre>
-<figcaption><b>Featurized Simulation for Training</b> (MSURAW2) — training sidecar; the truth <code>.cg</code> is never copied.</figcaption>
+<figcaption><b>Featurized Simulation for Training</b> (MSURAW2) — training msur; the truth <code>.cg</code> is never copied.</figcaption>
   </figure></div>
   <div data-tip-src="msui"><figure class="dia">
 <pre><span class="c">hg38 · 16,384 CpGs/unit · 700 units · 2,345,190 memberships · 174 MB</span>

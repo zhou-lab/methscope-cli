@@ -3,7 +3,7 @@
 
 Reuses the exact paired sampler and model readers from
 compare_upscale_models.py, then splits every scored target by whether it falls
-in the top-1000 MRMP head (sidecar group > 0) or the residual set (group == 0),
+in the top-1000 MRMP head (msur group > 0) or the residual set (group == 0),
 and reports MAE / RMSE per class for the unified UPDEC2 and the hybrid. This
 shows whether the unified model's heavy error tail is concentrated in the hard
 residual CpGs or spread across the top head.

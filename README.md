@@ -100,7 +100,7 @@ beta-plus-missing, and beta-plus-count inputs are supported. PyTorch is not
 used.
 
 The `.mrmp` artifact is the build pipeline's currency: `upscale-featurize`,
-`upscale-set-units`, and `upscale-train` all read the same one, so the sidecar's
+`upscale-set-units`, and `upscale-train` all read the same one, so the msur's
 per-CpG group map and the mask the model ships cannot drift apart. The `.cm` is
 the *runtime* form — `upscale-train` materializes it into `--work-dir` and packs
 it into the bundle. `mrmp-export` stays available for inspection and for
@@ -125,7 +125,7 @@ $MS upscale-train \
 By default the source cells are shuffled by `--seed` and cut 70/15/15. Pass
 `--split FILE` to pin the assignment instead — rows of
 `<cell_index>TAB<train|val|test>`, one per cell, indexed by the sample order of
-the truth `.cg` the sidecar was prepared from (a trailing sample-name column is
+the truth `.cg` the msur was prepared from (a trailing sample-name column is
 ignored, and one non-numeric header row is allowed). Use it when a random cut
 would strand a whole cell type outside training, or to train against the exact
 held-out cells an external baseline used. The split is validated before CUDA is
@@ -146,7 +146,7 @@ order is not fixed, so two GPU runs already differ in the last bits. On the
 unit and on validation MAE to at most 3.7e-08.
 
 The three build steps are public commands: `upscale-featurize` (MSURAW2
-sidecar), `upscale-set-units` (MSUIDX1 unit index), then `upscale-train`. Only
+msur), `upscale-set-units` (MSUIDX1 unit index), then `upscale-train`. Only
 the research trunk trainer and the Zhou 2018 evaluator remain under
 `methscope _upscale`; the latter is invoked by the
 non-public `analysis/zhou2018_upscale_eval.sh` script. See the MethScope lab journal (`20251216_methscope.org`) and the

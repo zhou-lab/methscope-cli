@@ -5,7 +5,7 @@
  *
  * methscope stores the human-readable class label names here so a trained `.ubj`
  * is self-describing: `predict` needs only the booster and the matching `.mrmp`,
- * with no separate labels sidecar. The pattern count is NOT stored — it equals
+ * with no separate labels msur. The pattern count is NOT stored — it equals
  * the booster's num_feature (XGBoosterGetNumFeature).
  */
 #ifndef METHSCOPE_BMETA_H
