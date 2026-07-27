@@ -115,3 +115,49 @@ jobs:
             conda run -n base anaconda -t "$ANACONDA_TOKEN" upload \
               -u zhou-lab --label main --force "$pkg"
           done
+
+  # A tag is only a ref; a GitHub Release is a separate object with assets, so
+  # they do not sync on their own -- which is why the newest Release stayed at
+  # v0.1.0 while tags moved on. This publishes one per tag, carrying the
+  # `make dist` tarball: GitHub's auto-generated tag tarballs OMIT the pinned
+  # YAME submodule, and bioconda-recipe's `source: url:` needs one that has it.
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build          # only if both platforms built
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # required to create a release
+    steps:
+      - name: Use HTTPS for submodules
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      # `make dist` reads git ls-files and derives DIST_VERSION from
+      # `git describe --tags`, so it needs the submodule AND full tag history.
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Build the release tarball
+        run: |
+          make dist
+          ls -l dist/
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          asset="dist/methscope-cli-${tag#v}.tar.gz"
+          test -f "$asset" || { echo "expected $asset" >&2; ls -1 dist >&2; exit 1; }
+          # Idempotent: a re-run (or a force-moved tag) refreshes the asset
+          # rather than failing on an existing release.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" --clobber
+          else
+            gh release create "$tag" "$asset" \
+              --title "$tag" --generate-notes
+          fi
+          echo "sha256 (for bioconda-recipe source):"
+          sha256sum "$asset"
