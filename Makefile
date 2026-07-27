@@ -14,6 +14,9 @@ CUDA_ARCH ?= sm_80
 # card, so the conda recipe passes CUDA_GENCODE with several targets plus a PTX
 # fallback for architectures newer than any we compiled for.
 CUDA_GENCODE ?= -arch=$(CUDA_ARCH)
+# Extra nvcc flags (include paths etc.). conda-build needs this: nvcc comes from
+# the BUILD prefix while the CUDA headers/libs come from the HOST prefix.
+NVCCFLAGS ?=
 NVCC ?= $(CUDA_HOME)/bin/nvcc
 
 # --- YAME static library (built from the pinned submodule) ---------------
@@ -64,10 +67,10 @@ src/%.o: src/%.c | check-xgb
 	$(CC) $(CFLAGS) -c $< -o $@
 
 src/upfactor_cuda.o: src/upfactor_cuda.cu src/upfactor_cuda.h | check-xgb
-	$(NVCC) -O3 $(CUDA_GENCODE) -Isrc -c $< -o $@
+	$(NVCC) -O3 $(CUDA_GENCODE) $(NVCCFLAGS) -Isrc -c $< -o $@
 
 src/upunit_cuda.o: src/upunit_cuda.cu src/upunit_cuda.h src/updec2.h | check-xgb
-	$(NVCC) -O3 $(CUDA_GENCODE) -Isrc -c $< -o $@
+	$(NVCC) -O3 $(CUDA_GENCODE) $(NVCCFLAGS) -Isrc -c $< -o $@
 
 # Vendored f2c-translated Lawson-Hanson NNLS: K&R style, compile warnings off.
 src/nnls.o: src/nnls.c

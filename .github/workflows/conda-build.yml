@@ -97,11 +97,14 @@ jobs:
             echo "ANACONDA_TOKEN secret is not set; cannot publish." >&2
             exit 1
           fi
-          # guard: the pushed tag must match the recipe version
-          version=$(sed -n 's/.*set version = "\(.*\)".*/\1/p' conda-recipe/meta.yaml)
+          # The recipe now takes its version from the tag (METHSCOPE_VERSION),
+          # so meta.yaml holds no literal to compare against. Check the built
+          # ARTIFACT instead -- a stronger guard, since it verifies what will
+          # actually be uploaded rather than what the source claims.
           tag="${GITHUB_REF_NAME#v}"
-          if [ "$version" != "$tag" ]; then
-            echo "tag v$tag does not match recipe version $version; bump meta.yaml" >&2
+          if ! ls "$RUNNER_TEMP"/bld/*/*-"${tag}"-*.conda >/dev/null 2>&1; then
+            echo "no built package carries version ${tag}:" >&2
+            ls -1 "$RUNNER_TEMP"/bld/*/*.conda >&2 || true
             exit 1
           fi
           for pkg in "$RUNNER_TEMP"/bld/*/*.conda; do
