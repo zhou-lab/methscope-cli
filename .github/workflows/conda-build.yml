@@ -64,6 +64,9 @@ jobs:
       # osx-arm64 build.
       - name: Build CUDA package (linux-64 only)
         if: matrix.name == 'linux-64'
+        # Never block the methscope publish: this package is optional (only
+        # upscale-train needs a GPU) and it runs before the upload steps.
+        continue-on-error: true
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             METHSCOPE_VERSION="${GITHUB_REF_NAME#v}"

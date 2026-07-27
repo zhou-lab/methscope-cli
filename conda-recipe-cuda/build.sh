@@ -10,16 +10,17 @@ export CFLAGS="${CFLAGS:-} ${CPPFLAGS:-} -std=gnu99"
 export C_INCLUDE_PATH="${PREFIX}/include${C_INCLUDE_PATH:+:${C_INCLUDE_PATH}}"
 
 # A distributed binary must run on more than the card it was built on, so emit a
-# fatbin spanning Volta..Hopper plus a PTX fallback that the driver JITs for
-# anything newer. CUDA_HOME is the build prefix: conda ships nvcc there.
+# fatbin spanning Turing..Hopper plus a PTX fallback the driver JITs for
+# anything newer. Volta (compute_70) is deliberately absent: CUDA 13 dropped it
+# ("nvcc fatal: Unsupported gpu architecture 'compute_70'"), and conda-forge now
+# resolves cuda-nvcc 13.x.
 # nvcc is a BUILD dependency so it lives in $BUILD_PREFIX; the CUDA runtime and
 # headers are HOST dependencies in $PREFIX. Pointing NVCC at $PREFIX gave
 # "Error 127" (command not found).
 make -j"${CPU_COUNT:-1}" CUDA=1 CC="${CC}" XGB_PREFIX="${PREFIX}" \
      CUDA_HOME="${PREFIX}" NVCC="${BUILD_PREFIX}/bin/nvcc" \
      NVCCFLAGS="-I${PREFIX}/include" \
-     CUDA_GENCODE="-gencode arch=compute_70,code=sm_70 \
--gencode arch=compute_75,code=sm_75 \
+     CUDA_GENCODE="-gencode arch=compute_75,code=sm_75 \
 -gencode arch=compute_80,code=sm_80 \
 -gencode arch=compute_86,code=sm_86 \
 -gencode arch=compute_90,code=sm_90 \
