@@ -91,6 +91,13 @@ static int usage(void) {
     "                   comma list to mix coverages: --reps applies to EACH level,\n"
     "                   so --reps 100 --sample 14701,29000,147009 writes 300\n"
     "                   replicates. Each level stores exactly its own record size.\n"
+    "  --sample-logrange MIN,MAX\n"
+    "                   continuous ladder instead of --sample: --reps is the TOTAL\n"
+    "                   replicate count, each getting its own sample size spread\n"
+    "                   in log space over [MIN,MAX]\n"
+    "  --sample-skew A  bend that draw (default 0.5). A<1 puts more replicates at\n"
+    "                   the DENSE end, where finer differences must be resolved;\n"
+    "                   A=1 is plain log-uniform\n"
     "  --binarize       one read per observed CpG: replace each sampled beta with a\n"
     "                   Bernoulli(beta) draw, as `yame dsample -b` does\n"
     "  --patterns N     retain feature summaries P1..PN (default 1000)\n"
@@ -110,6 +117,8 @@ int main_upscale_prepare(int argc, char *argv[]) {
   int npos = 0;
   uint32_t reps = 100, patterns = 1000;
   uint32_t levels[MSUR_MAX_LEVELS] = {29000}, n_levels = 1, max_sample = 29000;
+  uint32_t log_min = 0, log_max = 0;   /* --sample-logrange */
+  double log_skew = 0.5;               /* <1 leans dense; 1 = plain log-uniform */
   int in_memory = 0, binarize = 0;
   int embed_truth = 1;   /* always embed truth -- upscale-train requires it */
   for (int i = 1; i < argc; ++i) {
@@ -137,6 +146,21 @@ int main_upscale_prepare(int argc, char *argv[]) {
         s = comma + 1;
       }
     }
+    else if (!strcmp(argv[i], "--sample-logrange") && i + 1 < argc) {
+      const char *v = argv[++i], *comma = strchr(v, ',');
+      char buf[32];
+      if (!comma || (size_t)(comma - v) >= sizeof(buf))
+        pdie("--sample-logrange wants MIN,MAX", v);
+      memcpy(buf, v, (size_t)(comma - v)); buf[comma - v] = '\0';
+      log_min = (uint32_t)parse_u64(buf, "--sample-logrange MIN");
+      log_max = (uint32_t)parse_u64(comma + 1, "--sample-logrange MAX");
+      if (!log_min || log_max < log_min)
+        pdie("--sample-logrange needs 0 < MIN <= MAX", v);
+    }
+    else if (!strcmp(argv[i], "--sample-skew") && i + 1 < argc) {
+      char *end = NULL; log_skew = strtod(argv[++i], &end);
+      if (!end || *end || !(log_skew > 0)) pdie("--sample-skew must be > 0", argv[i]);
+    }
     else if (!strcmp(argv[i], "--binarize")) binarize = 1;
     else if (!strcmp(argv[i], "--patterns") && i + 1 < argc) patterns = (uint32_t)parse_u64(argv[++i], "--patterns");
     else if (!strcmp(argv[i], "--in-memory")) in_memory = 1;
@@ -148,8 +172,34 @@ int main_upscale_prepare(int argc, char *argv[]) {
     usage();
     pdie("need TRUTH.cg, IN.mrmp, and OUT.msur", NULL);
   }
-  if (!reps || !n_levels || !patterns) return usage();
+  if (!reps || (!log_min && !n_levels) || !patterns) return usage();
   if ((uint64_t)reps * n_levels > UINT32_MAX) pdie("too many replicates", NULL);
+
+  /* Per-replicate sample sizes.  Either the small fixed ladder (--sample, reps
+   * per level) or a continuous one (--sample-logrange, reps total).
+   *
+   * The continuous draw is stratified in LOG space -- coverage effects are
+   * log-scaled, which is why every ladder we have used halves -- so the range
+   * is covered evenly and the msur stays reproducible (no RNG).  --sample-skew
+   * bends it: u^skew with skew < 1 pushes replicates toward the DENSE end,
+   * where the model must resolve finer differences and an even ladder therefore
+   * under-samples.  skew = 1 is plain log-uniform. */
+  uint32_t total_reps = log_min ? reps : reps * n_levels;
+  uint32_t *rep_sample = xmalloc((size_t)total_reps * sizeof(*rep_sample),
+                                 "per-replicate sample sizes");
+  if (log_min) {
+    double lo = log((double)log_min), span = log((double)log_max) - lo;
+    max_sample = 0;
+    for (uint32_t r = 0; r < total_reps; ++r) {
+      double u = total_reps > 1 ? (double)r / (double)(total_reps - 1) : 1.0;
+      double n = exp(lo + span * pow(u, log_skew));
+      rep_sample[r] = (uint32_t)(n + 0.5);
+      if (rep_sample[r] < 1) rep_sample[r] = 1;
+      if (rep_sample[r] > max_sample) max_sample = rep_sample[r];
+    }
+  } else {
+    for (uint32_t r = 0; r < total_reps; ++r) rep_sample[r] = levels[r / reps];
+  }
   truth = pos[0]; mrmp = pos[1]; out = pos[2];
   if (sizeof(msur_header_t) != 72 || sizeof(msur_header3_t) != 80 ||
       sizeof(msur_rep_t) != 24) pdie("unexpected msur header layout", NULL);
@@ -230,10 +280,10 @@ int main_upscale_prepare(int argc, char *argv[]) {
    * byte-identical to one built before --sample took a list.  Mixed levels get
    * v3: per-replicate tables instead of padding every short record out to the
    * widest level (a 143-CpG replicate padded to 147,009 is 99.9% filler). */
-  const uint32_t total_reps = reps * n_levels;
   const uint64_t feat_bytes =
     (uint64_t)patterns * (sizeof(float) + sizeof(uint32_t));
-  const int v3 = n_levels > 1;
+  int v3 = 0;
+  for (uint32_t r = 1; r < total_reps && !v3; ++r) v3 = rep_sample[r] != rep_sample[0];
 
   FILE *fp = fopen(out, "wb");
   if (!fp) pdie("cannot create output", out);
@@ -263,7 +313,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
     reptab = xmalloc((size_t)total_reps * sizeof(*reptab), "replicate table");
     uint64_t at = hp->records_offset;
     for (uint32_t r = 0; r < total_reps; ++r) {
-      uint32_t s = levels[r / reps];
+      uint32_t s = rep_sample[r];
       reptab[r].sample = s; reptab[r].flags = 0;
       reptab[r].record_bytes = feat_bytes + (uint64_t)s * sizeof(uint32_t);
       reptab[r].offset = at;
@@ -304,15 +354,14 @@ int main_upscale_prepare(int argc, char *argv[]) {
 
   if (v3) write_or_die(fp, reptab, (size_t)total_reps * sizeof(*reptab), out);
 
-  for (uint32_t r = 0; r < reps * n_levels; ++r) {
+  for (uint32_t r = 0; r < total_reps; ++r) {
     /* Replicates run level-major, so r = level*reps + rep.  With one level this
      * is the historical loop exactly, seeds and all, and a single-level msur
      * is byte-identical to one built before --sample took a list. */
-    uint32_t level = r / reps, sample = levels[level];
+    uint32_t sample = rep_sample[r];
     fprintf(stderr,
-      "[methscope] upscale-featurize: simulation %u/%u (level %u/%u, sample %u%s)\n",
-      r + 1, reps * n_levels, level + 1, n_levels, sample,
-      binarize ? ", binarized" : "");
+      "[methscope] upscale-featurize: simulation %u/%u (sample %u%s)\n",
+      r + 1, total_reps, sample, binarize ? ", binarized" : "");
     srand(r + 1); /* exact historical convention: --seed 1..N */
     cfile_t cf = {0};
     if (!memory_cells) cf = open_cfile((char *)truth);
@@ -364,13 +413,16 @@ int main_upscale_prepare(int argc, char *argv[]) {
   if (!manifest) { if (snprintf(auto_manifest, sizeof(auto_manifest), "%s.tsv", out) >= (int)sizeof(auto_manifest)) pdie("output path too long", out); manifest = auto_manifest; }
   FILE *mf = fopen(manifest, "w"); if (!mf) pdie("cannot create manifest", manifest);
   char level_list[MSUR_MAX_LEVELS * 12];
-  {
+  if (log_min) {
+    snprintf(level_list, sizeof(level_list), "logrange %u-%u skew %.3g",
+             log_min, log_max, log_skew);
+  } else {
     int at = 0;
     for (uint32_t k = 0; k < n_levels; ++k)
       at += snprintf(level_list + at, sizeof(level_list) - (size_t)at,
                      k ? ",%u" : "%u", levels[k]);
   }
-  fprintf(mf, "format\t%s\nversion\t%u\ntruth_cg\t%s\nmrmp\t%s\nn_cells\t%u\nn_cpg\t%" PRIu64 "\nn_reps\t%u\nreps_per_level\t%u\nsample_levels\t%s\nsampled_per_cell\t%u\nbinarized\t%s\nn_patterns\t%u\ntruth_encoding\t%s\ngroups_offset\t%" PRIu64 "\ntruth_offset\t%" PRIu64 "\nrecords_offset\t%" PRIu64 "\nrecord_bytes\t%" PRIu64 "\nrandom_protocol\tYAME_dsample_partial_fisher_yates_rand_seed_1_to_n\nfeature_columns\tP1..P%u (PNA excluded)\n", v3 ? "MSURAW3" : "MSURAW2", hp->version, truth, mrmp, n_cells, n_cpg, reps * n_levels, reps, level_list, max_sample, binarize ? "yes (one read per observed CpG)" : "no", patterns, embed_truth ? "uint16_beta_0_65534_missing_65535" : "external_cg", hp->groups_offset, hp->truth_offset, hp->records_offset, hp->record_bytes, patterns);
+  fprintf(mf, "format\t%s\nversion\t%u\ntruth_cg\t%s\nmrmp\t%s\nn_cells\t%u\nn_cpg\t%" PRIu64 "\nn_reps\t%u\nreps_per_level\t%u\nsample_levels\t%s\nsampled_per_cell\t%u\nbinarized\t%s\nn_patterns\t%u\ntruth_encoding\t%s\ngroups_offset\t%" PRIu64 "\ntruth_offset\t%" PRIu64 "\nrecords_offset\t%" PRIu64 "\nrecord_bytes\t%" PRIu64 "\nrandom_protocol\tYAME_dsample_partial_fisher_yates_rand_seed_1_to_n\nfeature_columns\tP1..P%u (PNA excluded)\n", v3 ? "MSURAW3" : "MSURAW2", hp->version, truth, mrmp, n_cells, n_cpg, total_reps, log_min ? total_reps : reps, level_list, max_sample, binarize ? "yes (one read per observed CpG)" : "no", patterns, embed_truth ? "uint16_beta_0_65534_missing_65535" : "external_cg", hp->groups_offset, hp->truth_offset, hp->records_offset, hp->record_bytes, patterns);
   if (fclose(mf)) pdie("error closing manifest", manifest);
   if (memory_cells) {
     for (uint32_t cell = 0; cell < n_cells; ++cell) {
