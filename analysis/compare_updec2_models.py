@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
+from msur import Msur
 from updec2_eval import model_section, sigmoid, source_split
 
 
@@ -123,18 +124,15 @@ def main():
     ap.add_argument("--row-tsv")
     args = ap.parse_args()
     a, b = Model(args.model_a), Model(args.model_b)
-    if a.n_cpg != b.n_cpg or a.patterns != b.patterns:
+    if a.n_cpg != b.n_cpg:
         raise ValueError("model dimensions differ")
 
-    dp = Path(args.data)
-    with dp.open("rb") as f:
-        dh = struct.unpack("<8s4IQ2I4Q", f.read(72))
-    _, _, n_cells, n_reps, side_p, n_cpg, sampled, flags, _, truth_off, \
-        records_off, record_bytes = dh
-    if n_cpg != a.n_cpg or side_p < a.patterns or not flags & 1:
-        raise ValueError("sidecar dimensions differ")
-    raw = np.memmap(dp, "u1", "r")
-    truth = np.memmap(dp, "<u2", "r", truth_off, (n_cells, n_cpg))
+    d = Msur(args.data)
+    n_cells, n_reps, side_p, n_cpg = d.n_cells, d.n_reps, d.patterns, d.n_cpg
+    if n_cpg != a.n_cpg or side_p < max(a.patterns, b.patterns) or \
+            not d.embedded_truth:
+        raise ValueError("msur dimensions differ")
+    truth = d.truth
     _, val, test = source_split(n_cells, args.seed, args.split_file)
     cells = val if args.split == "validation" else \
             test if args.split == "test" else list(range(n_cells))
@@ -144,10 +142,8 @@ def main():
     for ri in range(args.rows):
         cell = int(cells[rng.integers(len(cells))])
         rep = int(rng.integers(n_reps))
-        roff = records_off + (rep * n_cells + cell) * record_bytes
-        beta = np.ndarray((a.patterns,), "<f4", raw, roff)
-        count = np.ndarray((a.patterns,), "<u4", raw, roff + side_p * 4)
-        selected = np.ndarray((sampled,), "<u4", raw, roff + side_p * 8)
+        beta, count, selected = d.record(rep, cell)
+        sampled = d.sample_of(rep)
         need = args.targets_per_row
         chosen = np.empty(0, np.uint32)
         while len(chosen) < need:
@@ -165,8 +161,10 @@ def main():
             chosen = np.unique(np.concatenate((chosen, candidate[valid])))
         genomic = rng.choice(chosen, need, replace=False).astype(np.uint32)
         y = np.asarray(truth[cell, genomic], np.float32) / 65534.0
-        pa, pb = a.predict(beta, count, genomic), \
-                 b.predict(beta, count, genomic)
+        ## each model consumes the top-K prefix of the msur's ranked
+        ## features, so A and B may differ in K (e.g. 100 vs 1000 MRMP).
+        pa = a.predict(beta[:a.patterns], count[:a.patterns], genomic)
+        pb = b.predict(beta[:b.patterns], count[:b.patterns], genomic)
         ma = float(np.abs(pa - y).mean())
         mb = float(np.abs(pb - y).mean())
         rows.append((ri, cell, rep, len(y), ma, mb, mb - ma))

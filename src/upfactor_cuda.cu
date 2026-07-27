@@ -78,9 +78,9 @@ static_assert(sizeof(ModelHeader)==128,"model header layout");
 
 struct Mapping { int fd; size_t size; uint8_t *base; };
 static Mapping map_read(const char *path) {
-  Mapping m={-1,0,NULL};m.fd=open(path,O_RDONLY);if(m.fd<0)die_path("cannot open sidecar",path);
-  struct stat st;if(fstat(m.fd,&st)||st.st_size<0)die_path("cannot stat sidecar",path);m.size=(size_t)st.st_size;
-  m.base=(uint8_t*)mmap(NULL,m.size,PROT_READ,MAP_SHARED,m.fd,0);if(m.base==MAP_FAILED)die_path("cannot mmap sidecar",path);return m;
+  Mapping m={-1,0,NULL};m.fd=open(path,O_RDONLY);if(m.fd<0)die_path("cannot open msur",path);
+  struct stat st;if(fstat(m.fd,&st)||st.st_size<0)die_path("cannot stat msur",path);m.size=(size_t)st.st_size;
+  m.base=(uint8_t*)mmap(NULL,m.size,PROT_READ,MAP_SHARED,m.fd,0);if(m.base==MAP_FAILED)die_path("cannot mmap msur",path);return m;
 }
 static void unmap_read(Mapping*m){if(m->base&&m->base!=MAP_FAILED)munmap(m->base,m->size);if(m->fd>=0)close(m->fd);}
 
@@ -162,10 +162,10 @@ static void write_device(FILE*f,const float*d,size_t n,const char*path){const si
 extern "C" int ms_upfactor_cuda_available(void){int n=0;return cudaGetDeviceCount(&n)==cudaSuccess&&n>0;}
 
 extern "C" int ms_upfactor_train_cuda(const ms_upfactor_config_t*cfg){
-  Mapping map=map_read(cfg->data_path);if(map.size<sizeof(MsurHeader))die("truncated sidecar");const MsurHeader*h=(const MsurHeader*)map.base;
-  if(std::memcmp(h->magic,"MSURAW2\0",8)||h->version!=2)die("input is not MSURAW2");if(!(h->flags&1)||!h->truth_offset)die("sidecar lacks embedded truth; rebuild with --embed-truth");
-  uint32_t G=cfg->patterns?cfg->patterns:h->n_patterns;if(G>h->n_patterns)die("--patterns exceeds sidecar patterns");if(!G||G>UINT16_MAX)die("unsupported pattern count");
-  uint64_t expected=h->records_offset+(uint64_t)h->n_cells*h->n_reps*h->record_bytes;if(expected>map.size)die("truncated sidecar records");
+  Mapping map=map_read(cfg->data_path);if(map.size<sizeof(MsurHeader))die("truncated msur");const MsurHeader*h=(const MsurHeader*)map.base;
+  if(std::memcmp(h->magic,"MSURAW2\0",8)||h->version!=2)die("_upscale trunk-train reads MSURAW2 only; this is a variable-length MSURAW3 msur");if(!(h->flags&1)||!h->truth_offset)die("msur lacks embedded truth; rebuild with --embed-truth");
+  uint32_t G=cfg->patterns?cfg->patterns:h->n_patterns;if(G>h->n_patterns)die("--patterns exceeds msur patterns");if(!G||G>UINT16_MAX)die("unsupported pattern count");
+  uint64_t expected=h->records_offset+(uint64_t)h->n_cells*h->n_reps*h->record_bytes;if(expected>map.size)die("truncated msur records");
   const uint16_t*allg=(const uint16_t*)(map.base+h->groups_offset);std::vector<uint32_t>active;std::vector<uint16_t>ag;active.reserve(h->n_cpg/2);ag.reserve(h->n_cpg/2);
   for(uint64_t q=0;q<h->n_cpg;++q)if(allg[q]&&allg[q]<=G){active.push_back((uint32_t)q);ag.push_back((uint16_t)(allg[q]-1));}
   if(active.empty()||active.size()>UINT32_MAX)die("no supported active CpGs");if(cfg->batch>active.size())die("--batch exceeds active CpGs");
@@ -242,7 +242,7 @@ extern "C" int ms_upfactor_train_cuda(const ms_upfactor_config_t*cfg){
   write_device(f,net.w1.t,net.w1.n,cfg->model_path);write_device(f,net.b1.t,net.b1.n,cfg->model_path);write_device(f,net.w2.t,net.w2.n,cfg->model_path);write_device(f,net.b2.t,net.b2.n,cfg->model_path);write_device(f,net.gw.t,net.gw.n,cfg->model_path);write_device(f,net.gb.t,net.gb.n,cfg->model_path);write_device(f,net.e.t,net.e.n,cfg->model_path);write_device(f,net.eb.t,net.eb.n,cfg->model_path);if(std::fclose(f))die_path("error closing model",cfg->model_path);
   char mp[4096];if(std::snprintf(mp,sizeof(mp),"%s.tsv",cfg->model_path)>=(int)sizeof(mp))die("model path too long");f=std::fopen(mp,"w");if(!f)die_path("cannot create model manifest",mp);
   std::fprintf(f,
-    "format\tUPFAC3\nactivation\tleaky_relu_0.01_residual_block\nfeature_mode\t%s\nsidecar\t%s\npatterns\t%u\nrank\t%d\nhidden\t%d\n"
+    "format\tUPFAC3\nactivation\tleaky_relu_0.01_residual_block\nfeature_mode\t%s\nmsur\t%s\npatterns\t%u\nrank\t%d\nhidden\t%d\n"
     "input_features\t%d\nactive_cpgs\t%zu\ntrain_cells\t%zu\n"
     "validation_cells\t%zu\ntest_cells\t%zu\nsteps\t%u\nbatch\t%u\n"
     "seed\t%llu\nhomogeneous_groups\t%s\nhomogeneous_fraction\t%.9g\n"

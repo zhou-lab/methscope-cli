@@ -7,6 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
+from msur import Msur
+
 MASK64 = (1 << 64) - 1
 PCG_INC = 1442695040888963407
 
@@ -139,10 +141,11 @@ def main():
         dh = struct.unpack("<8s4IQ2I4Q", f.read(72))
     magic, version, n_cells, n_reps, side_p, side_cpg, sampled, dflags, \
         group_off, truth_off, records_off, record_bytes = dh
-    if magic != b"MSURAW2\0" or version != 2 or not dflags & 1:
-        raise ValueError("evaluation requires embedded-truth MSURAW2")
+    if magic not in (b"MSURAW2\0", b"MSURAW3\0") or not dflags & 1:
+        raise ValueError("evaluation requires an embedded-truth MSURAW2/3 msur")
+    _msur = Msur(data)
     if side_p < patterns or side_cpg != n_cpg:
-        raise ValueError("model and sidecar dimensions differ")
+        raise ValueError("model and msur dimensions differ")
     raw = np.memmap(data_path, "u1", "r")
     truth = np.memmap(data_path, "<u2", "r", truth_off, (n_cells, n_cpg))
     _, val_cells, test_cells = source_split(n_cells, args.seed, args.split_file)
@@ -187,7 +190,8 @@ def main():
             else:
                 cell = int(cells[rng.integers(len(cells))])
                 rep = int(rng.integers(n_reps))
-            roff = records_off + (rep * n_cells + cell) * record_bytes
+            roff = _msur._offset(rep, cell)
+            sampled = _msur.sample_of(rep)
             beta = np.ndarray((patterns,), "<f4", raw, roff)
             x = np.empty(input_dim, np.float32)
             missing = ~np.isfinite(beta)

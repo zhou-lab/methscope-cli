@@ -7,8 +7,8 @@
  * held-out cells can be reused across models and compared with an external
  * baseline trained on that split.
  *
- * The sidecar identifies cells only by position, so a row keys on the 0-based
- * cell index -- the sample order of the truth .cg the sidecar was prepared
+ * The msur identifies cells only by position, so a row keys on the 0-based
+ * cell index -- the sample order of the truth .cg the msur was prepared
  * from.  Trailing columns are ignored, which is where the generator puts the
  * sample name so the file stays readable:
  *
@@ -64,7 +64,7 @@ void ms_upsplit_load(const char *who, const char *path, uint32_t n_cells,
       sdie(who, "cell index is not a non-negative integer", line);
     }
     first_row = 0;
-    if (idx >= n_cells) sdie(who, "cell index is beyond the sidecar", line);
+    if (idx >= n_cells) sdie(who, "cell index is beyond the msur", line);
     const char *what = tab + 1;
     uint8_t lab;
     if (!strcmp(what, "train")) lab = MS_UPSPLIT_TRAIN;
@@ -96,15 +96,15 @@ void ms_upsplit_load(const char *who, const char *path, uint32_t n_cells,
 
 void ms_upsplit_check(const char *who, const char *msur_path,
                       const char *path) {
-  /* MSURAW2 header prefix: magic[8], version, n_cells (see upscale_prepare.c). */
+  /* MSURAW2/3 header prefix (identical in both): magic[8], version, n_cells (see upscale_prepare.c). */
   struct { char magic[8]; uint32_t version, n_cells; } head;
   FILE *fp = fopen(msur_path, "rb");
-  if (!fp) sdie(who, "cannot open training sidecar", msur_path);
+  if (!fp) sdie(who, "cannot open training msur", msur_path);
   if (fread(&head, 1, sizeof(head), fp) != sizeof(head))
-    sdie(who, "truncated training sidecar", msur_path);
+    sdie(who, "truncated training msur", msur_path);
   if (fclose(fp)) sdie(who, "close failed", msur_path);
-  if (memcmp(head.magic, "MSURAW2\0", 8) || head.version != 2)
-    sdie(who, "not a MSURAW2 training sidecar", msur_path);
+  if (memcmp(head.magic, "MSURAW2\0", 8) && memcmp(head.magic, "MSURAW3\0", 8))
+    sdie(who, "not a MSURAW2/3 training msur", msur_path);
   uint8_t *label = malloc(head.n_cells ? head.n_cells : 1);
   if (!label) sdie(who, "out of memory", NULL);
   ms_upsplit_load(who, path, head.n_cells, label);

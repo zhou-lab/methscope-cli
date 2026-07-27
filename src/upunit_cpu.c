@@ -55,9 +55,8 @@ static void *xmal(size_t n) { void *p = malloc(n ? n : 1); if (!p) cdie("out of 
 static void *xcal(size_t n, size_t s) { void *p = calloc(n ? n : 1, s ? s : 1); if (!p) cdie("out of memory"); return p; }
 
 /* ---- on-disk structs, identical to the CUDA backend ---------------------- */
-typedef struct { char magic[8]; uint32_t version, n_cells, n_reps, n_patterns;
-  uint64_t n_cpg; uint32_t sampled_per_cell, flags;
-  uint64_t groups_offset, truth_offset, records_offset, record_bytes; } MsurHeader;
+#include "msur.h"
+typedef msur_header_t MsurHeader;
 #pragma pack(push,1)
 typedef struct { char magic[8]; uint32_t version, flags, pattern_length, target_unit_cpgs;
   uint32_t n_units, n_real_memberships, n_pna_units, reserved32;
@@ -124,15 +123,15 @@ static int observed(const uint32_t *a, uint32_t n, uint32_t x) {
 static uint32_t targets(const MsurHeader *h, const uint8_t *base, const uint32_t *cpg,
                         uint64_t begin, uint32_t O, uint32_t cell, uint32_t rep,
                         uint64_t start, uint32_t want, uint32_t *id, float *y) {
-  size_t row = (size_t)rep * h->n_cells + cell;
-  const uint8_t *rec = base + h->records_offset + row * h->record_bytes;
+  const uint8_t *rec = msur_record(base, h, rep, cell);
   const uint32_t *sel = (const uint32_t *)(rec + (size_t)h->n_patterns * 8);
+  uint32_t n_sel = msur_sample_of(base, h, rep);
   const uint16_t *truth = (const uint16_t *)(base + h->truth_offset) + (size_t)cell * h->n_cpg;
   uint32_t n = 0, seen = 0, q = (uint32_t)(start % (O ? O : 1));
   while (n < want && seen < O) {
     uint32_t pos = cpg[begin + q];
     uint16_t v = truth[pos];
-    if (v != UINT16_MAX && !observed(sel, h->sampled_per_cell, pos)) {
+    if (v != UINT16_MAX && !observed(sel, n_sel, pos)) {
       id[n] = q; y[n] = (float)v / 65534.0f; ++n;
     }
     ++seen; if (++q >= O) q = 0;
@@ -394,11 +393,19 @@ static void *worker(void *arg) {
     Pcg rr; pseed(&rr, c->seed ^ ui ^ UINT64_C(0xd1b54a32d192ed03));
     uint32_t bad = 0, step;
     for (step = 1; step <= c->max_steps; ++step) {
-      uint32_t cell = J->train[rnd(&rr) % J->n_train], rep = rnd(&rr) % h->n_reps;
+      /* A cell can be covered genome-wide yet have NO covered CpG anywhere in
+       * one unit -- partial-genome libraries leave whole contiguous blocks
+       * empty, and no coverage threshold screens them out (mm10 cells at 90%
+       * genome coverage still blank 18 of 472 units).  Redraw rather than die,
+       * exactly as the validation-row loop above already does. */
       uint32_t want = c->batch < u->cpg_count ? c->batch : u->cpg_count;
-      uint32_t B = targets(h, J->data, J->cpg, u->output_offset, u->cpg_count,
-                           cell, rep, rnd(&rr), want, bid, by);
-      if (!B) cdie("could not form unit target batch");
+      uint32_t cell = 0, rep = 0, B = 0, draw;
+      for (draw = 0; draw < 64 && !B; ++draw) {
+        cell = J->train[rnd(&rr) % J->n_train]; rep = rnd(&rr) % h->n_reps;
+        B = targets(h, J->data, J->cpg, u->output_offset, u->cpg_count,
+                    cell, rep, rnd(&rr), want, bid, by);
+      }
+      if (!B) cdie("unit has no covered training target in any sampled cell");
       const float *x = J->X + ((size_t)rep * h->n_cells + cell) * (size_t)J->I;
       float ib1 = 1.0f / (1 - powf(.9f, (float)step));
       float ib2 = 1.0f / (1 - powf(.999f, (float)step));
@@ -438,9 +445,9 @@ int ms_upunit_train_cpu(const ms_upunit_config_t *c) {
   Map data = mapread(c->data_path), idx = mapread(c->index_path);
   const MsurHeader *h = (const MsurHeader *)data.p;
   const MsuiHeader *ih = (const MsuiHeader *)idx.p;
-  if (data.n < sizeof(MsurHeader) || memcmp(h->magic, "MSURAW2\0", 8) || h->version != 2 ||
-      !(h->flags & 1) || !h->truth_offset)
-    cdie("training requires embedded-truth MSURAW2");
+  if (data.n < sizeof(MsurHeader) || !(msur_is_v2(h) || msur_is_v3(h)) ||
+      !(h->flags & MSUR_F_TRUTH_U16) || !h->truth_offset)
+    cdie("training requires an embedded-truth MSURAW2/3 msur");
   if (idx.n < sizeof(MsuiHeader) || memcmp(ih->magic, "MSUIDX1", 7) || ih->version != 1 ||
       h->n_cpg != ih->n_cpg)
     cdie("training requires matching MSUIDX1");
@@ -449,7 +456,7 @@ int ms_upunit_train_cpu(const ms_upunit_config_t *c) {
   int F = (c->feature_mode == MS_UPFEATURE_BETA ? 1 : 2) * (int)P, I = F;
 
   uint64_t rows = (uint64_t)h->n_cells * h->n_reps;
-  uint64_t recend = h->records_offset + rows * h->record_bytes;
+  uint64_t recend = msur_records_end(data.p, h);
   uint64_t truthbytes = (uint64_t)h->n_cells * h->n_cpg * 2;
   if (recend > data.n || !range(h->truth_offset, truthbytes, data.n) ||
       ih->file_bytes > idx.n ||
@@ -521,8 +528,7 @@ int ms_upunit_train_cpu(const ms_upunit_config_t *c) {
     uint64_t *cnt = xcal((size_t)F, sizeof(uint64_t));
     uint64_t tr = (uint64_t)n_train * h->n_reps;
     for (uint32_t r = 0; r < h->n_reps; ++r) for (uint32_t k = 0; k < n_train; ++k) {
-      const uint8_t *rec = data.p + h->records_offset +
-        ((size_t)r * h->n_cells + train[k]) * h->record_bytes;
+      const uint8_t *rec = msur_record(data.p, h, r, train[k]);
       const float *b = (const float *)rec;
       const uint32_t *nn = (const uint32_t *)(rec + (size_t)h->n_patterns * 4);
       for (uint32_t p = 0; p < P; ++p) {
@@ -542,8 +548,7 @@ int ms_upunit_train_cpu(const ms_upunit_config_t *c) {
       if (c->feature_mode != MS_UPFEATURE_BETA) mean[j + 1] = (float)(sum[j + 1] / cnt[j + 1]);
     }
     for (uint32_t r = 0; r < h->n_reps; ++r) for (uint32_t k = 0; k < n_train; ++k) {
-      const uint8_t *rec = data.p + h->records_offset +
-        ((size_t)r * h->n_cells + train[k]) * h->record_bytes;
+      const uint8_t *rec = msur_record(data.p, h, r, train[k]);
       const float *b = (const float *)rec;
       const uint32_t *nn = (const uint32_t *)(rec + (size_t)h->n_patterns * 4);
       for (uint32_t p = 0; p < P; ++p) {
@@ -568,7 +573,8 @@ int ms_upunit_train_cpu(const ms_upunit_config_t *c) {
   /* the standardized feature matrix for every (cell, replicate) row */
   float *X = xmal((size_t)rows * F * 4);
   for (uint64_t r = 0; r < rows; ++r) {
-    const uint8_t *rec = data.p + h->records_offset + r * h->record_bytes;
+    const uint8_t *rec = msur_record(data.p, h, (uint32_t)(r / h->n_cells),
+                                     (uint32_t)(r % h->n_cells));
     const float *b = (const float *)rec;
     const uint32_t *nn = (const uint32_t *)(rec + (size_t)h->n_patterns * 4);
     float *x = X + r * F;

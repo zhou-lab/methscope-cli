@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-/* Build the compact raw-CG sidecar used by the global upscale trainer.
+/* Build the compact raw-CG msur used by the global upscale trainer.
  *
  * The input .cg remains the immutable truth store.  This command writes only
  * deterministic YAME-compatible sampled CpG positions and MRMP summaries, so
@@ -20,17 +20,9 @@
 #include "summary.h"
 #include "mrmp.h"
 
-#define MSUR_MAGIC "MSURAW2\0"
-#define MSUR_VERSION 2u
-#define MSUR_F_TRUTH_U16 1u
+#include "msur.h"
 
-typedef struct {
-  char magic[8];
-  uint32_t version, n_cells, n_reps, n_patterns;
-  uint64_t n_cpg;
-  uint32_t sampled_per_cell, flags;
-  uint64_t groups_offset, truth_offset, records_offset, record_bytes;
-} msur_header_t;
+#define MSUR_MAX_LEVELS 16
 
 static void pdie(const char *msg, const char *arg) {
   if (arg) fprintf(stderr, "[methscope] upscale-featurize: %s: %s\n", msg, arg);
@@ -51,7 +43,7 @@ static uint64_t parse_u64(const char *s, const char *what) {
 }
 
 /* Exact arithmetic used by YAME/src/dsample.c.  Keeping it here, rather than
- * changing the random protocol, lets a sidecar be checked against existing
+ * changing the random protocol, lets an msur be checked against existing
  * `yame dsample -s SEED -r 1 -N N` simulations on this platform. */
 static double yame_rand01(void) {
   return (double)rand() / ((double)RAND_MAX + 1.0);
@@ -88,17 +80,21 @@ static int cmp_u32(const void *a, const void *b) {
 static int usage(void) {
   ms_help(stderr,
     "Usage: methscope upscale-featurize [options] TRUTH.cg IN.mrmp OUT.msur\n\n"
-    "Create a compact exact-YAME sampling sidecar for global upscale training.\n"
+    "Create a compact exact-YAME sampling msur for global upscale training.\n"
     "The original TRUTH.cg remains the truth store and is never copied.\n\n"
     "  TRUTH.cg         continuous format-3 YAME .cg truth store\n"
     "  IN.mrmp          MRMPIDX1 artifact (preferred) or an exported .cm\n"
-    "  OUT.msur         output sidecar\n\n"
+    "  OUT.msur         output msur\n\n"
     "Options:\n"
-    "  --reps N         deterministic simulations, seeds 1..N (default 100)\n"
-    "  --sample N       CpGs retained per cell/replicate (default 29000)\n"
+    "  --reps N         deterministic simulations per --sample level (default 100)\n"
+    "  --sample N[,N..] CpGs retained per cell/replicate (default 29000). Give a\n"
+    "                   comma list to mix coverages: --reps applies to EACH level,\n"
+    "                   so --reps 100 --sample 14701,29000,147009 writes 300\n"
+    "                   replicates. Each level stores exactly its own record size.\n"
+    "  --binarize       one read per observed CpG: replace each sampled beta with a\n"
+    "                   Bernoulli(beta) draw, as `yame dsample -b` does\n"
     "  --patterns N     retain feature summaries P1..PN (default 1000)\n"
     "  --in-memory      inflate the truth store once and reuse it for all replicates\n"
-    "  --embed-truth    store cell-major beta as uint16 (65535=missing)\n"
     "  --manifest PATH  write provenance TSV (default OUT.msur.tsv)\n"
     "  -h, --help       show this help\n");
   return 1;
@@ -112,8 +108,10 @@ int main_upscale_prepare(int argc, char *argv[]) {
   const char *out = NULL, *truth = NULL, *mrmp = NULL, *manifest = NULL;
   const char *pos[3] = {NULL, NULL, NULL};
   int npos = 0;
-  uint32_t reps = 100, patterns = 1000, sample = 29000;
-  int in_memory = 0, embed_truth = 0;
+  uint32_t reps = 100, patterns = 1000;
+  uint32_t levels[MSUR_MAX_LEVELS] = {29000}, n_levels = 1, max_sample = 29000;
+  int in_memory = 0, binarize = 0;
+  int embed_truth = 1;   /* always embed truth -- upscale-train requires it */
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
       usage();
@@ -121,10 +119,27 @@ int main_upscale_prepare(int argc, char *argv[]) {
     }
     if (!strcmp(argv[i], "--manifest") && i + 1 < argc) manifest = argv[++i];
     else if (!strcmp(argv[i], "--reps") && i + 1 < argc) reps = (uint32_t)parse_u64(argv[++i], "--reps");
-    else if (!strcmp(argv[i], "--sample") && i + 1 < argc) sample = (uint32_t)parse_u64(argv[++i], "--sample");
+    else if (!strcmp(argv[i], "--sample") && i + 1 < argc) {
+      const char *s = argv[++i];
+      n_levels = 0; max_sample = 0;
+      for (;;) {
+        const char *comma = strchr(s, ',');
+        char buf[32];
+        size_t len = comma ? (size_t)(comma - s) : strlen(s);
+        if (!len || len >= sizeof(buf)) pdie("invalid --sample level", argv[i]);
+        memcpy(buf, s, len); buf[len] = '\0';
+        if (n_levels == MSUR_MAX_LEVELS) pdie("too many --sample levels", argv[i]);
+        levels[n_levels] = (uint32_t)parse_u64(buf, "--sample");
+        if (!levels[n_levels]) pdie("--sample level must be positive", argv[i]);
+        if (levels[n_levels] > max_sample) max_sample = levels[n_levels];
+        ++n_levels;
+        if (!comma) break;
+        s = comma + 1;
+      }
+    }
+    else if (!strcmp(argv[i], "--binarize")) binarize = 1;
     else if (!strcmp(argv[i], "--patterns") && i + 1 < argc) patterns = (uint32_t)parse_u64(argv[++i], "--patterns");
     else if (!strcmp(argv[i], "--in-memory")) in_memory = 1;
-    else if (!strcmp(argv[i], "--embed-truth")) embed_truth = 1;
     else if (argv[i][0] == '-') { usage(); pdie("unrecognized or incomplete option", argv[i]); }
     else if (npos < 3) pos[npos++] = argv[i];
     else pdie("too many arguments", argv[i]);
@@ -133,9 +148,11 @@ int main_upscale_prepare(int argc, char *argv[]) {
     usage();
     pdie("need TRUTH.cg, IN.mrmp, and OUT.msur", NULL);
   }
-  if (!reps || !sample || !patterns) return usage();
+  if (!reps || !n_levels || !patterns) return usage();
+  if ((uint64_t)reps * n_levels > UINT32_MAX) pdie("too many replicates", NULL);
   truth = pos[0]; mrmp = pos[1]; out = pos[2];
-  if (sizeof(msur_header_t) != 72) pdie("unexpected sidecar header layout", NULL);
+  if (sizeof(msur_header_t) != 72 || sizeof(msur_header3_t) != 80 ||
+      sizeof(msur_rep_t) != 24) pdie("unexpected msur header layout", NULL);
   if (patterns > UINT16_MAX - 1) pdie("--patterns exceeds uint16 group format", NULL);
 
   /* Size the truth store first; the MRMP is then read against its CpG count. */
@@ -150,7 +167,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
   for (;;) { cdata_t c = read_cdata1(&check); if (!c.n) { free_cdata(&c); break; } ++n_cells; free_cdata(&c); }
   ++n_cells; /* account for first record */
   bgzf_close(check.fh);
-  if (n_cpg > UINT32_MAX) pdie("sidecar supports at most 2^32-1 CpGs", truth);
+  if (n_cpg > UINT32_MAX) pdie("msur supports at most 2^32-1 CpGs", truth);
 
   /* Feature group of CpG i; PNA/background stays group 0 and is never a
    * feature.  Prefer the MRMPIDX1 artifact, so this map and the mask the model
@@ -209,19 +226,54 @@ int main_upscale_prepare(int argc, char *argv[]) {
     bgzf_close(cf.fh);
   }
 
+  /* One level keeps the v2 fixed-width layout, so a single-level msur stays
+   * byte-identical to one built before --sample took a list.  Mixed levels get
+   * v3: per-replicate tables instead of padding every short record out to the
+   * widest level (a 143-CpG replicate padded to 147,009 is 99.9% filler). */
+  const uint32_t total_reps = reps * n_levels;
+  const uint64_t feat_bytes =
+    (uint64_t)patterns * (sizeof(float) + sizeof(uint32_t));
+  const int v3 = n_levels > 1;
+
   FILE *fp = fopen(out, "wb");
   if (!fp) pdie("cannot create output", out);
-  msur_header_t h = {0};
-  memcpy(h.magic, MSUR_MAGIC, 8); h.version = MSUR_VERSION; h.n_cells = n_cells;
-  h.n_reps = reps; h.n_patterns = patterns; h.n_cpg = n_cpg; h.sampled_per_cell = sample;
-  h.flags = embed_truth ? MSUR_F_TRUTH_U16 : 0;
-  h.groups_offset = sizeof(h);
-  h.truth_offset = embed_truth ? h.groups_offset + n_cpg * sizeof(uint16_t) : 0;
-  h.records_offset = h.groups_offset + n_cpg * sizeof(uint16_t)
+  msur_header3_t h3;
+  memset(&h3, 0, sizeof(h3));
+  msur_header_t *hp = &h3.h;
+  memcpy(hp->magic, v3 ? MSUR3_MAGIC : MSUR2_MAGIC, 8);
+  hp->version = v3 ? 3u : 2u;
+  hp->n_cells = n_cells; hp->n_reps = total_reps; hp->n_patterns = patterns;
+  hp->n_cpg = n_cpg; hp->sampled_per_cell = max_sample;
+  hp->flags = (embed_truth ? MSUR_F_TRUTH_U16 : 0)
+    | (binarize ? MSUR_F_BINARIZED : 0)
+    | (v3 ? MSUR_F_MIXED_SAMPLE : 0);
+  const uint64_t head_bytes = v3 ? sizeof(h3) : sizeof(*hp);
+  hp->groups_offset = head_bytes;
+  hp->truth_offset = embed_truth ? hp->groups_offset + n_cpg * sizeof(uint16_t) : 0;
+  uint64_t after_truth = hp->groups_offset + n_cpg * sizeof(uint16_t)
     + (embed_truth ? (uint64_t)n_cells * n_cpg * sizeof(uint16_t) : 0);
-  h.record_bytes = (uint64_t)patterns * (sizeof(float) + sizeof(uint32_t))
-    + (uint64_t)sample * sizeof(uint32_t);
-  write_or_die(fp, &h, sizeof(h), out);
+
+  msur_rep_t *reptab = NULL;
+  if (v3) {
+    /* record_bytes varies by level, so the whole table is computable up front
+     * and every record stays O(1) addressable. */
+    h3.rep_table_offset = after_truth;
+    hp->records_offset = after_truth + (uint64_t)total_reps * sizeof(msur_rep_t);
+    hp->record_bytes = 0;          /* sentinel: variable, consult the table */
+    reptab = xmalloc((size_t)total_reps * sizeof(*reptab), "replicate table");
+    uint64_t at = hp->records_offset;
+    for (uint32_t r = 0; r < total_reps; ++r) {
+      uint32_t s = levels[r / reps];
+      reptab[r].sample = s; reptab[r].flags = 0;
+      reptab[r].record_bytes = feat_bytes + (uint64_t)s * sizeof(uint32_t);
+      reptab[r].offset = at;
+      at += (uint64_t)n_cells * reptab[r].record_bytes;
+    }
+  } else {
+    hp->records_offset = after_truth;
+    hp->record_bytes = feat_bytes + (uint64_t)max_sample * sizeof(uint32_t);
+  }
+  write_or_die(fp, &h3, (size_t)head_bytes, out);
   write_or_die(fp, group, (size_t)n_cpg * sizeof(*group), out);
 
   if (embed_truth) {
@@ -247,12 +299,21 @@ int main_upscale_prepare(int argc, char *argv[]) {
   double *sum = xmalloc((size_t)patterns * sizeof(*sum), "MRMP sums");
   uint32_t *count = xmalloc((size_t)patterns * sizeof(*count), "MRMP counts");
   float *beta = xmalloc((size_t)patterns * sizeof(*beta), "feature beta");
-  uint32_t *selected = xmalloc((size_t)sample * sizeof(*selected), "sampled positions");
-  uint32_t *swap_j = xmalloc((size_t)sample * sizeof(*swap_j), "sampling swaps");
+  uint32_t *selected = xmalloc((size_t)max_sample * sizeof(*selected), "sampled positions");
+  uint32_t *swap_j = xmalloc((size_t)max_sample * sizeof(*swap_j), "sampling swaps");
 
-  for (uint32_t rep = 0; rep < reps; ++rep) {
-    fprintf(stderr, "[methscope] upscale-featurize: simulation %u/%u\n", rep + 1, reps);
-    srand(rep + 1); /* exact historical convention: --seed 1..N */
+  if (v3) write_or_die(fp, reptab, (size_t)total_reps * sizeof(*reptab), out);
+
+  for (uint32_t r = 0; r < reps * n_levels; ++r) {
+    /* Replicates run level-major, so r = level*reps + rep.  With one level this
+     * is the historical loop exactly, seeds and all, and a single-level msur
+     * is byte-identical to one built before --sample took a list. */
+    uint32_t level = r / reps, sample = levels[level];
+    fprintf(stderr,
+      "[methscope] upscale-featurize: simulation %u/%u (level %u/%u, sample %u%s)\n",
+      r + 1, reps * n_levels, level + 1, n_levels, sample,
+      binarize ? ", binarized" : "");
+    srand(r + 1); /* exact historical convention: --seed 1..N */
     cfile_t cf = {0};
     if (!memory_cells) cf = open_cfile((char *)truth);
     for (uint32_t cell = 0; cell < n_cells; ++cell) {
@@ -273,12 +334,21 @@ int main_upscale_prepare(int argc, char *argv[]) {
       for (uint32_t k = 0; k < sample; ++k) {
         uint64_t pos = cell_eligible[k]; selected[k] = (uint32_t)pos;
         uint16_t g = group[pos];
-        if (g) { sum[g - 1] += MU2beta(f3_get_mu(&c, pos)); ++count[g - 1]; }
+        if (g) {
+          double b = MU2beta(f3_get_mu(&c, pos));
+          /* One read at this CpG: the call is methylated or not, never a
+           * fraction.  Drawn only for CpGs that reach a feature, so the RNG is
+           * untouched when --binarize is off and existing msurs reproduce. */
+          if (binarize) b = yame_rand01() < b ? 1.0 : 0.0;
+          sum[g - 1] += b; ++count[g - 1];
+        }
       }
       for (uint32_t g = 0; g < patterns; ++g) beta[g] = count[g] ? (float)(sum[g] / count[g]) : NAN;
       qsort(selected, sample, sizeof(*selected), cmp_u32);
       write_or_die(fp, beta, (size_t)patterns * sizeof(*beta), out);
       write_or_die(fp, count, (size_t)patterns * sizeof(*count), out);
+      /* Exactly `sample` entries -- no padding.  In v3 the replicate table
+       * carries this record's length, so shorter levels cost nothing. */
       write_or_die(fp, selected, (size_t)sample * sizeof(*selected), out);
       restore_partial_shuffle(cell_eligible, sample, swap_j);
       if (!memory_cells) free_cdata(&c);
@@ -293,7 +363,14 @@ int main_upscale_prepare(int argc, char *argv[]) {
   char auto_manifest[PATH_MAX];
   if (!manifest) { if (snprintf(auto_manifest, sizeof(auto_manifest), "%s.tsv", out) >= (int)sizeof(auto_manifest)) pdie("output path too long", out); manifest = auto_manifest; }
   FILE *mf = fopen(manifest, "w"); if (!mf) pdie("cannot create manifest", manifest);
-  fprintf(mf, "format\tMSURAW2\nversion\t%u\ntruth_cg\t%s\nmrmp\t%s\nn_cells\t%u\nn_cpg\t%" PRIu64 "\nn_reps\t%u\nsampled_per_cell\t%u\nn_patterns\t%u\ntruth_encoding\t%s\ngroups_offset\t%" PRIu64 "\ntruth_offset\t%" PRIu64 "\nrecords_offset\t%" PRIu64 "\nrecord_bytes\t%" PRIu64 "\nrandom_protocol\tYAME_dsample_partial_fisher_yates_rand_seed_1_to_n\nfeature_columns\tP1..P%u (PNA excluded)\n", MSUR_VERSION, truth, mrmp, n_cells, n_cpg, reps, sample, patterns, embed_truth ? "uint16_beta_0_65534_missing_65535" : "external_cg", h.groups_offset, h.truth_offset, h.records_offset, h.record_bytes, patterns);
+  char level_list[MSUR_MAX_LEVELS * 12];
+  {
+    int at = 0;
+    for (uint32_t k = 0; k < n_levels; ++k)
+      at += snprintf(level_list + at, sizeof(level_list) - (size_t)at,
+                     k ? ",%u" : "%u", levels[k]);
+  }
+  fprintf(mf, "format\t%s\nversion\t%u\ntruth_cg\t%s\nmrmp\t%s\nn_cells\t%u\nn_cpg\t%" PRIu64 "\nn_reps\t%u\nreps_per_level\t%u\nsample_levels\t%s\nsampled_per_cell\t%u\nbinarized\t%s\nn_patterns\t%u\ntruth_encoding\t%s\ngroups_offset\t%" PRIu64 "\ntruth_offset\t%" PRIu64 "\nrecords_offset\t%" PRIu64 "\nrecord_bytes\t%" PRIu64 "\nrandom_protocol\tYAME_dsample_partial_fisher_yates_rand_seed_1_to_n\nfeature_columns\tP1..P%u (PNA excluded)\n", v3 ? "MSURAW3" : "MSURAW2", hp->version, truth, mrmp, n_cells, n_cpg, reps * n_levels, reps, level_list, max_sample, binarize ? "yes (one read per observed CpG)" : "no", patterns, embed_truth ? "uint16_beta_0_65534_missing_65535" : "external_cg", hp->groups_offset, hp->truth_offset, hp->records_offset, hp->record_bytes, patterns);
   if (fclose(mf)) pdie("error closing manifest", manifest);
   if (memory_cells) {
     for (uint32_t cell = 0; cell < n_cells; ++cell) {
@@ -312,26 +389,52 @@ int main_upscale_prepare(int argc, char *argv[]) {
 void ms_msur_report(const char *path) {
   FILE *f = fopen(path, "rb");
   if (!f) pdie("cannot open", path);
-  msur_header_t h;
-  if (fread(&h, 1, sizeof(h), f) != sizeof(h)) pdie("truncated", path);
+  msur_header3_t h3;
+  if (fread(&h3, 1, sizeof(h3), f) != sizeof(h3)) pdie("truncated", path);
+  const msur_header_t *h = &h3.h;
+  int v3 = msur_is_v3(h);
+  if (!v3 && !msur_is_v2(h)) pdie("not a MSURAW2/3 training msur", path);
+  msur_rep_t *reps = NULL;
+  if (v3) {
+    reps = xmalloc((size_t)h->n_reps * sizeof(*reps), "replicate table");
+    if (fseek(f, (long)h3.rep_table_offset, SEEK_SET) ||
+        fread(reps, sizeof(*reps), h->n_reps, f) != h->n_reps)
+      pdie("truncated replicate table", path);
+  }
   if (fclose(f)) pdie("error closing", path);
-  if (memcmp(h.magic, MSUR_MAGIC, 8) || h.version != MSUR_VERSION)
-    pdie("not a MSURAW2 training sidecar", path);
-  int truth = (h.flags & MSUR_F_TRUTH_U16) && h.truth_offset;
-  printf("format\tMSURAW2 v%u\n", h.version);
-  printf("cells\t%u\n", h.n_cells);
-  printf("replicates\t%u\n", h.n_reps);
+  int truth = (h->flags & MSUR_F_TRUTH_U16) && h->truth_offset;
+  printf("format\t%s v%u\n", v3 ? "MSURAW3" : "MSURAW2", h->version);
+  printf("cells\t%u\n", h->n_cells);
+  printf("replicates\t%u\n", h->n_reps);
   printf("rows\t%" PRIu64 "\t(cells x replicates)\n",
-         (uint64_t)h.n_cells * h.n_reps);
-  printf("cpgs\t%" PRIu64 "\n", h.n_cpg);
-  printf("patterns\t%u\n", h.n_patterns);
-  printf("sampled_per_cell\t%u\n", h.sampled_per_cell);
+         (uint64_t)h->n_cells * h->n_reps);
+  printf("cpgs\t%" PRIu64 "\n", h->n_cpg);
+  printf("patterns\t%u\n", h->n_patterns);
+  printf("observed_beta\t%s\n", (h->flags & MSUR_F_BINARIZED)
+         ? "binarized (one read per CpG)" : "continuous (full-depth truth)");
   printf("embedded_truth\t%s\n", truth ? "yes (trainable)" :
          "no (upscale-train will reject it)");
-  printf("groups_bytes\t%" PRIu64 "\n", h.n_cpg * 2);
+  printf("groups_bytes\t%" PRIu64 "\n", h->n_cpg * 2);
   if (truth)
-    printf("truth_bytes\t%" PRIu64 "\n", (uint64_t)h.n_cells * h.n_cpg * 2);
-  printf("record_bytes\t%" PRIu64 "\n", h.record_bytes);
-  printf("records_bytes\t%" PRIu64 "\n",
-         (uint64_t)h.n_cells * h.n_reps * h.record_bytes);
+    printf("truth_bytes\t%" PRIu64 "\n", (uint64_t)h->n_cells * h->n_cpg * 2);
+  if (v3) {
+    /* Collapse the per-replicate table to one line per distinct level. */
+    uint64_t total = 0;
+    printf("sampled_per_cell\tvariable (widest %u)\n", h->sampled_per_cell);
+    for (uint32_t i = 0; i < h->n_reps; ++i) {
+      total += (uint64_t)h->n_cells * reps[i].record_bytes;
+      if (i && reps[i].sample == reps[i - 1].sample) continue;
+      uint32_t n = 0;
+      for (uint32_t j = i; j < h->n_reps && reps[j].sample == reps[i].sample; ++j) ++n;
+      printf("  level\t%u CpGs\t%u replicates\trecord %" PRIu64 " B\n",
+             reps[i].sample, n, reps[i].record_bytes);
+    }
+    printf("records_bytes\t%" PRIu64 "\n", total);
+    free(reps);
+  } else {
+    printf("sampled_per_cell\t%u\n", h->sampled_per_cell);
+    printf("record_bytes\t%" PRIu64 "\n", h->record_bytes);
+    printf("records_bytes\t%" PRIu64 "\n",
+           (uint64_t)h->n_cells * h->n_reps * h->record_bytes);
+  }
 }

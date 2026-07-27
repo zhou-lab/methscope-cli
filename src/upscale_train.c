@@ -48,7 +48,7 @@ static int usage(void) {
     "beta plus log1p(observed-CpG count); count zero represents missingness.\n"
     "An optional frozen learned trunk is shared by every processing unit.\n\n"
     "Required:\n"
-    "  -i, --data PATH          embedded-truth MSURAW2 training sidecar\n"
+    "  -i, --data PATH          embedded-truth MSURAW2 training msur\n"
     "  --units PATH             whole-genome MSUIDX1 processing-unit index\n"
 "                           (from upscale-set-units)\n"
     "  --mrmp PATH              MRMPIDX1 artifact (preferred) or exported .cm;\n"
@@ -194,7 +194,7 @@ int main_upscale_train(int argc, char **argv) {
   ensure_dir(work);
   /* The bundle carries the runtime .cm mask. Derive it here from the MRMPIDX1
    * artifact -- before the hours of training, so a bad --mrmp fails now -- so
-   * the shipped mask and the sidecar's group map come from one source. */
+   * the shipped mask and the msur's group map come from one source. */
   char mask[4096];
   const char *bundled_mrmp = mrmp;
   if (ms_mrmp_is_artifact(mrmp)) {

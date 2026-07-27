@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
+from msur import Msur
 from compare_updec2_models import Model as Updec2Model
 from updec2_eval import source_split
 
@@ -159,13 +160,12 @@ def sample_rows(data_path, model, split, rows, targets_per_row, seed,
     path = Path(data_path)
     with path.open("rb") as f:
         d = struct.unpack("<8s4IQ2I4Q", f.read(72))
-    magic, _, n_cells, n_reps, side_p, n_cpg, sampled, flags, _, truth_off, \
-        records_off, record_bytes = d
-    if magic != b"MSURAW2\0" or not flags & 1 or \
-            n_cpg != model.n_cpg or side_p < model.patterns:
-        raise ValueError("sidecar dimensions disagree")
-    raw = np.memmap(path, "u1", "r")
-    truth = np.memmap(path, "<u2", "r", truth_off, (n_cells, n_cpg))
+    ms = Msur(path)
+    n_cells, n_reps, side_p, n_cpg = ms.n_cells, ms.n_reps, ms.patterns, ms.n_cpg
+    if not ms.embedded_truth or n_cpg != model.n_cpg or \
+            side_p < model.patterns:
+        raise ValueError("msur dimensions disagree")
+    truth = ms.truth
     _, val, test = source_split(n_cells, seed, split_file)
     cells = val if split == "validation" else \
         test if split == "test" else list(range(n_cells))
@@ -174,12 +174,10 @@ def sample_rows(data_path, model, split, rows, targets_per_row, seed,
     for ri in range(rows):
         cell = int(cells[rng.integers(len(cells))])
         rep = int(rng.integers(n_reps))
-        roff = records_off + (rep * n_cells + cell) * record_bytes
-        beta = np.array(np.ndarray((side_p,), "<f4", raw, roff), copy=True)
-        count = np.array(np.ndarray((side_p,), "<u4", raw,
-                                    roff + side_p * 4), copy=True)
-        observed = np.ndarray((sampled,), "<u4", raw,
-                              roff + side_p * 8)
+        b_, c_, observed = ms.record(rep, cell)
+        sampled = ms.sample_of(rep)
+        beta = np.array(b_, copy=True)
+        count = np.array(c_, copy=True)
         chosen = np.empty(0, np.uint32)
         while len(chosen) < targets_per_row:
             candidate = rng.choice(n_cpg, min(n_cpg, 2 * targets_per_row),

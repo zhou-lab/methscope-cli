@@ -41,7 +41,7 @@ static int inspect_usage(void) {
     "    .ubjx/.updecx/.refx  bundle: kind mark, section layout, model breakdown\n"
     "    .mrmp   MRMPIDX1  pattern set: dimensions, binstring parameters, top ranks\n"
     "    .msui   MSUIDX1   processing-unit index: units, memberships, CpG split\n"
-    "    .msur   MSURAW2   training sidecar: cells, replicates, embedded truth\n"
+    "    .msur   MSURAW2/3 training msur: cells, replicates, embedded truth\n"
     "\n"
     "Options:\n"
     "  --patterns   .mrmp only: list the top-ranked patterns\n"
@@ -126,7 +126,7 @@ int main_inspect(int argc, char *argv[]) {
   if (got < 8) idie("file is too short to identify", path);
   if (!memcmp(magic, "MRMPIDX1", 8)) return main_mrmp_inspect(argc, argv);
   if (!memcmp(magic, "MSUIDX1", 7)) { ms_msui_report(path); return 0; }
-  if (!memcmp(magic, "MSURAW2", 7)) { ms_msur_report(path); return 0; }
+  if (!memcmp(magic, "MSURAW2", 7) || !memcmp(magic, "MSURAW3", 7)) { ms_msur_report(path); return 0; }
 
   if (argc != 2) return inspect_usage();
   if (!ms_bundle_is(path))

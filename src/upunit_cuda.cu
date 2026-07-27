@@ -35,8 +35,11 @@ static int blocks(size_t n){size_t b=(n+THREADS-1)/THREADS;return(int)(b>4096?40
 static float*df(size_t n){float*p=NULL;CU(cudaMalloc((void**)&p,(n?n:1)*sizeof(float)));return p;}
 static uint32_t*du(size_t n){uint32_t*p=NULL;CU(cudaMalloc((void**)&p,(n?n:1)*sizeof(uint32_t)));return p;}
 
-struct MsurHeader{char magic[8];uint32_t version,n_cells,n_reps,n_patterns;uint64_t n_cpg;uint32_t sampled_per_cell,flags;uint64_t groups_offset,truth_offset,records_offset,record_bytes;};
-static_assert(sizeof(MsurHeader)==72,"MSURAW2 header");
+#include "msur.h"
+typedef msur_header_t MsurHeader;
+static_assert(sizeof(MsurHeader)==72,"MSURAW2 header prefix");
+static_assert(sizeof(msur_header3_t)==80,"MSURAW3 header");
+static_assert(sizeof(msur_rep_t)==24,"MSURAW3 replicate entry");
 #pragma pack(push,1)
 struct MsuiHeader{char magic[8];uint32_t version,flags,pattern_length,target_unit_cpgs;uint32_t n_units,n_real_memberships,n_pna_units,reserved32;uint64_t n_cpg,n_real_cpg,n_pna_cpg;uint64_t unit_offset,cpg_offset,membership_offset,file_bytes;uint64_t pattern_checksum,reserved0,reserved1,reserved2;};
 struct MsuiUnit{uint64_t output_offset;uint32_t first_membership,membership_count,cpg_count,flags;};
@@ -85,8 +88,8 @@ static void pfree(Param&p){cudaFree(p.t);cudaFree(p.m);cudaFree(p.v);}
 
 static bool observed(const uint32_t*a,uint32_t n,uint32_t x){return std::binary_search(a,a+n,x);}
 static uint32_t targets(const MsurHeader*h,const uint8_t*base,const uint32_t*cpg,uint64_t begin,uint32_t O,uint32_t cell,uint32_t rep,uint64_t start,uint32_t want,std::vector<uint32_t>&id,std::vector<float>&y){
-  size_t row=(size_t)rep*h->n_cells+cell;const uint8_t*rec=base+h->records_offset+row*h->record_bytes;const uint32_t*sel=(const uint32_t*)(rec+(size_t)h->n_patterns*8);const uint16_t*truth=(const uint16_t*)(base+h->truth_offset)+(size_t)cell*h->n_cpg;uint32_t n=0;uint64_t seen=0,q=start%O;
-  while(n<want&&seen<O){uint32_t pos=cpg[begin+q];uint16_t v=truth[pos];if(v!=UINT16_MAX&&!observed(sel,h->sampled_per_cell,pos)){id[n]=(uint32_t)q;y[n]=(float)v/65534.0f/* u16 code / 65534; 65535 (UINT16_MAX) = missing */;++n;}if(++q==O)q=0;++seen;}return n;
+  const uint8_t*rec=msur_record(base,h,rep,cell);const uint32_t*sel=(const uint32_t*)(rec+(size_t)h->n_patterns*8);uint32_t n_sel=msur_sample_of(base,h,rep);const uint16_t*truth=(const uint16_t*)(base+h->truth_offset)+(size_t)cell*h->n_cpg;uint32_t n=0;uint64_t seen=0,q=start%O;
+  while(n<want&&seen<O){uint32_t pos=cpg[begin+q];uint16_t v=truth[pos];if(v!=UINT16_MAX&&!observed(sel,n_sel,pos)){id[n]=(uint32_t)q;y[n]=(float)v/65534.0f/* u16 code / 65534; 65535 (UINT16_MAX) = missing */;++n;}if(++q==O)q=0;++seen;}return n;
 }
 static void gemv(cublasHandle_t bh,const float*w,const float*x,float*y,int O,int I){const float one=1,zero=0;BL(cublasSgemv(bh,CUBLAS_OP_T,I,O,&one,w,I,x,1,&zero,y,1));}
 static void trunk_gemm(cublasHandle_t bh,const float*w,const float*x,float*y,int O,int I,int rows){const float one=1,zero=0;BL(cublasSgemm(bh,CUBLAS_OP_T,CUBLAS_OP_N,O,rows,I,&one,w,I,x,I,&zero,y,O));}
@@ -127,7 +130,7 @@ extern "C" int ms_upunit_cuda_available(void){int n=0;return cudaGetDeviceCount(
 extern "C" int ms_upunit_train_cuda(const ms_upunit_config_t*c){
   Map data=mapread(c->data_path),idx=mapread(c->index_path);if(data.n<sizeof(MsurHeader)||idx.n<sizeof(MsuiHeader))die("truncated training input");
   const MsurHeader*h=(const MsurHeader*)data.p;const MsuiHeader*ih=(const MsuiHeader*)idx.p;
-  if(memcmp(h->magic,"MSURAW2\0",8)||h->version!=2||!(h->flags&1)||!h->truth_offset)die("training requires embedded-truth MSURAW2");
+  if(!(msur_is_v2(h)||msur_is_v3(h))||!(h->flags&MSUR_F_TRUTH_U16)||!h->truth_offset)die("training requires an embedded-truth MSURAW2/3 msur");
   if(memcmp(ih->magic,"MSUIDX1",7)||ih->version!=1||h->n_cpg!=ih->n_cpg)die("training requires matching MSUIDX1");
   uint32_t P=c->patterns?c->patterns:h->n_patterns;if(!P||P>h->n_patterns)die("invalid pattern count");
   if(c->feature_mode>MS_UPFEATURE_BETA)die("invalid feature mode");
@@ -141,7 +144,7 @@ extern "C" int ms_upunit_train_cuda(const ms_upunit_config_t*c){
     trunk_checksum=fnv(UINT64_C(1469598103934665603),trunk.p+th->prep_offset,(size_t)3*F*4);
     trunk_checksum=fnv(trunk_checksum,trunk_par,(size_t)trunk_floats*4);
   }
-  uint64_t rows=(uint64_t)h->n_cells*h->n_reps,recend=h->records_offset+rows*h->record_bytes,truthbytes=(uint64_t)h->n_cells*h->n_cpg*2;
+  uint64_t rows=(uint64_t)h->n_cells*h->n_reps,recend=msur_records_end(data.p,h),truthbytes=(uint64_t)h->n_cells*h->n_cpg*2;
   if(recend>data.n||!range(h->truth_offset,truthbytes,data.n)||ih->file_bytes>idx.n||!range(ih->unit_offset,(uint64_t)ih->n_units*sizeof(MsuiUnit),idx.n)||!range(ih->cpg_offset,ih->n_cpg*4,idx.n)||!range(ih->membership_offset,(uint64_t)ih->n_real_memberships*sizeof(MsuiMembership),idx.n))die("truncated training payload");
   const MsuiUnit*units=(const MsuiUnit*)(idx.p+ih->unit_offset);const uint32_t*cpg=(const uint32_t*)(idx.p+ih->cpg_offset);const MsuiMembership*members=(const MsuiMembership*)(idx.p+ih->membership_offset);
   /* cpg[] indexes per-cell truth (n_cpg entries); validate once so targets()' truth[cpg[..]] stays in bounds */
@@ -173,13 +176,13 @@ extern "C" int ms_upunit_train_cuda(const ms_upunit_config_t*c){
     const float*prep=(const float*)(trunk.p+th->prep_offset);memcpy(mean.data(),prep+F,(size_t)F*4);memcpy(scale.data(),prep+2*F,(size_t)F*4);
   }else{
     std::vector<double>sum(F),ss(F);std::vector<uint64_t>cnt(F);uint64_t tr=(uint64_t)train.size()*h->n_reps;
-    for(uint32_t r=0;r<h->n_reps;++r)for(uint32_t cell:train){const uint8_t*rec=data.p+h->records_offset+((size_t)r*h->n_cells+cell)*h->record_bytes;const float*b=(const float*)rec;const uint32_t*n=(const uint32_t*)(rec+(size_t)h->n_patterns*4);for(uint32_t p=0;p<P;++p){uint32_t j=c->feature_mode==MS_UPFEATURE_BETA?p:2*p;if(std::isfinite(b[p])){sum[j]+=b[p];cnt[j]++;}if(c->feature_mode!=MS_UPFEATURE_BETA){double a=c->feature_mode==MS_UPFEATURE_COUNT?std::log1p((double)n[p]):(std::isfinite(b[p])?0.0:1.0);sum[j+1]+=a;cnt[j+1]++;}}}
+    for(uint32_t r=0;r<h->n_reps;++r)for(uint32_t cell:train){const uint8_t*rec=msur_record(data.p,h,r,cell);const float*b=(const float*)rec;const uint32_t*n=(const uint32_t*)(rec+(size_t)h->n_patterns*4);for(uint32_t p=0;p<P;++p){uint32_t j=c->feature_mode==MS_UPFEATURE_BETA?p:2*p;if(std::isfinite(b[p])){sum[j]+=b[p];cnt[j]++;}if(c->feature_mode!=MS_UPFEATURE_BETA){double a=c->feature_mode==MS_UPFEATURE_COUNT?std::log1p((double)n[p]):(std::isfinite(b[p])?0.0:1.0);sum[j+1]+=a;cnt[j+1]++;}}}
     for(uint32_t p=0;p<P;++p){uint32_t j=c->feature_mode==MS_UPFEATURE_BETA?p:2*p;if(!cnt[j])die("one MRMP is always missing in training");mean[j]=(float)(sum[j]/cnt[j]);if(c->feature_mode!=MS_UPFEATURE_BETA)mean[j+1]=(float)(sum[j+1]/cnt[j+1]);}
-    for(uint32_t r=0;r<h->n_reps;++r)for(uint32_t cell:train){const uint8_t*rec=data.p+h->records_offset+((size_t)r*h->n_cells+cell)*h->record_bytes;const float*b=(const float*)rec;const uint32_t*n=(const uint32_t*)(rec+(size_t)h->n_patterns*4);for(uint32_t p=0;p<P;++p){uint32_t j=c->feature_mode==MS_UPFEATURE_BETA?p:2*p;if(std::isfinite(b[p])){double d=b[p]-mean[j];ss[j]+=d*d;}if(c->feature_mode!=MS_UPFEATURE_BETA){double a=c->feature_mode==MS_UPFEATURE_COUNT?std::log1p((double)n[p]):(std::isfinite(b[p])?0.0:1.0),d=a-mean[j+1];ss[j+1]+=d*d;}}}
+    for(uint32_t r=0;r<h->n_reps;++r)for(uint32_t cell:train){const uint8_t*rec=msur_record(data.p,h,r,cell);const float*b=(const float*)rec;const uint32_t*n=(const uint32_t*)(rec+(size_t)h->n_patterns*4);for(uint32_t p=0;p<P;++p){uint32_t j=c->feature_mode==MS_UPFEATURE_BETA?p:2*p;if(std::isfinite(b[p])){double d=b[p]-mean[j];ss[j]+=d*d;}if(c->feature_mode!=MS_UPFEATURE_BETA){double a=c->feature_mode==MS_UPFEATURE_COUNT?std::log1p((double)n[p]):(std::isfinite(b[p])?0.0:1.0),d=a-mean[j+1];ss[j+1]+=d*d;}}}
     for(int j=0;j<F;++j)scale[j]=(float)std::sqrt(std::max(ss[j]/tr,1e-12));
   }
   for(int j=0;j<F;++j)if(!std::isfinite(mean[j])||!std::isfinite(scale[j])||!(scale[j]>0))die("invalid feature preprocessing");
-  std::vector<float>X((size_t)rows*F);for(size_t r=0;r<rows;++r){const uint8_t*rec=data.p+h->records_offset+r*h->record_bytes;const float*b=(const float*)rec;const uint32_t*n=(const uint32_t*)(rec+(size_t)h->n_patterns*4);float*x=X.data()+r*F;for(uint32_t p=0;p<P;++p){uint32_t j=c->feature_mode==MS_UPFEATURE_BETA?p:2*p;x[j]=std::isfinite(b[p])?(b[p]-mean[j])/scale[j]:0;if(c->feature_mode!=MS_UPFEATURE_BETA){double a=c->feature_mode==MS_UPFEATURE_COUNT?std::log1p((double)n[p]):(std::isfinite(b[p])?0.0:1.0);x[j+1]=(a-mean[j+1])/scale[j+1];}}}
+  std::vector<float>X((size_t)rows*F);for(size_t r=0;r<rows;++r){const uint8_t*rec=msur_record(data.p,h,(uint32_t)(r/h->n_cells),(uint32_t)(r%h->n_cells));const float*b=(const float*)rec;const uint32_t*n=(const uint32_t*)(rec+(size_t)h->n_patterns*4);float*x=X.data()+r*F;for(uint32_t p=0;p<P;++p){uint32_t j=c->feature_mode==MS_UPFEATURE_BETA?p:2*p;x[j]=std::isfinite(b[p])?(b[p]-mean[j])/scale[j]:0;if(c->feature_mode!=MS_UPFEATURE_BETA){double a=c->feature_mode==MS_UPFEATURE_COUNT?std::log1p((double)n[p]):(std::isfinite(b[p])?0.0:1.0);x[j+1]=(a-mean[j+1])/scale[j+1];}}}
   CU(cudaSetDevice(c->device));cudaDeviceProp prop;CU(cudaGetDeviceProperties(&prop,c->device));std::fprintf(stderr,"[methscope] upscale-train: GPU %s %.0f MiB; cells=%u reps=%u patterns=%u features=%s external=%d trunk=%d unit_input=%d units=%u split=%zu/%zu/%zu\n",prop.name,(double)prop.totalGlobalMem/1048576,h->n_cells,h->n_reps,P,c->feature_mode==MS_UPFEATURE_COUNT?"beta+count":c->feature_mode==MS_UPFEATURE_MISSING?"beta+missing":"beta-only",F,H,I,ih->n_units,train.size(),val.size(),test.size());
   cublasHandle_t bh;BL(cublasCreate(&bh));float*dRaw=df(X.size());CU(cudaMemcpy(dRaw,X.data(),X.size()*4,cudaMemcpyHostToDevice));X.clear();X.shrink_to_fit();float*dX=dRaw;
   if(th){float*dw1=df((size_t)H*F),*db1=df(H),*dw2=df((size_t)H*H),*db2=df(H),*dh1=df((size_t)rows*H);dX=df((size_t)rows*H);CU(cudaMemcpy(dw1,trunk_par,(size_t)H*F*4,cudaMemcpyHostToDevice));CU(cudaMemcpy(db1,trunk_par+(size_t)H*F,(size_t)H*4,cudaMemcpyHostToDevice));CU(cudaMemcpy(dw2,trunk_par+(size_t)H*F+H,(size_t)H*H*4,cudaMemcpyHostToDevice));CU(cudaMemcpy(db2,trunk_par+(size_t)H*F+H+(size_t)H*H,(size_t)H*4,cudaMemcpyHostToDevice));double tt=now();trunk_gemm(bh,dw1,dRaw,dh1,H,F,(int)rows);trunk_act<<<blocks((size_t)rows*H),THREADS>>>(dh1,db1,(size_t)rows*H,H);trunk_gemm(bh,dw2,dh1,dX,H,H,(int)rows);trunk_residual<<<blocks((size_t)rows*H),THREADS>>>(dX,db2,dh1,(size_t)rows*H,H);CU(cudaDeviceSynchronize());std::fprintf(stderr,"[methscope] upscale-train: precomputed shared trunk for %llu rows in %.2fs\n",(unsigned long long)rows,now()-tt);cudaFree(dw1);cudaFree(db1);cudaFree(dw2);cudaFree(db2);cudaFree(dh1);cudaFree(dRaw);}
@@ -198,7 +201,12 @@ extern "C" int ms_upunit_train_cuda(const ms_upunit_config_t*c){
     std::vector<float>bias(O);for(int o=0;o<O;++o)bias[o]=all_bias[cpg[u.output_offset+o]];
     Net net=make_net(direct,I,R,O,bias,c->seed^((uint64_t)ui<<32));
     double v=eval(bh,net,w,dX,ev,c->activation);bestmae=(float)v;best=flatten(net);Pcg rr;seed(&rr,c->seed^ui^UINT64_C(0xd1b54a32d192ed03));uint32_t bad=0,step=0;
-    for(step=1;step<=c->max_steps;++step){uint32_t cell=train[rnd(&rr)%train.size()],rep=rnd(&rr)%h->n_reps,want=std::min(c->batch,u.cpg_count);uint32_t B=targets(h,data.p,cpg,u.output_offset,u.cpg_count,cell,rep,rnd(&rr),want,bid,by);if(!B)die("could not form unit target batch");size_t row=(size_t)rep*h->n_cells+cell;const float*x=dX+row*I;CU(cudaMemcpy(w.id,bid.data(),B*4,cudaMemcpyHostToDevice));CU(cudaMemcpy(w.y,by.data(),B*4,cudaMemcpyHostToDevice));float ib1=1/(1-std::pow(.9f,(float)step)),ib2=1/(1-std::pow(.999f,(float)step)),lr=c->learning_rate,wd=c->weight_decay;
+    for(step=1;step<=c->max_steps;++step){uint32_t want=std::min(c->batch,u.cpg_count),cell=0,rep=0,B=0;
+    /* A cell can be covered genome-wide yet have NO covered CpG in one unit --
+     * partial-genome libraries blank whole contiguous blocks, and no coverage
+     * threshold screens them out.  Redraw, as the validation loop already does. */
+    for(uint32_t draw=0;draw<64&&!B;++draw){cell=train[rnd(&rr)%train.size()];rep=rnd(&rr)%h->n_reps;B=targets(h,data.p,cpg,u.output_offset,u.cpg_count,cell,rep,rnd(&rr),want,bid,by);}
+    if(!B)die("unit has no covered training target in any sampled cell");size_t row=(size_t)rep*h->n_cells+cell;const float*x=dX+row*I;CU(cudaMemcpy(w.id,bid.data(),B*4,cudaMemcpyHostToDevice));CU(cudaMemcpy(w.y,by.data(),B*4,cudaMemcpyHostToDevice));float ib1=1/(1-std::pow(.9f,(float)step)),ib2=1/(1-std::pow(.999f,(float)step)),lr=c->learning_rate,wd=c->weight_decay;
       if(direct)direct_back<<<blocks(B),THREADS>>>(x,net.E.t,net.E.m,net.E.v,net.b.t,net.b.m,net.b.v,w.id,w.y,B,I,lr,wd,ib1,ib2);
       else{gemv(bh,net.A.t,x,w.z,R,I);addact<<<blocks(R),THREADS>>>(w.z,net.a.t,R,c->activation);CU(cudaMemset(w.dz,0,R*4));factor_back<<<blocks(B),THREADS>>>(w.z,net.E.t,net.E.m,net.E.v,net.b.t,net.b.m,net.b.v,w.id,w.y,w.dz,B,R,lr,wd,ib1,ib2);actback<<<blocks(R),THREADS>>>(w.dz,w.z,R,c->activation);adam_outer<<<blocks((size_t)R*I),THREADS>>>(net.A.t,net.A.m,net.A.v,w.dz,x,R,I,lr,wd,ib1,ib2);adam_vec<<<blocks(R),THREADS>>>(net.a.t,net.a.m,net.a.v,w.dz,R,lr,0,ib1,ib2);}
       if(step%c->eval_every==0){v=eval(bh,net,w,dX,ev,c->activation);if(v+1e-7<bestmae){bestmae=v;beststep=step;best=flatten(net);bad=0;}else if(step>=c->min_steps)++bad;if(step>=c->min_steps&&bad>=c->patience)break;}
