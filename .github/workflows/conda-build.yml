@@ -58,6 +58,22 @@ jobs:
           conda build -c zhou-lab -c conda-forge \
             --output-folder "$RUNNER_TEMP/bld" conda-recipe/
 
+      # Separate recipe, linux-64 only: methscope with the CUDA training backend
+      # compiled in, installed as `methscope-cuda` so both can coexist. Kept out
+      # of conda-recipe/ because making that a multi-output recipe broke the
+      # osx-arm64 build.
+      - name: Build CUDA package (linux-64 only)
+        if: matrix.name == 'linux-64'
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            METHSCOPE_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            METHSCOPE_VERSION="0.0.0.dev${GITHUB_RUN_NUMBER}"
+          fi
+          export METHSCOPE_VERSION
+          conda build -c zhou-lab -c conda-forge -c nvidia \
+            --output-folder "$RUNNER_TEMP/bld" conda-recipe-cuda/
+
       # The runner's glibc is far newer than users'. If the sysroot pin ever
       # comes loose, the binary silently picks up symbols no ordinary machine
       # has and dies at startup -- how sesame-cli and tabl both shipped broken.

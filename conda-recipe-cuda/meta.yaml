@@ -1,0 +1,64 @@
+{% set name = "methscope-cuda" %}
+{# Same source and version as conda-recipe/, kept as a SEPARATE recipe rather
+   than a second `outputs:` entry: converting conda-recipe/ to a multi-output
+   recipe broke the osx-arm64 build (which had been green), while this recipe is
+   linux-only and cannot affect it. #}
+{% set version = environ.get('METHSCOPE_VERSION', '0.0.0') %}
+
+package:
+  name: {{ name }}
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  number: 0
+  # CUDA is linux-64 only; there is no macOS or Windows GPU build.
+  skip: true  # [not linux64]
+
+requirements:
+  build:
+    - {{ compiler('c') }}
+    - {{ stdlib('c') }}
+    # NOT {{ compiler('cuda') }}: that expands to a `cuda_linux-64` metapackage
+    # which only exists under a cuda_compiler_version variant matrix. We build
+    # one CUDA flavour, so depend on nvcc directly.
+    - cuda-nvcc
+    - make
+  host:
+    - libxgboost
+    - zlib
+    - libcurl
+    - cuda-cudart-dev
+    - libcublas-dev
+  run:
+    - libxgboost
+    - cuda-cudart
+    - libcublas
+  run_constrained:
+    # Refuse to install where no driver can load the runtime, rather than
+    # failing at exec time.
+    - __cuda >=12
+
+test:
+  commands:
+    - methscope-cuda --version
+
+about:
+  home: https://github.com/zhou-lab/methscope-cli
+  license: AGPL-3.0-or-later
+  license_family: AGPL
+  license_file: LICENSE
+  summary: methscope with the CUDA upscale-training backend compiled in
+  description: |
+    Identical to the `methscope` package except that the CUDA backend for
+    `upscale-train` is compiled in, and the binary installs as
+    `methscope-cuda` so both packages can be installed together. Inference
+    (upscale, classify, deconv) is pure C and needs no GPU, so most users want
+    plain `methscope`; this package is for training whole-genome upscale models.
+  dev_url: https://github.com/zhou-lab/methscope-cli
+
+extra:
+  recipe-maintainers:
+    - zwdzwd

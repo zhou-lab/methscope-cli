@@ -7,7 +7,7 @@
                              (environ.get('GIT_DESCRIBE_TAG') or 'v0.0.0')|replace('v','',1)) %}
 
 package:
-  name: {{ name }}-split
+  name: {{ name }}
   version: {{ version }}
 
 source:
@@ -28,60 +28,31 @@ build:
 # training backend and installs as a SEPARATE binary, so both can be installed
 # together -- only `upscale-train` needs a GPU, and every other command is
 # identical.
-outputs:
-  - name: {{ name }}
-    script: build.sh
-    build:
-      skip: true  # [win]
-    requirements:
-      build:
-        - {{ compiler('c') }}
-        # Pins the glibc/macOS SDK the binary is built against (see
-        # conda_build_config.yaml) and adds the matching `__glibc >=2.17` /
-        # `__osx >=11.0` run constraint, so the package will not install on a
-        # host that is too old to run it.
-        - {{ stdlib('c') }}
-        - make
-      host:
-        - libxgboost
-        - zlib
-      run:
-        # libxgboost's and zlib's run_exports pin the runtime automatically;
-        # listed for clarity
-        - libxgboost
-    test:
-      commands:
-        - methscope --version
-        - methscope inspect -h 2>&1 | grep -qi inspect
+requirements:
+  build:
+    - {{ compiler('c') }}
+    # Pins the glibc/macOS SDK the binary is built against (see
+    # conda_build_config.yaml) and adds the matching `__glibc >=2.17` /
+    # `__osx >=11.0` run constraint, so the package will not install on a host
+    # that is too old to run it.
+    - {{ stdlib('c') }}
+    - make
+  host:
+    - libxgboost
+    - zlib
+    # YAME's `fetch` links libcurl and its Makefile probes curl-config, which
+    # ships in the libcurl package.  Missing this broke the build at the YAME
+    # v1.33 bump, before any packaging change.
+    - libcurl
+  run:
+    # libxgboost's, zlib's and libcurl's run_exports pin the runtime
+    # automatically; listed for clarity
+    - libxgboost
 
-  - name: {{ name }}-cuda
-    script: build_cuda.sh
-    build:
-      # CUDA is linux-64 only; there is no macOS or Windows GPU build.
-      skip: true  # [not linux64]
-    requirements:
-      build:
-        - {{ compiler('c') }}
-        - {{ compiler('cuda') }}
-        - {{ stdlib('c') }}
-        - make
-      host:
-        - libxgboost
-        - zlib
-        - cuda-cudart-dev
-        - libcublas-dev
-      run:
-        - libxgboost
-        - cuda-cudart
-        - libcublas
-      run_constrained:
-        # Refuse to install where no driver can load the runtime, instead of
-        # failing at exec time.
-        - __cuda >=12
-    test:
-      commands:
-        - methscope-cuda --version
-        - methscope-cuda upscale-train -h 2>&1 | grep -qi cuda
+test:
+  commands:
+    - methscope --version
+    - methscope inspect -h 2>&1 | grep -qi inspect
 
 about:
   home: https://github.com/zhou-lab/methscope-cli
