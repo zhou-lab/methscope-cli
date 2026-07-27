@@ -43,6 +43,18 @@ jobs:
 
       - name: Build package
         run: |
+          # The recipe reads METHSCOPE_VERSION. On a tag build that is the tag
+          # itself, so the published version can never drift from the release
+          # (a hardcoded 0.1.1 survived the v0.2 tag and CI rebuilt-and-
+          # overwrote 0.1.1). Untagged builds are not published, so a 0.0.0.devN
+          # placeholder is fine and is visibly not a release.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            METHSCOPE_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            METHSCOPE_VERSION="0.0.0.dev${GITHUB_RUN_NUMBER}"
+          fi
+          export METHSCOPE_VERSION
+          echo "building version ${METHSCOPE_VERSION}"
           conda build -c zhou-lab -c conda-forge \
             --output-folder "$RUNNER_TEMP/bld" conda-recipe/
 

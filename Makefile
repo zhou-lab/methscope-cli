@@ -9,6 +9,11 @@ PYTHON ?= python3
 CUDA ?= 0
 CUDA_HOME ?= $(if $(CUDA_ROOT),$(CUDA_ROOT),/usr/local/cuda)
 CUDA_ARCH ?= sm_80
+# A locally built binary targets one architecture (fast to compile).  A
+# DISTRIBUTED one must be a fatbin or it fails outright on anything but that
+# card, so the conda recipe passes CUDA_GENCODE with several targets plus a PTX
+# fallback for architectures newer than any we compiled for.
+CUDA_GENCODE ?= -arch=$(CUDA_ARCH)
 NVCC ?= $(CUDA_HOME)/bin/nvcc
 
 # --- YAME static library (built from the pinned submodule) ---------------
@@ -59,10 +64,10 @@ src/%.o: src/%.c | check-xgb
 	$(CC) $(CFLAGS) -c $< -o $@
 
 src/upfactor_cuda.o: src/upfactor_cuda.cu src/upfactor_cuda.h | check-xgb
-	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
+	$(NVCC) -O3 $(CUDA_GENCODE) -Isrc -c $< -o $@
 
 src/upunit_cuda.o: src/upunit_cuda.cu src/upunit_cuda.h src/updec2.h | check-xgb
-	$(NVCC) -O3 -arch=$(CUDA_ARCH) -Isrc -c $< -o $@
+	$(NVCC) -O3 $(CUDA_GENCODE) -Isrc -c $< -o $@
 
 # Vendored f2c-translated Lawson-Hanson NNLS: K&R style, compile warnings off.
 src/nnls.o: src/nnls.c

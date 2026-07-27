@@ -1,8 +1,13 @@
-{% set name = "methscope-cli" %}
-{% set version = "0.1.1" %}
+{% set name = "methscope" %}
+{# Version comes from the git tag (GIT_DESCRIBE_TAG, e.g. v0.2 -> 0.2), so it
+   can never drift from the release being built.  A hardcoded 0.1.1 survived the
+   v0.2 tag and CI silently rebuilt-and-overwrote 0.1.1 instead of publishing
+   0.2.  METHSCOPE_VERSION overrides for a build outside a git checkout. #}
+{% set version = environ.get('METHSCOPE_VERSION',
+                             (environ.get('GIT_DESCRIBE_TAG') or 'v0.0.0')|replace('v','',1)) %}
 
 package:
-  name: {{ name }}
+  name: {{ name }}-split
   version: {{ version }}
 
 source:
@@ -17,27 +22,66 @@ build:
   number: 1
   skip: true  # [win]
 
-requirements:
-  build:
-    - {{ compiler('c') }}
-    # Pins the glibc/macOS SDK the binary is built against (see
-    # conda_build_config.yaml) and adds the matching `__glibc >=2.17` /
-    # `__osx >=11.0` run constraint, so the package will not install on a host
-    # that is too old to run it.
-    - {{ stdlib('c') }}
-    - make
-  host:
-    - libxgboost
-    - zlib
-  run:
-    # libxgboost's and zlib's run_exports pin the runtime automatically;
-    # listed for clarity
-    - libxgboost
+# Two packages from one source tree. `methscope` is the CPU build everyone
+# wants: pure-C inference with libxgboost as the only runtime dependency, and
+# the name `conda install methscope` resolves to. `methscope-cuda` adds the CUDA
+# training backend and installs as a SEPARATE binary, so both can be installed
+# together -- only `upscale-train` needs a GPU, and every other command is
+# identical.
+outputs:
+  - name: {{ name }}
+    script: build.sh
+    build:
+      skip: true  # [win]
+    requirements:
+      build:
+        - {{ compiler('c') }}
+        # Pins the glibc/macOS SDK the binary is built against (see
+        # conda_build_config.yaml) and adds the matching `__glibc >=2.17` /
+        # `__osx >=11.0` run constraint, so the package will not install on a
+        # host that is too old to run it.
+        - {{ stdlib('c') }}
+        - make
+      host:
+        - libxgboost
+        - zlib
+      run:
+        # libxgboost's and zlib's run_exports pin the runtime automatically;
+        # listed for clarity
+        - libxgboost
+    test:
+      commands:
+        - methscope --version
+        - methscope inspect -h 2>&1 | grep -qi inspect
 
-test:
-  commands:
-    - methscope --version
-    - methscope inspect -h 2>&1 | grep -qi inspect
+  - name: {{ name }}-cuda
+    script: build_cuda.sh
+    build:
+      # CUDA is linux-64 only; there is no macOS or Windows GPU build.
+      skip: true  # [not linux64]
+    requirements:
+      build:
+        - {{ compiler('c') }}
+        - {{ compiler('cuda') }}
+        - {{ stdlib('c') }}
+        - make
+      host:
+        - libxgboost
+        - zlib
+        - cuda-cudart-dev
+        - libcublas-dev
+      run:
+        - libxgboost
+        - cuda-cudart
+        - libcublas
+      run_constrained:
+        # Refuse to install where no driver can load the runtime, instead of
+        # failing at exec time.
+        - __cuda >=12
+    test:
+      commands:
+        - methscope-cuda --version
+        - methscope-cuda upscale-train -h 2>&1 | grep -qi cuda
 
 about:
   home: https://github.com/zhou-lab/methscope-cli

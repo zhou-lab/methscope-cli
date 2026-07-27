@@ -1,4 +1,4 @@
-# Conda recipe for methscope-cli
+# Conda recipe for methscope
 
 Builds the `methscope` binary and publishes it to the **zhou-lab** channel.
 
@@ -11,7 +11,7 @@ tarball under the package name `methscope`.
 `libxgboost` comes from conda-forge, so both channels are needed:
 
 ```sh
-conda install -c zhou-lab -c conda-forge methscope-cli
+conda install -c zhou-lab -c conda-forge methscope
 ```
 
 ## Build & upload (maintainers)
@@ -42,7 +42,7 @@ rights to the org). Cutting a release is then:
 
 ```sh
 # bump version in conda-recipe/meta.yaml and src/methscope.h, commit
-git tag -a v0.2.0 -m "methscope-cli 0.2.0" && git push origin v0.2.0
+git tag -a v0.3 -m "methscope 0.3" && git push origin v0.3
 ```
 
 The workflow guards that the tag matches the recipe version before uploading.
@@ -53,7 +53,7 @@ The workflow guards that the tag matches the recipe version before uploading.
   GitHub's auto-generated tag archives do **not** contain the pinned YAME
   submodule. A release build is: check out the `vX.Y.Z` tag, run
   `git submodule update --init --recursive`, then `conda build`. Keep
-  `version` in `meta.yaml` and `METHSCOPE_VERSION` in `src/methscope.h` in
+  `METHSCOPE_VERSION` in `src/methscope.h` (meta.yaml now reads the tag) in
   sync with the tag.
 - The only external dependency is `libxgboost` (conda-forge). YAME and htslib
   are linked statically from the submodule, so they are not conda deps.
