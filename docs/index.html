@@ -52,6 +52,14 @@
   .install .ana{display:inline-flex;align-items:center;padding:.42em .55em;font-size:.72rem;text-decoration:none;
      color:var(--accent);background:var(--accent-soft);border-left:1px solid var(--accent)}
   .install .ana:hover{filter:brightness(.97)}
+  /* Optional GPU variant: same pill, secondary weight. Only upscale-train needs
+     CUDA, so the CPU package stays the primary call to action. */
+  #gpu-btn{font:inherit;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.72rem;cursor:pointer;
+     border:0;border-left:1px solid var(--accent);color:var(--accent);background:var(--accent-soft);
+     padding:.42em .55em;line-height:1.15;white-space:nowrap}
+  #gpu-btn:hover{filter:brightness(.97)}
+  #gpu-btn:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
+  #gpu-btn.done{color:var(--on-accent);background:var(--accent)}
   .expand{color:var(--muted);margin:.5em 0 .4em;font-size:.88rem;max-width:82ch;line-height:1.45}
   .expand b{color:var(--fg)}
   .links{font-size:.82rem;color:var(--muted);margin:.2em 0 0}
@@ -177,6 +185,9 @@
       <button id="install-btn" type="button"
               data-cmd="conda install -c zhou-lab -c conda-forge methscope"
               title="Copy to clipboard"><span class="ico"></span>conda install -c zhou-lab -c conda-forge methscope</button>
+      <button id="gpu-btn" type="button"
+              data-cmd="conda install -c zhou-lab -c conda-forge methscope-cuda"
+              title="Copy the optional GPU package (linux-64; adds the CUDA upscale-train backend)">+gpu</button>
       <a class="ana" href="https://anaconda.org/zhou-lab/methscope"
          title="anaconda.org/zhou-lab/methscope" rel="noopener">↗</a>
     </span>
@@ -216,9 +227,14 @@
   <pre><code><span class="cm"># conda — installs the `methscope` binary</span>
 conda install -c zhou-lab -c conda-forge methscope
 
+<span class="cm"># optional, linux-64 only: adds a `methscope-cuda` binary with the CUDA</span>
+<span class="cm"># backend for `upscale-train`. Everything else — upscale, classify,</span>
+<span class="cm"># deconv — is pure C and needs no GPU, so most users can skip this.</span>
+conda install -c zhou-lab -c conda-forge methscope-cuda
+
 <span class="cm"># or build from source (bundles YAME)</span>
 git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli
-cd methscope-cli &amp;&amp; make
+cd methscope-cli &amp;&amp; make          <span class="cm"># add CUDA=1 for the training backend</span>
 
 <span class="cm"># install yame to fetch prebuilt model and test data</span>
 conda install -c zhou-lab -c conda-forge yame</code></pre>
@@ -634,17 +650,22 @@ wrote bare UPDEC2 work/model.updec2 (109288672 bytes)</code></pre>
 <script>
 (function(){
   // Copy the header install command.
-  var btn=document.getElementById('install-btn');
-  if(btn) btn.addEventListener('click', async function(){
-    var t=btn.getAttribute('data-cmd');
-    try{ await navigator.clipboard.writeText(t); }
-    catch(e){
-      var ta=document.createElement('textarea');
-      ta.value=t; document.body.appendChild(ta); ta.select();
-      try{ document.execCommand('copy'); } finally{ ta.remove(); }
-    }
-    btn.classList.add('done');
-    setTimeout(function(){ btn.classList.remove('done'); },1200);
+  /* Both install buttons copy their own data-cmd: the CPU package and the
+     optional GPU one. */
+  ['install-btn','gpu-btn'].forEach(function(id){
+    var btn=document.getElementById(id);
+    if(!btn) return;
+    btn.addEventListener('click', async function(){
+      var t=btn.getAttribute('data-cmd');
+      try{ await navigator.clipboard.writeText(t); }
+      catch(e){
+        var ta=document.createElement('textarea');
+        ta.value=t; document.body.appendChild(ta); ta.select();
+        try{ document.execCommand('copy'); } finally{ ta.remove(); }
+      }
+      btn.classList.add('done');
+      setTimeout(function(){ btn.classList.remove('done'); },1200);
+    });
   });
 
   // Latest release tag, from GitHub. Sorted numerically (alphabetically v0.1.10
