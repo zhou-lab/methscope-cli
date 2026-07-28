@@ -10,7 +10,10 @@
  *   h   = relu(W1 x + b1)                                        (n_in  -> n_hidden)
  *   bn  = bn_gamma * (h - bn_mean) / sqrt(bn_var + eps) + bn_beta
  *   y   = sigmoid(W2 bn + b2)                                    (n_hidden -> n_out)
- *   call = y > 0.5
+ *
+ * `y` is a continuous per-CpG methylation fraction in [0,1] and is written as
+ * such (YAME format 4). `--binary` instead thresholds at 0.5 and writes 0/1
+ * calls (format 6), which is lossy: an intermediate CpG becomes a hard call.
  *
  * Weights come from a legacy portable .updec file produced by the
  * tools/export_upscale_model.py converter. New training uses the unified,
@@ -99,30 +102,65 @@ static int upscale_usage(void) {
     "\n"
     "Options:\n"
     "  -o <out>   Write output to a file instead of stdout (.cg is binary -- use -o).\n"
-    "  --probs    Emit per-CpG probabilities as TSV instead of a .cg of 0/1 calls.\n"
+    "  --binary   Threshold predictions at 0.5 and write 0/1 calls (format 6).\n"
+    "             Lossy -- the default format 4 keeps the fraction itself.\n"
+    "  --probs    Emit per-CpG probabilities as TSV instead of a .cg.\n"
     "  -h         Show this help message.\n"
     "\n"
     "Output:\n"
-    "  A YAME .cg (format 6), one record per input sample. UPDEC2 output is always\n"
-    "  in whole-genome CpG order. For legacy UPDEC1, if the bundle carries an\n"
-    "  outcpg.cm (the imputed-CpG locations), the .cg spans the whole genome with the\n"
-    "  block's CpGs called (no NA) and the rest NA; otherwise a dense block of n_out\n"
-    "  CpGs. With --probs, a TSV of per-CpG probabilities (one row per sample).\n"
+    "  A YAME .cg (format 4: continuous methylation fraction), one record per input\n"
+    "  sample. UPDEC2 output is always in whole-genome CpG order. For legacy UPDEC1,\n"
+    "  if the bundle carries an outcpg.cm (the imputed-CpG locations), the .cg spans\n"
+    "  the whole genome with the block's CpGs predicted (no NA) and the rest NA;\n"
+    "  otherwise a dense block of n_out CpGs. With --binary, format 6 of 0/1 calls;\n"
+    "  with --probs, a TSV of per-CpG probabilities (one row per sample).\n"
     "\n");
   return 1;
 }
 
-/* Output sink: either a binary .cg stream (default; 0/1 calls as format 6) or a
- * TSV of per-CpG probabilities (--probs). For .cg, `mask` (when non-NULL) is an
- * uncompressed format-0 mask over the whole genome whose set bits are this
- * model's output CpGs, in order; the n_out calls land there and everything else
- * is NA. Without `mask`, a dense block .cg of n_out CpGs (all in-universe). */
+/* Output sink: a .cg stream (default) or a TSV of per-CpG probabilities
+ * (--probs). For .cg, `mask` (when non-NULL) is an uncompressed format-0 mask
+ * over the whole genome whose set bits are this model's output CpGs, in order;
+ * the n_out predictions land there and everything else is NA. Without `mask`, a
+ * dense block .cg of n_out CpGs (all in-universe).
+ *
+ * The .cg is format 4 (continuous fraction) unless `binary`, which thresholds
+ * at 0.5 into format 6. The model's output is a probability, so format 4 is the
+ * faithful encoding; format 6 discards everything but the side of 0.5. */
 typedef struct {
-  int      as_cg;      /* 1: write .cg (format 6); 0: write TSV probs */
+  int      as_cg;      /* 1: write .cg; 0: write TSV probs */
+  int      binary;     /* 1: fmt6 0/1 calls; 0: fmt4 fractions */
   BGZF    *cg;         /* when as_cg */
   FILE    *tsv;        /* when !as_cg */
   cdata_t *mask;       /* outcpg (decompressed fmt0); NULL => dense block .cg */
 } usink_t;
+
+/* From libyame (format4.c); RLE-compacts a float array in place, NA = negative.
+ * Declared here because YAME exports the symbol without a public prototype. */
+extern void fmt4_compress(cdata_t *c);
+
+/* fmt4: float per position, NA encoded as a negative value. Build the inflated
+ * array, then hand it to libyame's RLE compressor so NA runs (the vast majority
+ * of the genome for a masked model) collapse to one word each. */
+static void write_pred_cg4(BGZF *fp, const ms_updec_t *m, const double *outv, cdata_t *mask) {
+  cdata_t c = {0};
+  c.fmt = '4'; c.unit = 4; c.compressed = 0;
+  c.n = mask ? mask->n : (uint64_t)m->n_out;
+  float *v = malloc(c.n * sizeof(float));
+  if (!v) udie("out of memory (.cg)", NULL);
+  for (uint64_t i = 0; i < c.n; ++i) v[i] = -1.0f;   /* NA everywhere */
+  if (mask) {
+    uint64_t k = 0;
+    for (uint64_t pos = 0; pos < mask->n && k < (uint64_t)m->n_out; ++pos)
+      if (FMT0_IN_SET(*mask, pos)) v[pos] = (float)outv[k++];
+  } else {
+    for (int j = 0; j < m->n_out; ++j) v[j] = (float)outv[j];
+  }
+  c.s = (uint8_t *)v;
+  fmt4_compress(&c);                                 /* frees the inflated buffer */
+  cdata_write1(fp, &c);
+  free(c.s);
+}
 
 static void write_pred_cg(BGZF *fp, const ms_updec_t *m, const double *outv, cdata_t *mask) {
   cdata_t c = {0};
@@ -150,7 +188,11 @@ static void write_pred_cg(BGZF *fp, const ms_updec_t *m, const double *outv, cda
 }
 
 static void sink_emit(usink_t *sk, const ms_updec_t *m, const double *outv) {
-  if (sk->as_cg) { write_pred_cg(sk->cg, m, outv, sk->mask); return; }
+  if (sk->as_cg) {
+    if (sk->binary) write_pred_cg(sk->cg, m, outv, sk->mask);
+    else            write_pred_cg4(sk->cg, m, outv, sk->mask);
+    return;
+  }
   for (int k = 0; k < m->n_out; ++k) {          /* --probs TSV */
     if (k) fputc('\t', sk->tsv);
     fprintf(sk->tsv, "%.6g", outv[k]);
@@ -244,11 +286,20 @@ static void sink_emit_updec2(usink_t *sk, const ms_updec2_t *m, const float *pro
     return;
   }
   cdata_t c = {0};
-  c.fmt = '6'; c.unit = 2; c.compressed = 1; c.n = n;
-  c.s = calloc((n + 3) >> 2, 1);
-  if (!c.s) udie("out of memory writing UPDEC2 .cg", NULL);
-  for (uint64_t j = 0; j < n; ++j) {
-    if (prob[j] > 0.5f) FMT6_SET1(c, j); else FMT6_SET0(c, j);
+  if (sk->binary) {                        /* fmt6: 0/1 calls (lossy) */
+    c.fmt = '6'; c.unit = 2; c.compressed = 1; c.n = n;
+    c.s = calloc((n + 3) >> 2, 1);
+    if (!c.s) udie("out of memory writing UPDEC2 .cg", NULL);
+    for (uint64_t j = 0; j < n; ++j) {
+      if (prob[j] > 0.5f) FMT6_SET1(c, j); else FMT6_SET0(c, j);
+    }
+  } else {                                 /* fmt4: the fraction itself */
+    c.fmt = '4'; c.unit = 4; c.compressed = 0; c.n = n;
+    float *v = malloc(n * sizeof(float));
+    if (!v) udie("out of memory writing UPDEC2 .cg", NULL);
+    for (uint64_t j = 0; j < n; ++j) v[j] = prob[j];
+    c.s = (uint8_t *)v;
+    fmt4_compress(&c);                     /* frees the inflated buffer */
   }
   cdata_write1(sk->cg, &c);
   free(c.s);
@@ -343,11 +394,12 @@ static int read_magic_at(const char *path, uint64_t offset, char magic[8]) {
 
 int main_upscale(int argc, char *argv[]) {
   const char *out_path = NULL;
-  int with_probs = 0;
+  int with_probs = 0, as_binary = 0;
   int i = 1;
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-o") == 0 && i+1 < argc) out_path = argv[++i];
     else if (strcmp(argv[i], "--probs") == 0) with_probs = 1;
+    else if (strcmp(argv[i], "--binary") == 0) as_binary = 1;
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       upscale_usage();
       return 0;
@@ -374,7 +426,8 @@ int main_upscale(int argc, char *argv[]) {
 
   /* ---- output sink: .cg by default, TSV of probabilities with --probs ---- */
   usink_t sk = {0};
-  sk.as_cg = !with_probs;
+  sk.as_cg  = !with_probs;
+  sk.binary = as_binary;
   if (sk.as_cg) {
     sk.cg = out_path ? bgzf_open(out_path, "w") : bgzf_dopen(fileno(stdout), "w");
     if (!sk.cg) udie("cannot open .cg output", out_path);
