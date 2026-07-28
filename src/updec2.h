@@ -14,6 +14,8 @@
 #define MS_UPDEC2_FLAG_COUNT 2u
 #define MS_UPDEC2_FLAG_TRUNK 4u
 #define MS_UPDEC2_FLAG_BETA_ONLY 8u
+/* input is [beta xP][log1p(total covered CpGs)] -- input_dim == patterns + 1 */
+#define MS_UPDEC2_FLAG_SCALAR_COV 16u
 
 #pragma pack(push,1)
 typedef struct {

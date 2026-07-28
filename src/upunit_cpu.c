@@ -114,24 +114,18 @@ static int range(uint64_t off, uint64_t len, uint64_t total) {
 }
 
 /* ---- target sampling, same arithmetic as the CUDA host code -------------- */
-static int observed(const uint32_t *a, uint32_t n, uint32_t x) {
-  uint32_t lo = 0, hi = n;
-  while (lo < hi) { uint32_t mid = lo + (hi - lo) / 2;
-    if (a[mid] < x) lo = mid + 1; else hi = mid; }
-  return lo < n && a[lo] == x;
-}
 static uint32_t targets(const MsurHeader *h, const uint8_t *base, const uint32_t *cpg,
                         uint64_t begin, uint32_t O, uint32_t cell, uint32_t rep,
                         uint64_t start, uint32_t want, uint32_t *id, float *y) {
   const uint8_t *rec = msur_record(base, h, rep, cell);
-  const uint32_t *sel = (const uint32_t *)(rec + (size_t)h->n_patterns * 8);
-  uint32_t n_sel = msur_sample_of(base, h, rep);
+  const uint8_t *sel = msur_observed_set(rec, h);
+  uint32_t n_sel = msur_sample_of(base, h, rep), enc = msur_encoding_of(base, h, rep);
   const uint16_t *truth = (const uint16_t *)(base + h->truth_offset) + (size_t)cell * h->n_cpg;
   uint32_t n = 0, seen = 0, q = (uint32_t)(start % (O ? O : 1));
   while (n < want && seen < O) {
     uint32_t pos = cpg[begin + q];
     uint16_t v = truth[pos];
-    if (v != UINT16_MAX && !observed(sel, n_sel, pos)) {
+    if (v != UINT16_MAX && !msur_observed(sel, enc, n_sel, pos)) {
       id[n] = q; y[n] = (float)v / 65534.0f; ++n;
     }
     ++seen; if (++q >= O) q = 0;
@@ -453,7 +447,7 @@ int ms_upunit_train_cpu(const ms_upunit_config_t *c) {
     cdie("training requires matching MSUIDX1");
   uint32_t P = c->patterns ? c->patterns : h->n_patterns;
   if (!P || P > h->n_patterns) cdie("invalid pattern count");
-  int F = (c->feature_mode == MS_UPFEATURE_BETA ? 1 : 2) * (int)P, I = F;
+  int F = (int)ms_upfeature_dim(c->feature_mode, P), I = F;
 
   uint64_t rows = (uint64_t)h->n_cells * h->n_reps;
   uint64_t recend = msur_records_end(data.p, h);
@@ -531,6 +525,12 @@ int ms_upunit_train_cpu(const ms_upunit_config_t *c) {
       const uint8_t *rec = msur_record(data.p, h, r, train[k]);
       const float *b = (const float *)rec;
       const uint32_t *nn = (const uint32_t *)(rec + (size_t)h->n_patterns * 4);
+      if (c->feature_mode == MS_UPFEATURE_SCALAR) {
+        double total = 0;
+        for (uint32_t p = 0; p < P; ++p)
+          if (isfinite(b[p])) { sum[p] += b[p]; cnt[p]++; total += nn[p]; }
+        sum[P] += log1p(total); cnt[P]++;
+      } else
       for (uint32_t p = 0; p < P; ++p) {
         uint32_t j = c->feature_mode == MS_UPFEATURE_BETA ? p : 2 * p;
         if (isfinite(b[p])) { sum[j] += b[p]; cnt[j]++; }
@@ -541,16 +541,20 @@ int ms_upunit_train_cpu(const ms_upunit_config_t *c) {
         }
       }
     }
-    for (uint32_t p = 0; p < P; ++p) {
-      uint32_t j = c->feature_mode == MS_UPFEATURE_BETA ? p : 2 * p;
+    for (int j = 0; j < F; ++j) {
       if (!cnt[j]) cdie("one MRMP is always missing in training");
       mean[j] = (float)(sum[j] / cnt[j]);
-      if (c->feature_mode != MS_UPFEATURE_BETA) mean[j + 1] = (float)(sum[j + 1] / cnt[j + 1]);
     }
     for (uint32_t r = 0; r < h->n_reps; ++r) for (uint32_t k = 0; k < n_train; ++k) {
       const uint8_t *rec = msur_record(data.p, h, r, train[k]);
       const float *b = (const float *)rec;
       const uint32_t *nn = (const uint32_t *)(rec + (size_t)h->n_patterns * 4);
+      if (c->feature_mode == MS_UPFEATURE_SCALAR) {
+        double total = 0;
+        for (uint32_t p = 0; p < P; ++p)
+          if (isfinite(b[p])) { double d = b[p] - mean[p]; ss[p] += d * d; total += nn[p]; }
+        double d = log1p(total) - mean[P]; ss[P] += d * d;
+      } else
       for (uint32_t p = 0; p < P; ++p) {
         uint32_t j = c->feature_mode == MS_UPFEATURE_BETA ? p : 2 * p;
         if (isfinite(b[p])) { double d = b[p] - mean[j]; ss[j] += d * d; }
@@ -578,6 +582,14 @@ int ms_upunit_train_cpu(const ms_upunit_config_t *c) {
     const float *b = (const float *)rec;
     const uint32_t *nn = (const uint32_t *)(rec + (size_t)h->n_patterns * 4);
     float *x = X + r * F;
+    if (c->feature_mode == MS_UPFEATURE_SCALAR) {
+      double total = 0;
+      for (uint32_t p = 0; p < P; ++p) {
+        x[p] = isfinite(b[p]) ? (b[p] - mean[p]) / scale[p] : 0;
+        if (isfinite(b[p])) total += nn[p];
+      }
+      x[P] = (float)((log1p(total) - mean[P]) / scale[P]);
+    } else
     for (uint32_t p = 0; p < P; ++p) {
       uint32_t j = c->feature_mode == MS_UPFEATURE_BETA ? p : 2 * p;
       x[j] = isfinite(b[p]) ? (b[p] - mean[j]) / scale[j] : 0;
@@ -654,7 +666,8 @@ int ms_upunit_train_cpu(const ms_upunit_config_t *c) {
   oh.version = 3;
   oh.flags = MS_UPDEC2_FLAG_GENOMIC |
     (c->feature_mode == MS_UPFEATURE_COUNT ? MS_UPDEC2_FLAG_COUNT : 0) |
-    (c->feature_mode == MS_UPFEATURE_BETA ? MS_UPDEC2_FLAG_BETA_ONLY : 0);
+    (c->feature_mode == MS_UPFEATURE_BETA ? MS_UPDEC2_FLAG_BETA_ONLY : 0) |
+    (c->feature_mode == MS_UPFEATURE_SCALAR ? MS_UPDEC2_FLAG_SCALAR_COV : 0);
   oh.patterns = P; oh.input_dim = F; oh.n_units = ih->n_units;
   oh.n_memberships = ih->n_real_memberships; oh.target_unit_cpgs = ih->target_unit_cpgs;
   oh.activation = c->activation; oh.n_cpg = ih->n_cpg;

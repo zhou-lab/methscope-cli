@@ -11,6 +11,20 @@ extern "C" {
 #define MS_UPFEATURE_MISSING 0u
 #define MS_UPFEATURE_COUNT 1u
 #define MS_UPFEATURE_BETA 2u
+/* beta + ONE scalar (log1p of total covered CpGs) instead of P missing bits.
+ * The missing vector is near-constant above ~10k observed CpGs -- all zero at
+ * p100, 4 of 1000 active at 0.5% -- so it costs half the encoder input to carry
+ * almost nothing there. The scalar conveys the coverage regime in 1 dimension;
+ * what it cannot do is say WHICH patterns are unobserved, which matters only in
+ * the sparse regime where many are. */
+#define MS_UPFEATURE_SCALAR 3u
+
+/* Encoder input width for a feature mode. */
+static inline uint32_t ms_upfeature_dim(uint32_t mode, uint32_t patterns) {
+  if (mode == MS_UPFEATURE_BETA) return patterns;
+  if (mode == MS_UPFEATURE_SCALAR) return patterns + 1u;
+  return 2u * patterns;
+}
 
 typedef struct {
   const char *data_path;

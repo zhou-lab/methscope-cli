@@ -20,6 +20,11 @@ REP = np.dtype([("sample", "<u4"), ("flags", "<u4"),
 
 F_TRUTH_U16 = 1
 F_BINARIZED = 2
+
+## msur_rep_t.flags -- observed-set encoding, chosen per replicate by whichever
+## is smaller: a sorted u32 list (4B per observed CpG) or a whole-genome bitmap.
+ENC_LIST = 0
+ENC_BITMAP = 1
 F_MIXED_SAMPLE = 4
 
 
@@ -65,6 +70,11 @@ class Msur:
         return int(self.reps[rep]["sample"]) if self.v3 \
             else int(self.sampled_per_cell)
 
+    def encoding_of(self, rep):
+        """ENC_LIST or ENC_BITMAP -- how this replicate stores its observed
+        set.  v2, and v3 files written before the bitmap existed, are lists."""
+        return int(self.reps[rep]["flags"]) if self.v3 else ENC_LIST
+
     def _offset(self, rep, cell):
         if self.v3:
             r = self.reps[rep]
@@ -73,12 +83,22 @@ class Msur:
             (rep * self.n_cells + cell) * self.record_bytes
 
     def record(self, rep, cell):
-        """(beta, count, selected) views for one (replicate, cell) row."""
+        """(beta, count, selected) views for one (replicate, cell) row.
+
+        `selected` is always a sorted u32 array of observed CpG indices; when
+        the replicate is bitmap-encoded it is materialized from the bits, so
+        callers see one representation regardless of how it was stored."""
         o = self._offset(rep, cell)
         P, n = self.patterns, self.sample_of(rep)
         beta = np.ndarray((P,), "<f4", self.raw, o)
         count = np.ndarray((P,), "<u4", self.raw, o + P * 4)
-        selected = np.ndarray((n,), "<u4", self.raw, o + P * 8)
+        if self.encoding_of(rep) == ENC_BITMAP:
+            nb = (self.n_cpg + 7) // 8
+            bits = np.ndarray((nb,), "u1", self.raw, o + P * 8)
+            selected = np.flatnonzero(
+                np.unpackbits(bits, bitorder="little")[:self.n_cpg]).astype("<u4")
+        else:
+            selected = np.ndarray((n,), "<u4", self.raw, o + P * 8)
         return beta, count, selected
 
     def levels(self):

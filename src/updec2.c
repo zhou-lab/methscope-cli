@@ -66,9 +66,11 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
   uint32_t trunk_dim =
     h->version == 3 && (h->flags & MS_UPDEC2_FLAG_TRUNK)
       ? (uint32_t)h->trunk_dim : 0;
-  uint32_t expected_input =
-    h->version == 3 && (h->flags & MS_UPDEC2_FLAG_BETA_ONLY)
-      ? h->patterns : 2 * h->patterns;
+  uint32_t expected_input = 2 * h->patterns;
+  if (h->version == 3) {
+    if (h->flags & MS_UPDEC2_FLAG_BETA_ONLY) expected_input = h->patterns;
+    else if (h->flags & MS_UPDEC2_FLAG_SCALAR_COV) expected_input = h->patterns + 1;
+  }
   if (!h->patterns || h->patterns > UINT32_MAX / 2 ||
       h->input_dim != expected_input || !h->n_units ||
       !h->n_cpg || h->n_cpg > UINT32_MAX || h->file_bytes != length ||
@@ -82,9 +84,12 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
       (h->version == 2 && (h->flags & ~MS_UPDEC2_FLAG_GENOMIC)) ||
       (h->version == 3 && (h->flags & ~(MS_UPDEC2_FLAG_GENOMIC |
           MS_UPDEC2_FLAG_COUNT | MS_UPDEC2_FLAG_TRUNK |
-          MS_UPDEC2_FLAG_BETA_ONLY))) ||
+          MS_UPDEC2_FLAG_BETA_ONLY | MS_UPDEC2_FLAG_SCALAR_COV))) ||
+      /* the three input layouts are mutually exclusive */
       ((h->flags & MS_UPDEC2_FLAG_COUNT) &&
        (h->flags & MS_UPDEC2_FLAG_BETA_ONLY)) ||
+      ((h->flags & MS_UPDEC2_FLAG_SCALAR_COV) &&
+       (h->flags & (MS_UPDEC2_FLAG_BETA_ONLY | MS_UPDEC2_FLAG_COUNT))) ||
       ((h->flags & MS_UPDEC2_FLAG_TRUNK) && !trunk_dim) ||
       (!(h->flags & MS_UPDEC2_FLAG_TRUNK) && h->trunk_dim)) {
     munmap(map, (size_t)file_bytes); close(fd);
@@ -219,6 +224,18 @@ void ms_updec2_prepare_input(const ms_updec2_t *m, const double *beta,
         x[P + p] = 0.0f;
       }
     }
+    return;
+  }
+  if (m->header->flags & MS_UPDEC2_FLAG_SCALAR_COV) {
+    /* beta, then one standardized log1p(total covered CpGs). */
+    double total = 0;
+    for (uint32_t p = 0; p < P; ++p) {
+      int n = count ? count[p] : (isnan(beta[p]) ? 0 : 1);
+      x[p] = isnan(beta[p]) || n == 0
+        ? 0.0f : (float)((beta[p] - m->mean[p]) / m->scale[p]);
+      if (n > 0) total += n;
+    }
+    x[P] = (float)((log1p(total) - m->mean[P]) / m->scale[P]);
     return;
   }
   if (m->header->flags & MS_UPDEC2_FLAG_BETA_ONLY) {

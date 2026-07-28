@@ -53,6 +53,17 @@ class Model:
     def input(self, beta, count):
         x = np.empty(self.input_dim, np.float32)
         missing = ~np.isfinite(beta)
+        if self.version >= 3 and self.flags & 16:
+            ## SCALAR_COV: P standardized betas, then one standardized
+            ## log1p(total covered CpGs) -- input_dim == patterns + 1.
+            seen = ~missing if count is None else (~missing & (count > 0))
+            x[:self.patterns] = np.where(
+                seen, (beta - self.mean[:self.patterns]) /
+                      self.scale[:self.patterns], 0)
+            total = float(count[seen].sum()) if count is not None else int(seen.sum())
+            x[self.patterns] = (np.log1p(total) - self.mean[self.patterns]) / \
+                self.scale[self.patterns]
+            return x
         if self.version == 2:
             x[:self.patterns] = np.where(
                 missing, 0, (beta - self.mean) / self.scale)

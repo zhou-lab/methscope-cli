@@ -312,13 +312,33 @@ int main_upscale_prepare(int argc, char *argv[]) {
     hp->record_bytes = 0;          /* sentinel: variable, consult the table */
     reptab = xmalloc((size_t)total_reps * sizeof(*reptab), "replicate table");
     uint64_t at = hp->records_offset;
+    uint64_t bmb = msur_bitmap_bytes(n_cpg);
+    uint32_t n_bitmap = 0;
+    /* Escape hatch: pin the encoding instead of choosing by size.  "list"
+     * reproduces pre-bitmap output byte for byte (and is how the two encodings
+     * are checked for equivalence); "bitmap" forces it everywhere. */
+    const char *enc_env = getenv("MSUR_OBSERVED_ENCODING");
+    int force_list = enc_env && !strcmp(enc_env, "list");
+    int force_bitmap = enc_env && !strcmp(enc_env, "bitmap");
+    if (enc_env && !force_list && !force_bitmap && strcmp(enc_env, "auto"))
+      pdie("MSUR_OBSERVED_ENCODING must be list, bitmap, or auto", enc_env);
     for (uint32_t r = 0; r < total_reps; ++r) {
       uint32_t s = rep_sample[r];
-      reptab[r].sample = s; reptab[r].flags = 0;
-      reptab[r].record_bytes = feat_bytes + (uint64_t)s * sizeof(uint32_t);
+      /* Whichever observed-set encoding is smaller for THIS replicate. */
+      uint64_t list_bytes = (uint64_t)s * sizeof(uint32_t);
+      int bitmap = force_bitmap || (!force_list && bmb < list_bytes);
+      reptab[r].sample = s;
+      reptab[r].flags = bitmap ? MSUR_ENC_BITMAP : MSUR_ENC_LIST;
+      reptab[r].record_bytes = feat_bytes + (bitmap ? bmb : list_bytes);
       reptab[r].offset = at;
       at += (uint64_t)n_cells * reptab[r].record_bytes;
+      n_bitmap += bitmap != 0;
     }
+    if (n_bitmap)
+      fprintf(stderr, "[methscope] upscale-featurize: bitmap observed-set for "
+              "%u/%u replicates (>= %" PRIu64 " CpGs); records %.1f GiB\n",
+              n_bitmap, total_reps, bmb / sizeof(uint32_t),
+              (double)(at - hp->records_offset) / (1024.0 * 1024.0 * 1024.0));
   } else {
     hp->records_offset = after_truth;
     hp->record_bytes = feat_bytes + (uint64_t)max_sample * sizeof(uint32_t);
@@ -351,6 +371,12 @@ int main_upscale_prepare(int argc, char *argv[]) {
   float *beta = xmalloc((size_t)patterns * sizeof(*beta), "feature beta");
   uint32_t *selected = xmalloc((size_t)max_sample * sizeof(*selected), "sampled positions");
   uint32_t *swap_j = xmalloc((size_t)max_sample * sizeof(*swap_j), "sampling swaps");
+  /* Only allocated when some replicate is dense enough to prefer a bitmap. */
+  uint64_t bitmap_bytes = msur_bitmap_bytes(n_cpg);
+  unsigned char *bitmap = NULL;
+  if (v3) for (uint32_t r = 0; r < total_reps && !bitmap; ++r)
+    if (reptab[r].flags == MSUR_ENC_BITMAP)
+      bitmap = xmalloc((size_t)bitmap_bytes, "observed-set bitmap");
 
   if (v3) write_or_die(fp, reptab, (size_t)total_reps * sizeof(*reptab), out);
 
@@ -359,9 +385,11 @@ int main_upscale_prepare(int argc, char *argv[]) {
      * is the historical loop exactly, seeds and all, and a single-level msur
      * is byte-identical to one built before --sample took a list. */
     uint32_t sample = rep_sample[r];
+    int rep_bitmap = v3 && reptab[r].flags == MSUR_ENC_BITMAP;
     fprintf(stderr,
-      "[methscope] upscale-featurize: simulation %u/%u (sample %u%s)\n",
-      r + 1, total_reps, sample, binarize ? ", binarized" : "");
+      "[methscope] upscale-featurize: simulation %u/%u (sample %u%s%s)\n",
+      r + 1, total_reps, sample, binarize ? ", binarized" : "",
+      rep_bitmap ? ", bitmap" : "");
     srand(r + 1); /* exact historical convention: --seed 1..N */
     cfile_t cf = {0};
     if (!memory_cells) cf = open_cfile((char *)truth);
@@ -397,8 +425,17 @@ int main_upscale_prepare(int argc, char *argv[]) {
       write_or_die(fp, beta, (size_t)patterns * sizeof(*beta), out);
       write_or_die(fp, count, (size_t)patterns * sizeof(*count), out);
       /* Exactly `sample` entries -- no padding.  In v3 the replicate table
-       * carries this record's length, so shorter levels cost nothing. */
-      write_or_die(fp, selected, (size_t)sample * sizeof(*selected), out);
+       * carries this record's length, so shorter levels cost nothing; dense
+       * levels switch to a whole-genome bitmap, which is both smaller and O(1)
+       * to test.  Either way the membership set is identical. */
+      if (rep_bitmap) {
+        memset(bitmap, 0, (size_t)bitmap_bytes);
+        for (uint32_t k = 0; k < sample; ++k)
+          bitmap[selected[k] >> 3] |= (unsigned char)(1u << (selected[k] & 7));
+        write_or_die(fp, bitmap, (size_t)bitmap_bytes, out);
+      } else {
+        write_or_die(fp, selected, (size_t)sample * sizeof(*selected), out);
+      }
       restore_partial_shuffle(cell_eligible, sample, swap_j);
       if (!memory_cells) free_cdata(&c);
     }
@@ -464,6 +501,15 @@ void ms_msur_report(const char *path) {
   printf("patterns\t%u\n", h->n_patterns);
   printf("observed_beta\t%s\n", (h->flags & MSUR_F_BINARIZED)
          ? "binarized (one read per CpG)" : "continuous (full-depth truth)");
+  if (v3) {
+    uint32_t nb = 0;
+    for (uint32_t r = 0; r < h->n_reps; ++r) nb += reps[r].flags == MSUR_ENC_BITMAP;
+    if (nb) printf("observed_set\tbitmap for %u/%u replicates, sorted list for the rest\n",
+                   nb, h->n_reps);
+    else    printf("observed_set\tsorted list (all replicates)\n");
+  } else {
+    printf("observed_set\tsorted list (all replicates)\n");
+  }
   printf("embedded_truth\t%s\n", truth ? "yes (trainable)" :
          "no (upscale-train will reject it)");
   printf("groups_bytes\t%" PRIu64 "\n", h->n_cpg * 2);

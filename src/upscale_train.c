@@ -57,7 +57,9 @@ static int usage(void) {
     "  --work-dir DIR           resumable unit checkpoints and bare UPDEC2\n\n"
     "Architecture:\n"
     "  --patterns N             MRMP inputs (default 1000)\n"
-    "  --features MODE          beta, count, or missing (default count)\n"
+    "  --features MODE          beta, count, missing, or scalar (default count).\n"
+  "                           scalar = beta + ONE log1p(total covered CpGs), so\n"
+  "                           input is P+1 wide instead of 2P\n"
     "  --trunk PATH             optional frozen UPFAC3 shared trunk\n"
     "  --pure-bottleneck N      one-membership unit dimension (default 16)\n"
     "  --mixed-bottleneck N     mixed/PNA unit dimension (default 32)\n"
@@ -123,6 +125,7 @@ int main_upscale_train(int argc, char **argv) {
       if (!strcmp(x, "count")) c.feature_mode = MS_UPFEATURE_COUNT;
       else if (!strcmp(x, "missing")) c.feature_mode = MS_UPFEATURE_MISSING;
       else if (!strcmp(x, "beta")) c.feature_mode = MS_UPFEATURE_BETA;
+      else if (!strcmp(x, "scalar")) c.feature_mode = MS_UPFEATURE_SCALAR;
       else terr("--features must be beta, count, or missing", x);
     }
     else if (!strcmp(a, "--trunk") && i + 1 < argc) c.trunk_path = argv[++i];
@@ -179,8 +182,9 @@ int main_upscale_train(int argc, char **argv) {
     "[methscope] upscale-train: split=%s\n",
     data, index, mrmp, out, work, c.patterns,
     c.feature_mode == MS_UPFEATURE_COUNT ? "beta+count" :
-      c.feature_mode == MS_UPFEATURE_MISSING ? "beta+missing" : "beta-only",
-    (c.feature_mode == MS_UPFEATURE_BETA ? 1 : 2) * c.patterns,
+      c.feature_mode == MS_UPFEATURE_MISSING ? "beta+missing" :
+      c.feature_mode == MS_UPFEATURE_SCALAR ? "beta+scalar-coverage" : "beta-only",
+    ms_upfeature_dim(c.feature_mode, c.patterns),
     c.trunk_path ? c.trunk_path : "none",
     c.pure_bottleneck, c.mixed_direct ? "direct" : "factor",
     c.mixed_bottleneck, c.activation ? "leaky" : "linear",
@@ -228,9 +232,10 @@ int main_upscale_train(int argc, char **argv) {
     "eval_every\t%u\npatience\t%u\nbatch\t%u\neval_rows\t%u\nseed\t%" PRIu64
     "\nlearning_rate\t%.9g\nweight_decay\t%.9g\nsplit\t%s\nbackend\t%s\n",
     out, data, index, mrmp, work, c.patterns,
-    (c.feature_mode == MS_UPFEATURE_BETA ? 1 : 2) * c.patterns,
+    ms_upfeature_dim(c.feature_mode, c.patterns),
     c.feature_mode == MS_UPFEATURE_COUNT ? "beta_log1p_count" :
-      c.feature_mode == MS_UPFEATURE_MISSING ? "beta_missing" : "beta_only",
+      c.feature_mode == MS_UPFEATURE_MISSING ? "beta_missing" :
+      c.feature_mode == MS_UPFEATURE_SCALAR ? "beta_scalar_coverage" : "beta_only",
     c.trunk_path ? c.trunk_path : "",
     c.pure_bottleneck, c.mixed_direct ? "direct" : "factor",
     c.mixed_bottleneck, c.activation ? "leaky" : "linear",
