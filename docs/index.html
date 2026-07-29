@@ -58,13 +58,16 @@
      border:0;border-left:1px solid var(--accent);color:var(--accent);background:var(--accent-soft);
      padding:.42em .55em;line-height:1.15;white-space:nowrap}
   #gpu-btn:hover{filter:brightness(.97)}
-  /* "Copy a prompt for your coding agent" — deliberately OUTSIDE the install
-     pill. That pill copies exactly the command it shows; this copies a hidden
-     prompt, so styling it as a third segment would imply the label is what
-     lands on the clipboard. A dashed ghost pill reads as a distinct action and
-     stays secondary to the install CTA; it fills in on hover and turns green
-     when copied, so the state change is unmistakable. All colours are theme
-     variables — this page has light and dark modes. */
+  /* "agent prompt" — sits beside the version badge, ahead of the install pill,
+     and deliberately not inside it: that pill is ONE action in two variants
+     (CPU, +gpu), while this copies a prompt for a different audience. A dashed
+     ghost pill reads as a distinct, optional action and stays secondary to the
+     install CTA; it fills in and lifts on hover, then snaps to solid green
+     with a check when copied, so the state change is unmistakable. Note both
+     this and #install-btn now show a short label rather than the string they
+     copy, so each carries the exact text in its title= for anyone who wants to
+     read before pasting. All colours are theme variables — this page has light
+     and dark modes. */
   #agent-btn{font:inherit;font-size:.72rem;cursor:pointer;display:inline-flex;align-items:center;
      gap:.4em;border:1px dashed var(--accent);border-radius:6px;color:var(--accent);
      background:transparent;padding:.42em .66em;line-height:1.15;white-space:nowrap;
@@ -197,20 +200,20 @@
     <h1><b>Meth</b>Scope</h1>
     <span class="badge">cli</span>
     <a class="badge badge-ver" id="ver" href="https://github.com/zhou-lab/methscope-cli/tags">latest</a>
+    <button id="agent-btn" type="button"
+            data-cmd="Use methscope for sparse DNA methylation analysis — cell-type classification, deconvolution, and genome-wide CpG upscaling from a few thousand observed CpGs. Read https://zhou-lab.github.io/methscope-cli/llms.txt first — it covers install, fetching models with yame, the commands, and the traps."
+            title="Copy a prompt that points your coding agent at the methscope reference"
+            aria-label="Copy a prompt for your coding agent"><span class="ico"></span>agent prompt</button>
     <span class="install">
       <button id="install-btn" type="button"
               data-cmd="conda install -c zhou-lab -c conda-forge methscope"
-              title="Copy to clipboard"><span class="ico"></span>conda install -c zhou-lab -c conda-forge methscope</button>
+              title="conda install -c zhou-lab -c conda-forge methscope — click to copy"><span class="ico"></span>conda install methscope</button>
       <button id="gpu-btn" type="button"
               data-cmd="conda install -c zhou-lab -c conda-forge methscope-cuda"
               title="Copy the optional GPU package (linux-64; adds the CUDA upscale-train backend)">+gpu</button>
       <a class="ana" href="https://anaconda.org/zhou-lab/methscope"
          title="anaconda.org/zhou-lab/methscope" rel="noopener">↗</a>
     </span>
-    <button id="agent-btn" type="button"
-            data-cmd="Use methscope for sparse DNA methylation analysis — cell-type classification, deconvolution, and genome-wide CpG upscaling from a few thousand observed CpGs. Read https://zhou-lab.github.io/methscope-cli/llms.txt first — it covers install, fetching models with yame, the commands, and the traps."
-            title="Copy a prompt that points your coding agent at the methscope reference"
-            aria-label="Copy a prompt for your coding agent"><span class="ico"></span>agent prompt</button>
     <a class="builton" id="builton" href="https://zhou-lab.github.io/YAME/" hidden><span class="bl">built against</span><span class="br">YAME&nbsp;<span id="yame-ver"></span></span></a>
   </div>
   <p class="expand">Ultra-fast analysis of sparse DNA methylomes via <b>MRMP</b> (Most Recurrent
