@@ -66,8 +66,11 @@
      with a check when copied, so the state change is unmistakable. Note both
      this and #install-btn now show a short label rather than the string they
      copy, so each carries the exact text in its title= for anyone who wants to
-     read before pasting. All colours are theme variables — this page has light
-     and dark modes. */
+     read before pasting. #install-btn says "conda install" and not "conda
+     install methscope": the latter looks runnable but omits both channels, so
+     anyone retyping what they saw would fail or pull a different package. A
+     bare verb cannot be mistaken for something to paste. All colours are theme
+     variables — this page has light and dark modes. */
   #agent-btn{font:inherit;font-size:.72rem;cursor:pointer;display:inline-flex;align-items:center;
      gap:.4em;border:1px dashed var(--accent);border-radius:6px;color:var(--accent);
      background:transparent;padding:.42em .66em;line-height:1.15;white-space:nowrap;
@@ -207,7 +210,7 @@
     <span class="install">
       <button id="install-btn" type="button"
               data-cmd="conda install -c zhou-lab -c conda-forge methscope"
-              title="conda install -c zhou-lab -c conda-forge methscope — click to copy"><span class="ico"></span>conda install methscope</button>
+              title="conda install -c zhou-lab -c conda-forge methscope — click to copy"><span class="ico"></span>conda install</button>
       <button id="gpu-btn" type="button"
               data-cmd="conda install -c zhou-lab -c conda-forge methscope-cuda"
               title="Copy the optional GPU package (linux-64; adds the CUDA upscale-train backend)">+gpu</button>
