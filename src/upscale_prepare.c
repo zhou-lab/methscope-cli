@@ -103,7 +103,18 @@ static int usage(void) {
     "  --patterns N     retain feature summaries P1..PN (default 1000)\n"
     "  --in-memory      inflate the truth store once and reuse it for all replicates\n"
     "  --manifest PATH  write provenance TSV (default OUT.msur.tsv)\n"
-    "  -h, --help       show this help\n");
+    "  -h, --help       show this help\n"
+    "\n"
+    "One msur serves many models. What is stored per (cell, replicate) is the raw\n"
+    "summary -- beta and covered-CpG count for every pattern, plus the observed set\n"
+    "-- NOT the encoder input. Which projection of that the encoder sees is chosen\n"
+    "at TRAINING time, so a single msur covers every `upscale-train --features`\n"
+    "mode (missing / count / beta / scalar) and any `--patterns P` up to the N used\n"
+    "here. Only the *simulation* is fixed at this step: the cells, the replicate\n"
+    "count, the coverage ladder and --binarize. So featurize at the widest pattern\n"
+    "vocabulary you might ever want -- P can be narrowed later, never widened --\n"
+    "and vary features and width by retraining, which costs minutes against the\n"
+    "hours and tens of GB a rebuild here costs.\n");
   return 1;
 }
 

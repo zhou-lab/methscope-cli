@@ -48,18 +48,23 @@ static int usage(void) {
     "beta plus log1p(observed-CpG count); count zero represents missingness.\n"
     "An optional frozen learned trunk is shared by every processing unit.\n\n"
     "Required:\n"
-    "  -i, --data PATH          embedded-truth MSURAW2 training msur\n"
+    "  -i, --data PATH          embedded-truth MSURAW2/3 training msur\n"
     "  --units PATH             whole-genome MSUIDX1 processing-unit index\n"
-"                           (from upscale-set-units)\n"
+    "                           (from upscale-set-units)\n"
     "  --mrmp PATH              MRMPIDX1 artifact (preferred) or exported .cm;\n"
     "                           the runtime mask is bundled into the output\n"
     "  -o PATH                  self-contained output .updecx\n"
     "  --work-dir DIR           resumable unit checkpoints and bare UPDEC2\n\n"
     "Architecture:\n"
-    "  --patterns N             MRMP inputs (default 1000)\n"
+    "  --patterns N             MRMP inputs (default 1000). May be narrowed below\n"
+    "                           the msur's pattern count, never widened past it\n"
     "  --features MODE          beta, count, missing, or scalar (default count).\n"
-  "                           scalar = beta + ONE log1p(total covered CpGs), so\n"
-  "                           input is P+1 wide instead of 2P\n"
+    "                           scalar = beta + ONE log1p(total covered CpGs), so\n"
+    "                           input is P+1 wide instead of 2P.\n"
+    "                           Both of these are projections of what the msur\n"
+    "                           already stores, so one msur trains every mode and\n"
+    "                           width -- retrain to vary them rather than paying\n"
+    "                           for another upscale-featurize\n"
     "  --trunk PATH             optional frozen UPFAC3 shared trunk\n"
     "  --pure-bottleneck N      one-membership unit dimension (default 16)\n"
     "  --mixed-bottleneck N     mixed/PNA unit dimension (default 32)\n"
@@ -126,7 +131,7 @@ int main_upscale_train(int argc, char **argv) {
       else if (!strcmp(x, "missing")) c.feature_mode = MS_UPFEATURE_MISSING;
       else if (!strcmp(x, "beta")) c.feature_mode = MS_UPFEATURE_BETA;
       else if (!strcmp(x, "scalar")) c.feature_mode = MS_UPFEATURE_SCALAR;
-      else terr("--features must be beta, count, or missing", x);
+      else terr("--features must be beta, count, missing, or scalar", x);
     }
     else if (!strcmp(a, "--trunk") && i + 1 < argc) c.trunk_path = argv[++i];
     else if (!strcmp(a, "--pure-bottleneck") && i + 1 < argc) c.pure_bottleneck = u32(argv[++i], a);

@@ -41,11 +41,21 @@ needs an `ANACONDA_TOKEN` repository secret (an anaconda.org token with upload
 rights to the org). Cutting a release is then:
 
 ```sh
-# bump version in conda-recipe/meta.yaml and src/methscope.h, commit
-git tag -a v0.3 -m "methscope 0.3" && git push origin v0.3
+# bump METHSCOPE_VERSION in src/methscope.h only, commit
+git tag -a v0.4 -m "methscope 0.4" && git push origin v0.4
 ```
 
-The workflow guards that the tag matches the recipe version before uploading.
+Do **not** add a version to `meta.yaml`: it reads `METHSCOPE_VERSION`, which CI
+sets from the tag name, so the published version cannot drift from the release
+being built. A hardcoded one silently survived the `v0.2` tag once, and CI
+rebuilt-and-overwrote `0.1.1` instead of publishing `0.2`.
+
+Before uploading, the workflow checks that a *built artifact* carries the tag's
+version -- a stronger guard than comparing the tag against a version literal,
+since it verifies what will actually be published rather than what was declared.
+
+`src/methscope.h` has no Makefile dependency, so clear `src/*.o` after bumping
+or the binary keeps reporting the old version.
 
 ## Notes
 
