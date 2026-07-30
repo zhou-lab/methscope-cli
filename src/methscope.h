@@ -114,6 +114,6 @@ int main_upscale_trunk_train(int argc, char *argv[]);
 int main_bundle(int argc, char *argv[]);
 int main_unbundle(int argc, char *argv[]);
 
-#define METHSCOPE_VERSION "0.4"
+#define METHSCOPE_VERSION "0.5"
 
 #endif /* METHSCOPE_H */
