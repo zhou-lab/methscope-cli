@@ -58,37 +58,29 @@
      border:0;border-left:1px solid var(--accent);color:var(--accent);background:var(--accent-soft);
      padding:.42em .55em;line-height:1.15;white-space:nowrap}
   #gpu-btn:hover{filter:brightness(.97)}
-  /* "agent prompt" — sits beside the version badge, ahead of the install pill,
-     and deliberately not inside it: that pill is ONE action in two variants
-     (CPU, +gpu), while this copies a prompt for a different audience. A dashed
-     ghost pill reads as a distinct, optional action and stays secondary to the
-     install CTA; it matches that button's geometry and copy glyph exactly, so
-     the two sit as siblings rather than as two unrelated widgets, and differs
-     only in being outlined instead of filled. It fills in on hover and turns
-     solid green with a check when copied. Note both
-     this and #install-btn now show a short label rather than the string they
-     copy, so each carries the exact text in its title= for anyone who wants to
-     read before pasting. #install-btn says "conda install" and not "conda
-     install methscope": the latter looks runnable but omits both channels, so
-     anyone retyping what they saw would fail or pull a different package. A
-     bare verb cannot be mistaken for something to paste. All colours are theme
-     variables — this page has light and dark modes. */
-  #agent-btn{font:inherit;font-size:.74rem;cursor:pointer;display:inline-flex;align-items:center;
-     gap:.5em;border:1px dashed var(--accent);border-radius:6px;color:var(--accent);
-     background:transparent;line-height:1.15;white-space:nowrap;margin-left:6px;
-     /* Height must equal #install-btn's. That one has border:0, so its box is
-        .42em padding + 1.15em line; this one carries a 1px dashed edge, which
-        box-sizing:border-box does not absorb on a content-sized element. Take
-        the 1px back out of the vertical padding and the two agree exactly;
-        font-size and line-height have to match for the em units to mean the
-        same thing, hence .74rem here and not .72rem. */
-     padding:calc(.42em - 1px) .7em;
-     transition:background .15s,border-color .15s,color .15s}
-  #agent-btn:hover{background:var(--accent-soft);border-style:solid}
+  /* "agent prompt" — the same filled treatment as #install-btn, matching the
+     YAME page. It stays a separate pill because it copies a prompt rather than
+     a command, but it is the same species of control: same monospace, size,
+     padding and copy glyph.
+     The 1px border is what makes the heights agree. #install-btn has border:0
+     and sits inside .install, which supplies a 1px edge and overflow:hidden --
+     so the PILL is 1px + button + 1px. Bordering this button by the same 1px
+     matches that outer box; padding-compensating to match the inner button
+     instead leaves it 2px short. Both buttons show a short label rather than
+     the string they copy, so each carries the exact text in title=.
+     #install-btn says "conda install" and not "conda install methscope": the
+     latter looks runnable but omits both channels, so anyone retyping what they
+     saw would fail or pull a different package from defaults. A bare verb
+     cannot be mistaken for something to paste. All colours are theme variables
+     -- this page has light and dark modes. */
+  #agent-btn{font:inherit;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+     font-size:.74rem;cursor:pointer;border:1px solid var(--accent);border-radius:6px;
+     color:var(--on-accent);background:var(--accent);padding:.42em .7em;line-height:1.15;
+     display:inline-flex;align-items:center;gap:.5em;white-space:nowrap;margin-left:4px}
+  #agent-btn:hover{filter:brightness(1.08)}
   #agent-btn:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
   #agent-btn .ico::before{content:"⧉";opacity:.75}
-  #agent-btn.done{border-style:solid;border-color:var(--ok);color:var(--ok)}
-  #agent-btn.done .ico::before{content:"✓"}
+  #agent-btn.done .ico::before{content:"✓";opacity:1}
   #gpu-btn:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
   #gpu-btn.done{color:var(--on-accent);background:var(--accent)}
   .expand{color:var(--muted);margin:.5em 0 .4em;font-size:.88rem;max-width:82ch;line-height:1.45}
