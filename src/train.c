@@ -140,6 +140,10 @@ static int train_usage(void) {
     "                   positional, and labels come from the artifact unless -l is\n"
     "                   given. Featurization is single-threaded, so this is how to\n"
     "                   train repeatedly on the same cells without repeating it.\n"
+    "  --hierarchy TSV  Embed a label taxonomy in the model (label, compartment,\n"
+    "                   lineage, group, subtype). `classify --levels` then reports\n"
+    "                   the path, and an external cohort labelled only coarsely can\n"
+    "                   still be scored at the level both sides resolve.\n"
     "  --scalar-coverage  Append ONE extra feature, log1p(covered CpGs) for the\n"
     "                   record, after the pattern columns -- the classifier analogue\n"
     "                   of the upscale model's `--features scalar`. Worth it when\n"
@@ -153,13 +157,14 @@ static int train_usage(void) {
 
 int main_train(int argc, char *argv[]) {
   const char *labels_path = NULL, *out_path = NULL, *framework = "xgboost";
-  const char *data_path = NULL;
+  const char *data_path = NULL, *hier_path = NULL;
   int npattern = 0, nrounds = 0, include_pna = 0, scalar_cov = 0;
   int i = 1;
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-l") == 0 && i+1 < argc) labels_path = argv[++i];
     else if (strcmp(argv[i], "--data") == 0 && i+1 < argc) data_path = argv[++i];
     else if (strcmp(argv[i], "--scalar-coverage") == 0) scalar_cov = 1;
+    else if (strcmp(argv[i], "--hierarchy") == 0 && i+1 < argc) hier_path = argv[++i];
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out_path    = argv[++i];
     else if (strcmp(argv[i], "-p") == 0 && i+1 < argc)
       npattern = parse_nonneg_int(argv[++i], "-p expects a non-negative integer");
@@ -318,6 +323,22 @@ int main_train(int argc, char *argv[]) {
     /* embed labels; save as loose .ubj or a (trimmed-mrmp) .ubjx bundle */
     ms_booster_set_meta(booster, uniq, K);
     if (scalar_cov) ms_booster_set_scalar_cov(booster);
+    if (hier_path) {                    /* travel with the model, not beside it */
+      FILE *hf = fopen(hier_path, "r");
+      if (!hf) tdie("cannot open --hierarchy", hier_path);
+      size_t cap = 1 << 16, n = 0;
+      char *buf = malloc(cap);
+      if (!buf) tdie("out of memory", NULL);
+      size_t got;
+      while ((got = fread(buf + n, 1, cap - n - 1, hf)) > 0) {
+        n += got;
+        if (n + 1 >= cap) { cap <<= 1; buf = realloc(buf, cap);
+                            if (!buf) tdie("out of memory", NULL); }
+      }
+      buf[n] = 0; fclose(hf);
+      ms_booster_set_hier(booster, buf);
+      free(buf);
+    }
     if (bundled) {
       char tmpl[] = "/tmp/methscope_ubj_XXXXXX.ubj";
       int fd = mkstemps(tmpl, 4);

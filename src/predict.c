@@ -14,6 +14,7 @@
 #include "bmeta.h"
 #include "bundle.h"
 #include "msfm.h"    /* ms_msfm_to_matrix -- the --data feature path */
+#include "index.h"   /* get_fname_index -- --threads needs the .cg index */
 #include <xgboost/c_api.h>
 
 #define XGCHK(call) do {                                            \
@@ -68,7 +69,17 @@ static int predict_usage(void) {
     "Options:\n"
     "  -o <out.tsv>   Write output to a file instead of stdout.\n"
     "  --probs        Append one column per class with its predicted probability.\n"
+    "  --levels       Append the predicted label's whole taxonomy path\n"
+    "                 (compartment, lineage, group, subtype).\n"
+    "  --level NAME   Append just one level -- compartment | lineage | group |\n"
+    "                 subtype. Use this to score against a cohort labelled only\n"
+    "                 that coarsely: collapse the prediction to the level the\n"
+    "                 truth resolves to, and compare there.\n"
+    "                 Both need a model trained with `classify-train --hierarchy`.\n"
     "  --no-header    Suppress the header line.\n"
+    "  --threads T    Featurize with T workers (default 1). Cells are partitioned\n"
+    "                 across workers, each seeking its own records, so this needs\n"
+    "                 the query's .cg index; a stream keeps the serial path.\n"
     "  --data <in.msfm>  Score a prebuilt feature artifact (classify-featurize)\n"
     "                 instead of featurizing <query.cg>. <query.cg> is then omitted.\n"
     "                 Featurization dominates the cost, so this is how to score many\n"
@@ -117,13 +128,19 @@ static int predict_linear(const char *query_cg, const char *ref_mrmp,
 
 int main_predict(int argc, char *argv[]) {
   const char *out_path = NULL, *data_path = NULL;
-  int with_probs = 0;
+  unsigned threads = 1;
+  int with_probs = 0, with_levels = 0;
+  const char *one_level = NULL;
   int no_header = 0;
   int i = 1;
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-o") == 0 && i + 1 < argc) out_path = argv[++i];
     else if (strcmp(argv[i], "--data") == 0 && i + 1 < argc) data_path = argv[++i];
+    else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc)
+      threads = (unsigned)strtoul(argv[++i], NULL, 10);
     else if (strcmp(argv[i], "--probs") == 0) with_probs = 1;
+    else if (strcmp(argv[i], "--levels") == 0) with_levels = 1;
+    else if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) one_level = argv[++i];
     else if (strcmp(argv[i], "--no-header") == 0) no_header = 1;
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       predict_usage(); return 0;
@@ -199,9 +216,28 @@ int main_predict(int argc, char *argv[]) {
   int K = 0;
   char **labels = ms_booster_get_labels(booster, &K);  /* NULL if not annotated */
 
+  /* Featurizing the query is the whole cost of scoring a .cg, and it is per
+   * record, so it threads. The threaded builder needs the .cg index to seek, so
+   * a stream ('-') or an unindexed file keeps the serial path -- and says so,
+   * rather than silently running 16x slower than asked. */
   uint32_t *levels = NULL;
-  ms_matrix_t *m = data_path ? ms_msfm_to_matrix(data_path, NULL, &levels)
-                             : ms_matrix_build(query_cg, ref_mrmp);
+  ms_matrix_t *m;
+  if (data_path) {
+    m = ms_msfm_to_matrix(data_path, NULL, &levels);
+  } else if (threads > 1) {
+    char *fidx = get_fname_index((char *)query_cg);
+    int have_idx = fidx && access(fidx, R_OK) == 0;
+    free(fidx);
+    if (have_idx) {
+      m = ms_matrix_build_threaded(query_cg, ref_mrmp, (uint32_t)n_pat, threads, &levels);
+    } else {
+      fprintf(stderr, "[methscope] classify: --threads needs a .cg index; "
+              "falling back to the single-threaded scan\n");
+      m = ms_matrix_build(query_cg, ref_mrmp);
+    }
+  } else {
+    m = ms_matrix_build(query_cg, ref_mrmp);
+  }
   if (m->n_patterns < n_pat)
     pdie("reference .mrmp has fewer patterns than the booster expects", ref_mrmp);
 
@@ -241,6 +277,45 @@ int main_predict(int argc, char *argv[]) {
     pdie("embedded label count does not match the booster's num_class", model_name);
   K = K_pred;
 
+  /* Taxonomy path per class, parsed from the model's own attribute so a
+   * prediction is self-describing and needs no side table. */
+  static const char *LEVEL_NAME[4] = {"compartment", "lineage", "group", "subtype"};
+  int lvl_col = -1;
+  char **hier = NULL;              /* K * 4 entries, class-index order */
+  if (with_levels || one_level) {
+    if (one_level) {
+      for (int c = 0; c < 4; ++c)
+        if (!strcmp(one_level, LEVEL_NAME[c])) lvl_col = c;
+      if (lvl_col < 0)
+        pdie("--level must be compartment, lineage, group or subtype", one_level);
+    }
+    char *raw = ms_booster_get_hier(booster);
+    if (!raw)
+      pdie("model carries no hierarchy; retrain with `classify-train --hierarchy`",
+           model_name);
+    hier = calloc((size_t)K * 4, sizeof(char *));
+    if (!hier) pdie("out of memory (hierarchy)", NULL);
+    char *save = NULL;
+    for (char *line = strtok_r(raw, "\n", &save); line;
+         line = strtok_r(NULL, "\n", &save)) {
+      char *f[5] = {0}; int nf = 0;
+      for (char *p2 = line; nf < 5; ) {
+        f[nf++] = p2;
+        char *t = strchr(p2, '\t');
+        if (!t) break;
+        *t = 0; p2 = t + 1;
+      }
+      if (nf < 5 || !labels) continue;
+      for (int c = 0; c < K; ++c)
+        if (!strcmp(labels[c], f[0]))
+          for (int j = 0; j < 4; ++j) hier[(size_t)c * 4 + j] = strdup(f[j + 1]);
+    }
+    free(raw);
+    /* a class the table omits reports NA rather than an empty column */
+    for (size_t k = 0; k < (size_t)K * 4; ++k)
+      if (!hier[k]) hier[k] = strdup("NA");
+  }
+
   /* Without embedded labels (un-annotated booster), fall back to numeric names. */
   char numbuf[16];
   #define LABEL(c) (labels ? labels[c] : (snprintf(numbuf, sizeof(numbuf), "%d", (c)), numbuf))
@@ -251,6 +326,9 @@ int main_predict(int argc, char *argv[]) {
 
   if (!no_header) {
     fputs("cell\tprediction_label\tconfidence", fout);
+    if (with_levels)
+      for (int c = 0; c < 4; ++c) fprintf(fout, "\t%s", LEVEL_NAME[c]);
+    else if (lvl_col >= 0) fprintf(fout, "\t%s", LEVEL_NAME[lvl_col]);
     if (with_probs)
       for (int c = 0; c < K; ++c) fprintf(fout, "\t%s", LABEL(c));
     fputc('\n', fout);
@@ -263,6 +341,9 @@ int main_predict(int argc, char *argv[]) {
     for (int c = 0; c < K; ++c) if (p[c] >= best) { best = p[c]; arg = c; } /* ties -> last */
     double conf = confidence_score(p, K);
     fprintf(fout, "%s\t%s\t%.6f", m->cell_names[r], LABEL(arg), conf);
+    if (with_levels)
+      for (int c = 0; c < 4; ++c) fprintf(fout, "\t%s", hier[(size_t)arg * 4 + c]);
+    else if (lvl_col >= 0) fprintf(fout, "\t%s", hier[(size_t)arg * 4 + lvl_col]);
     if (with_probs)
       for (int c = 0; c < K; ++c) fprintf(fout, "\t%.6f", p[c]);
     fputc('\n', fout);

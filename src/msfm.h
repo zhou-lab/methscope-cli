@@ -101,6 +101,21 @@ void ms_msfm_close(ms_msfm_t *f);
 ms_matrix_t *ms_msfm_to_matrix(const char *path, char ***labels_out,
                                uint32_t **levels_out);
 
+/* Featurize a query .cg into the ms_matrix_t the label models expect, using the
+ * threaded scatter-add builder instead of the genome-scanning summarize1 path.
+ * Semantically identical -- verified bit-for-bit over 4.3M u16 codes -- but
+ * O(covered CpGs) per record rather than O(genome), and it uses `threads`
+ * workers. Needs the query's .cg index, since workers seek per record.
+ *
+ * *levels_out (optional) receives the per-record covered-CpG total, which is
+ * what a --scalar-coverage model needs; caller frees. Betas round-trip through
+ * u16 (step 1.5e-5), so a confidence can differ in its last decimals from the
+ * double-precision path -- far below the sampling noise on any real beta, and
+ * predicted labels were unaffected across every comparison run so far. */
+ms_matrix_t *ms_matrix_build_threaded(const char *query, const char *mrmp,
+                                      uint32_t patterns, unsigned threads,
+                                      uint32_t **levels_out);
+
 /* `methscope inspect` reporter. */
 void ms_msfm_report(const char *path);
 

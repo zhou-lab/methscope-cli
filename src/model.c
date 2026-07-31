@@ -47,6 +47,20 @@ void ms_booster_set_meta(BoosterHandle b, char *const *labels, int num_class) {
   free(csv);
 }
 
+void ms_booster_set_hier(BoosterHandle b, const char *tsv) {
+  XGCHK(XGBoosterSetAttr(b, MS_ATTR_HIERARCHY, tsv));
+}
+
+char *ms_booster_get_hier(BoosterHandle b) {
+  const char *val = NULL;
+  int success = 0;
+  if (XGBoosterGetAttr(b, MS_ATTR_HIERARCHY, &val, &success) != 0 || !success || !val)
+    return NULL;
+  char *out = strdup(val);
+  if (!out) die("out of memory (hierarchy)", NULL);
+  return out;
+}
+
 void ms_booster_set_scalar_cov(BoosterHandle b) {
   XGCHK(XGBoosterSetAttr(b, MS_ATTR_SCALARCOV, "log1p"));
 }

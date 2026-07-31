@@ -181,6 +181,37 @@ static void *worker(void *arg) {
 
 /* ---- entry point -------------------------------------------------------- */
 
+ms_matrix_t *ms_matrix_build_threaded(const char *query, const char *mrmp,
+                                      uint32_t patterns, unsigned threads,
+                                      uint32_t **levels_out) {
+  uint32_t one = 0;                       /* one replicate, native coverage */
+  uint16_t *beta; uint32_t *levels; char **names; uint32_t n_cells, ncol;
+  ms_msfm_build_sampled(query, mrmp, patterns, &one, 1, 0, 1, threads,
+                        &beta, &levels, &names, &n_cells, &ncol);
+
+  ms_matrix_t *m = bmal(sizeof(*m), "matrix");
+  memset(m, 0, sizeof(*m));
+  m->n_cells = (int)n_cells; m->n_patterns = (int)ncol;
+  m->cell_names = names;                  /* take ownership */
+  m->pattern_names = bmal((size_t)ncol * sizeof(char *), "pattern names");
+  for (uint32_t c = 0; c + 1 < ncol; ++c) {
+    char b[16]; snprintf(b, sizeof(b), "P%u", c + 1);
+    m->pattern_names[c] = strdup(b);
+  }
+  m->pattern_names[ncol - 1] = strdup("Pna");   /* canonical: Pna last */
+  m->M = bmal((size_t)n_cells * ncol * sizeof(double), "betas");
+  m->N = bmal((size_t)n_cells * ncol * sizeof(int), "counts");
+  for (uint64_t k = 0; k < (uint64_t)n_cells * ncol; ++k) {
+    m->M[k] = msfm_decode(beta[k]);
+    /* no per-pattern counts here; N is only ever asked "observed?", and the
+     * exact per-record total travels in levels_out */
+    m->N[k] = beta[k] == MSFM_NA ? 0 : 1;
+  }
+  free(beta);
+  if (levels_out) *levels_out = levels; else free(levels);
+  return m;
+}
+
 void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t patterns,
                            const uint32_t *rep_sample, uint32_t n_reps,
                            int binarize, uint64_t seed, unsigned threads,

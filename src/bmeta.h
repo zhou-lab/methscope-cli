@@ -21,9 +21,22 @@
  * rather than relying on the caller to remember. Value is the transform name. */
 #define MS_ATTR_SCALARCOV "methscope_scalar_cov"
 
+/* The label hierarchy, so a prediction is self-describing: one row per class,
+ * "label\tcompartment\tlineage\tgroup\tsubtype", rows newline-separated.
+ * Lets `classify --levels` report the taxonomy path without a side table, and
+ * lets an external cohort be scored at whatever granularity BOTH sides resolve
+ * -- a coarse "T cell" truth meets a "Blood.T.Mem.CD4" prediction at `group`.
+ * "NA" at a level means the source does not resolve that far. */
+#define MS_ATTR_HIERARCHY "methscope_hierarchy"
+
 /* Embed the class labels (class-index order) into the booster's attributes.
  * labels[] has num_class entries. Exits on XGBoost error. */
 void ms_booster_set_meta(BoosterHandle b, char *const *labels, int num_class);
+
+/* Embed / read the label hierarchy (see MS_ATTR_HIERARCHY). ms_booster_get_hier
+ * returns the raw TSV block or NULL; caller frees. */
+void  ms_booster_set_hier(BoosterHandle b, const char *tsv);
+char *ms_booster_get_hier(BoosterHandle b);
 
 /* Mark / test the scalar coverage feature (see MS_ATTR_SCALARCOV). */
 void ms_booster_set_scalar_cov(BoosterHandle b);
