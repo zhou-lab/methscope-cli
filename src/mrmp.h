@@ -12,9 +12,16 @@
  *   '0' unmethylated, '1' methylated, '2' missing/ambiguous.
  * binstring emits '2' only as an all-or-nothing per-CpG sentinel, so the sole
  * pattern containing a '2' is the all-'2' string (PNA). Every other pattern is
- * pure {0,1}. Each pattern is packed as a base-3 uint64 key; the build caps the
- * reference at 40 samples (3^40 < 2^64 <= 3^41), most-significant digit =
- * sample 0. */
+ * pure {0,1}.
+ *
+ * A pattern is packed base-3, 40 trits per uint64 (3^40 < 2^64 <= 3^41), into
+ * ceil(n_samples/40) words: word 0 holds samples 0..39, word 1 the next 40, and
+ * within a word the most-significant digit is the lowest sample index. Word
+ * order therefore compares the same way the sample string does. The reference
+ * used to be capped at 40 samples; the width is now derived from `n_samples`,
+ * which the header already carries, so every artifact written under the cap has
+ * exactly one word and stays byte-identical -- no version bump, no compat
+ * shim. Use mrmp_key_words() / mrmp_pattern_stride() rather than assuming. */
 #ifndef MS_MRMP_H
 #define MS_MRMP_H
 
@@ -40,7 +47,10 @@ typedef struct {
   uint32_t flags;             /* MRMP_FLAG_* */
   uint64_t n_cpg;             /* genomic CpGs (per-CpG membership entries) */
   uint64_t n_candidates;      /* distinct {0,1} patterns (ranked; excl. PNA) */
-  uint64_t pna_key;           /* base-3 key of the all-'2' sentinel */
+  uint64_t pna_key;           /* base-3 key of the all-'2' sentinel, word 0.
+                               * Informational: the sentinel is fully determined
+                               * by n_samples, and PNA CpGs are flagged by the
+                               * membership sentinel, not by matching this. */
   uint64_t pna_cpg;           /* CpGs resolved to the PNA sentinel */
   uint32_t mincov;            /* binstring -c (min coverage) */
   uint32_t pad0;
@@ -56,11 +66,28 @@ typedef struct {
   uint64_t reserved;          /* pad to 128 bytes */
 } mrmp_header_t;
 
-/* One ranked candidate pattern (rank == array index; label = P(rank+1)). */
+/* One ranked candidate pattern (rank == array index; label = P(rank+1)).
+ *
+ * On disk a record is mrmp_key_words(n_samples) key words followed by `count`,
+ * i.e. mrmp_pattern_stride(n_samples) bytes. This struct is that record for the
+ * one-word case, which is every artifact written before the width became
+ * derived -- readers must stride by mrmp_pattern_stride(), not sizeof(). */
 typedef struct {
-  uint64_t key;    /* base-3 packed pattern */
+  uint64_t key;    /* base-3 packed pattern (word 0) */
   uint64_t count;  /* CpGs carrying this exact pattern */
 } mrmp_pattern_t;
+
+#define MRMP_TRITS_PER_WORD 40u   /* 3^40 < 2^64 <= 3^41 */
+
+/* uint64 words a pattern of n_samples occupies (>= 1, so 0 samples is benign). */
+static inline uint32_t mrmp_key_words(uint32_t n_samples) {
+  return n_samples ? (n_samples + MRMP_TRITS_PER_WORD - 1) / MRMP_TRITS_PER_WORD : 1u;
+}
+
+/* Bytes per on-disk pattern record: the key words plus the count. */
+static inline uint64_t mrmp_pattern_stride(uint32_t n_samples) {
+  return (uint64_t)mrmp_key_words(n_samples) * sizeof(uint64_t) + sizeof(uint64_t);
+}
 
 int main_mrmp_build(int argc, char *argv[]);
 int main_mrmp_export(int argc, char *argv[]);

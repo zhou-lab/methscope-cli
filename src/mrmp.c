@@ -48,32 +48,49 @@ static uint64_t parse_u64(const char *s, const char *what) {
 
 /* ---------------- base-3 pattern key <-> string ------------------------- */
 
-/* Decode a base-3 key into a length-`len` string of '0'/'1'/'2' (sample 0 is
- * the most-significant digit; matches the encode loop in build). */
-static void key_to_string(uint64_t key, uint32_t len, char *out) {
+/* A key is mrmp_key_words(ns) words; word w holds samples [40w, 40w+40), most
+ * significant digit first, so comparing words in order compares the sample
+ * string in order. With ns <= 40 this is one word packed exactly as before. */
+
+/* Decode a key into a length-`len` string of '0'/'1'/'2'. */
+static void key_to_string(const uint64_t *key, uint32_t len, char *out) {
   for (uint32_t i = 0; i < len; ++i) out[i] = '0';
   out[len] = '\0';
-  for (uint32_t i = 0; i < len; ++i) {
-    out[len - 1 - i] = (char)('0' + (int)(key % 3));
-    key /= 3;
+  uint32_t nw = mrmp_key_words(len);
+  for (uint32_t w = 0; w < nw; ++w) {
+    uint32_t lo = w * MRMP_TRITS_PER_WORD;
+    uint32_t n  = len - lo < MRMP_TRITS_PER_WORD ? len - lo : MRMP_TRITS_PER_WORD;
+    uint64_t k  = key[w];
+    for (uint32_t i = 0; i < n; ++i) {         /* fill this word right to left */
+      out[lo + n - 1 - i] = (char)('0' + (int)(k % 3));
+      k /= 3;
+    }
   }
 }
 
-/* ---------------- open-addressing hash: u64 key -> pattern slot ---------- */
+/* Lexicographic by sample order, which is word order (see the packing note). */
+static int key_cmp(const uint64_t *a, const uint64_t *b, uint32_t nw) {
+  for (uint32_t w = 0; w < nw; ++w)
+    if (a[w] != b[w]) return a[w] < b[w] ? -1 : 1;
+  return 0;
+}
+
+/* ---------------- open-addressing hash: key -> pattern slot -------------- */
 
 typedef struct {
-  uint64_t *keys;      /* slot -> key (0 empty; real all-0 key IS 0, tracked) */
+  uint64_t *keys;      /* cap * nw words; emptiness is slot[i] == 0, not the key */
   uint32_t *slot;      /* slot -> pattern index + 1 (0 == empty) */
   uint64_t cap;        /* power of two */
   uint64_t mask;
   uint64_t used;       /* occupied slots; drives the grow-at-70% rebuild */
+  uint32_t nw;         /* key words */
 } phash_t;
 
-static void phash_init(phash_t *h, uint64_t expect) {
+static void phash_init(phash_t *h, uint64_t expect, uint32_t nw) {
   uint64_t cap = 1024;
   while (cap < expect * 2) cap <<= 1;   /* headroom below the 0.7 load cap */
-  h->cap = cap; h->mask = cap - 1; h->used = 0;
-  h->keys = xcalloc(cap, sizeof(uint64_t), "phash keys");
+  h->cap = cap; h->mask = cap - 1; h->used = 0; h->nw = nw;
+  h->keys = xcalloc(cap * nw, sizeof(uint64_t), "phash keys");
   h->slot = xcalloc(cap, sizeof(uint32_t), "phash slot");
 }
 
@@ -83,46 +100,60 @@ static uint64_t mix64(uint64_t x) {   /* splitmix64 finalizer */
   x ^= x >> 31; return x;
 }
 
+/* Fold every word in, so two patterns differing only past word 0 do not
+ * collide into the same probe sequence. */
+static uint64_t key_hash(const uint64_t *key, uint32_t nw) {
+  uint64_t x = 0;
+  for (uint32_t w = 0; w < nw; ++w) x = mix64(x ^ key[w]);
+  return x;
+}
+
 /* Double the table and re-key every occupied slot. Without this a reference
  * with more distinct patterns than the initial table could hold would spin
  * forever (open addressing never finds an empty slot once full), so a denser-
  * than-expected reference must trigger a grow, not a silent hang. */
 static void phash_rebuild(phash_t *h) {
   uint64_t ncap = h->cap << 1, nmask = ncap - 1;
-  uint64_t *nkeys = xcalloc(ncap, sizeof(uint64_t), "phash keys");
+  uint32_t nw = h->nw;
+  uint64_t *nkeys = xcalloc(ncap * nw, sizeof(uint64_t), "phash keys");
   uint32_t *nslot = xcalloc(ncap, sizeof(uint32_t), "phash slot");
   for (uint64_t i = 0; i < h->cap; ++i) {
     if (!h->slot[i]) continue;
-    uint64_t j = mix64(h->keys[i]) & nmask;
+    uint64_t j = key_hash(h->keys + i * nw, nw) & nmask;
     while (nslot[j]) j = (j + 1) & nmask;
-    nkeys[j] = h->keys[i]; nslot[j] = h->slot[i];
+    memcpy(nkeys + j * nw, h->keys + i * nw, nw * sizeof(uint64_t));
+    nslot[j] = h->slot[i];
   }
   free(h->keys); free(h->slot);
   h->keys = nkeys; h->slot = nslot; h->cap = ncap; h->mask = nmask;
 }
 
-/* Return existing pattern index for key, or add via *n_pat and pat[]. */
-static uint32_t phash_intern(phash_t *h, uint64_t key,
-                             mrmp_pattern_t *pat, uint64_t *n_pat) {
+/* Return existing pattern index for key, or append to keys[]/counts[]. */
+static uint32_t phash_intern(phash_t *h, const uint64_t *key,
+                             uint64_t *pkeys, uint64_t *pcount, uint64_t *n_pat) {
   if ((h->used + 1) * 10 >= h->cap * 7) phash_rebuild(h); /* grow at 70% */
-  uint64_t i = mix64(key) & h->mask;
+  uint32_t nw = h->nw;
+  uint64_t i = key_hash(key, nw) & h->mask;
   for (;;) {
     if (!h->slot[i]) {
       uint32_t idx = (uint32_t)(*n_pat)++;
-      pat[idx].key = key; pat[idx].count = 0;
-      h->keys[i] = key; h->slot[i] = idx + 1; ++h->used;
+      memcpy(pkeys + (uint64_t)idx * nw, key, nw * sizeof(uint64_t));
+      pcount[idx] = 0;
+      memcpy(h->keys + i * nw, key, nw * sizeof(uint64_t));
+      h->slot[i] = idx + 1; ++h->used;
       return idx;
     }
-    if (h->keys[i] == key) return h->slot[i] - 1;
+    if (!key_cmp(h->keys + i * nw, key, nw)) return h->slot[i] - 1;
     i = (i + 1) & h->mask;
   }
 }
 
-static uint32_t phash_find(const phash_t *h, uint64_t key) {
-  uint64_t i = mix64(key) & h->mask;
+static uint32_t phash_find(const phash_t *h, const uint64_t *key) {
+  uint32_t nw = h->nw;
+  uint64_t i = key_hash(key, nw) & h->mask;
   for (;;) {
     if (!h->slot[i]) return MRMP_PNA_MEMBERSHIP;
-    if (h->keys[i] == key) return h->slot[i] - 1;
+    if (!key_cmp(h->keys + i * nw, key, nw)) return h->slot[i] - 1;
     i = (i + 1) & h->mask;
   }
 }
@@ -149,8 +180,7 @@ static char **read_sample_names(const char *ref, uint32_t *n_out) {
   }
   free(line); fclose(f);
   if (!n) die("reference index is empty", idx);
-  if (n > 40) /* 3^40 < 2^64 < 3^41 */
-    die("more than 40 samples exceeds the base-3 uint64 key", idx);
+  /* No sample cap: the key widens to ceil(n/40) words (see mrmp.h). */
   *n_out = (uint32_t)n;
   return names;
 }
@@ -161,10 +191,10 @@ static char **read_sample_names(const char *ref, uint32_t *n_out) {
  * reproducing YAME rowop_binstring: ambiguous cells are filled with the CpG's
  * confident majority; a CpG becomes the all-'2' sentinel when its ambiguous
  * fraction exceeds max_ambig or its confident majority is not sweeping. */
-static uint64_t resolve_cpg(const uint8_t *meth, const uint8_t *ambig,
-                            uint64_t i, uint32_t ns, uint32_t stride,
-                            uint64_t n_cpg, float min_fold, float max_ambig,
-                            uint64_t pna_key, int *is_pna) {
+static void resolve_cpg(const uint8_t *meth, const uint8_t *ambig,
+                        uint64_t i, uint32_t ns, uint32_t stride,
+                        uint64_t n_cpg, float min_fold, float max_ambig,
+                        const uint64_t *pna_key, int *is_pna, uint64_t *key) {
   uint32_t n1 = 0, namb = 0;
   for (uint32_t g = 0; g < stride; ++g) {
     n1   += (uint32_t)__builtin_popcount(meth[(uint64_t)g * n_cpg + i]);
@@ -174,32 +204,34 @@ static uint64_t resolve_cpg(const uint8_t *meth, const uint8_t *ambig,
   int fill_one = (n1 > n0);                       /* exact tie -> '0' */
   uint32_t hi = fill_one ? n1 : n0, lo = fill_one ? n0 : n1;
   int sweeping = (hi > 0) && (lo == 0 || (double)hi >= min_fold * (double)lo);
+  uint32_t nw = mrmp_key_words(ns);
   if ((ns && (double)namb > max_ambig * (double)ns) || (namb > 0 && !sweeping)) {
     *is_pna = 1;
-    return pna_key;
+    memcpy(key, pna_key, nw * sizeof(uint64_t));
+    return;
   }
   *is_pna = 0;
-  uint64_t key = 0;
+  for (uint32_t w = 0; w < nw; ++w) key[w] = 0;
   for (uint32_t s = 0; s < ns; ++s) {
     uint64_t off = (uint64_t)(s >> 3) * n_cpg + i;
     int digit;
     if ((ambig[off] >> (s & 7)) & 1) digit = fill_one ? 1 : 0;
     else digit = (meth[off] >> (s & 7)) & 1;
-    key = key * 3 + (uint64_t)digit;
+    key[s / MRMP_TRITS_PER_WORD] = key[s / MRMP_TRITS_PER_WORD] * 3 + (uint64_t)digit;
   }
-  return key;
 }
 
 /* ---------------- ranking (count desc, key asc) ------------------------- */
 
-static mrmp_pattern_t *g_pat;
+static const uint64_t *g_keys;   /* n_pat * g_nw */
+static const uint64_t *g_count;
+static uint32_t g_nw;
 static int rank_cmp(const void *a, const void *b) {
   uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
-  if (g_pat[x].count != g_pat[y].count)
-    return g_pat[x].count > g_pat[y].count ? -1 : 1;   /* count desc */
-  if (g_pat[x].key != g_pat[y].key)
-    return g_pat[x].key < g_pat[y].key ? -1 : 1;        /* key asc */
-  return 0;
+  if (g_count[x] != g_count[y])
+    return g_count[x] > g_count[y] ? -1 : 1;            /* count desc */
+  return key_cmp(g_keys + (uint64_t)x * g_nw,           /* key asc */
+                 g_keys + (uint64_t)y * g_nw, g_nw);
 }
 
 /* ---------------- build -------------------------------------------------- */
@@ -294,29 +326,38 @@ int main_mrmp_build(int argc, char *argv[]) {
   /* Pass 2: resolve every CpG to a pattern key and count patterns. The keys
    * are not stored; the membership pass below re-derives them from the planes,
    * trading a cheap recompute for ~n_cpg*8 bytes of RAM. */
-  uint64_t pna_key = 0;
-  for (uint32_t s = 0; s < ns; ++s) pna_key = pna_key * 3 + 2;  /* all-'2' */
+  uint32_t nw = mrmp_key_words(ns);
+  uint64_t *pna_key = xcalloc(nw, sizeof(uint64_t), "pna key");
+  for (uint32_t s = 0; s < ns; ++s)
+    pna_key[s / MRMP_TRITS_PER_WORD] = pna_key[s / MRMP_TRITS_PER_WORD] * 3 + 2;
 
-  phash_t h; phash_init(&h, 1u << 21);   /* ~2.4M patterns; grows past 0.7 load */
+  phash_t h; phash_init(&h, 1u << 21, nw); /* ~2.4M patterns; grows past 0.7 load */
   uint64_t pat_cap = 1u << 20, n_pat = 0;
-  mrmp_pattern_t *pat = xcalloc(pat_cap, sizeof(mrmp_pattern_t), "pattern table");
+  /* Keys and counts are separate arrays because a record is 8*nw+8 bytes, not a
+   * fixed struct; they are interleaved back into that layout on write. */
+  uint64_t *pkeys = xcalloc(pat_cap * nw, sizeof(uint64_t), "pattern keys");
+  uint64_t *pcount = xcalloc(pat_cap, sizeof(uint64_t), "pattern counts");
   uint64_t pna_cpg = 0, checksum = 1469598103934665603ULL;  /* FNV-1a offset */
+  uint64_t *key = xcalloc(nw, sizeof(uint64_t), "cpg key");
 
   for (uint64_t i = 0; i < n_cpg; ++i) {
     int is_pna;
-    uint64_t key = resolve_cpg(meth, ambig, i, ns, stride, n_cpg,
-                               min_fold, max_ambig, pna_key, &is_pna);
+    resolve_cpg(meth, ambig, i, ns, stride, n_cpg,
+                min_fold, max_ambig, pna_key, &is_pna, key);
     if (is_pna) {
       ++pna_cpg;
     } else {
       if (n_pat == pat_cap) {                   /* grow (rare: > 2^20 patterns) */
-        pat_cap <<= 1; pat = realloc(pat, pat_cap * sizeof(*pat));
-        if (!pat) die("out of memory", "pattern table grow");
+        pat_cap <<= 1;
+        pkeys = realloc(pkeys, pat_cap * nw * sizeof(*pkeys));
+        pcount = realloc(pcount, pat_cap * sizeof(*pcount));
+        if (!pkeys || !pcount) die("out of memory", "pattern table grow");
       }
-      uint32_t idx = phash_intern(&h, key, pat, &n_pat);
-      ++pat[idx].count;
+      uint32_t idx = phash_intern(&h, key, pkeys, pcount, &n_pat);
+      ++pcount[idx];
     }
-    checksum = (checksum ^ key) * 1099511628211ULL;
+    for (uint32_t w = 0; w < nw; ++w)
+      checksum = (checksum ^ key[w]) * 1099511628211ULL;
   }
 
   /* Candidate set: every {0,1} pattern, homogeneous all-0/all-1 included.
@@ -325,7 +366,7 @@ int main_mrmp_build(int argc, char *argv[]) {
   uint32_t *order = xcalloc(n_pat, sizeof(uint32_t), "rank order");
   uint64_t n_cand = 0;
   for (uint64_t p = 0; p < n_pat; ++p) order[n_cand++] = (uint32_t)p;
-  g_pat = pat;
+  g_keys = pkeys; g_count = pcount; g_nw = nw;
   qsort(order, n_cand, sizeof(uint32_t), rank_cmp);
 
   /* rank_of[pattern index] = 0-based rank among candidates (or PNA). */
@@ -343,7 +384,7 @@ int main_mrmp_build(int argc, char *argv[]) {
   hd.n_selected = (uint32_t)n_cand;   /* the cut is the consumer's */
   hd.flags = MRMP_FLAG_INCLUDE_HOMOGENEOUS;   /* always: see the candidate loop */
   hd.n_cpg = n_cpg; hd.n_candidates = n_cand;
-  hd.pna_key = pna_key; hd.pna_cpg = pna_cpg;
+  hd.pna_key = pna_key[0]; hd.pna_cpg = pna_cpg;
   hd.mincov = mincov; hd.beta_threshold = beta_thr;
   hd.max_ambig_frac = max_ambig; hd.min_major_fold = min_fold;
   hd.content_checksum = checksum;
@@ -351,14 +392,17 @@ int main_mrmp_build(int argc, char *argv[]) {
   uint64_t off = sizeof(hd);
   hd.refname_offset = off;   off += strlen(ref) + 1;
   hd.names_offset = off;     for (uint32_t s = 0; s < ns; ++s) off += strlen(names[s]) + 1;
-  hd.patterns_offset = off;  off += n_cand * sizeof(mrmp_pattern_t);
+  hd.patterns_offset = off;  off += n_cand * mrmp_pattern_stride(ns);
   hd.membership_offset = off;
 
   write_or_die(fp, &hd, sizeof(hd), out);
   write_or_die(fp, ref, strlen(ref) + 1, out);
   for (uint32_t s = 0; s < ns; ++s) write_or_die(fp, names[s], strlen(names[s]) + 1, out);
-  for (uint64_t r = 0; r < n_cand; ++r)
-    write_or_die(fp, &pat[order[r]], sizeof(mrmp_pattern_t), out);
+  for (uint64_t r = 0; r < n_cand; ++r) {   /* nw key words, then the count */
+    uint32_t x = order[r];
+    write_or_die(fp, pkeys + (uint64_t)x * nw, nw * sizeof(uint64_t), out);
+    write_or_die(fp, &pcount[x], sizeof(uint64_t), out);
+  }
   /* per-CpG membership rank (re-derive keys from the planes; PNA sentinel
    * where the CpG is the all-'2' pattern). */
   {
@@ -368,8 +412,8 @@ int main_mrmp_build(int argc, char *argv[]) {
       uint64_t m = n_cpg - i < CHUNK ? n_cpg - i : CHUNK;
       for (uint64_t j = 0; j < m; ++j) {
         int is_pna;
-        uint64_t key = resolve_cpg(meth, ambig, i + j, ns, stride, n_cpg,
-                                   min_fold, max_ambig, pna_key, &is_pna);
+        resolve_cpg(meth, ambig, i + j, ns, stride, n_cpg,
+                    min_fold, max_ambig, pna_key, &is_pna, key);
         uint32_t p = is_pna ? MRMP_PNA_MEMBERSHIP : phash_find(&h, key);
         buf[j] = (p == MRMP_PNA_MEMBERSHIP) ? MRMP_PNA_MEMBERSHIP : rank_of[p];
       }
@@ -389,7 +433,8 @@ int main_mrmp_build(int argc, char *argv[]) {
     out, ns, n_cpg, n_pat, n_cand, pna_cpg,
     100.0 * (double)pna_cpg / (double)n_cpg, checksum);
 
-  free(pat); free(order); free(rank_of);
+  free(pkeys); free(pcount); free(pna_key); free(key);
+  free(order); free(rank_of);
   free(h.keys); free(h.slot);
   for (uint32_t s = 0; s < ns; ++s) free(names[s]);
   free(names);
@@ -403,9 +448,22 @@ typedef struct {
   const mrmp_header_t *h;
   const char *refname;
   const char **names;           /* n_samples */
-  const mrmp_pattern_t *pat;    /* n_candidates (rank order) */
+  const char *pat;              /* n_candidates records, `stride` apart */
+  uint32_t stride;              /* mrmp_pattern_stride(n_samples) */
+  uint32_t nw;                  /* mrmp_key_words(n_samples) */
   const uint32_t *membership;   /* n_cpg */
 } mrmp_reader_t;
+
+/* A pattern record is nw key words followed by the count, so it is addressed by
+ * stride rather than indexed as a struct (which only fits the one-word case). */
+static const uint64_t *pat_key(const mrmp_reader_t *r, uint64_t p) {
+  return (const uint64_t *)(const void *)(r->pat + p * r->stride);
+}
+static uint64_t pat_count(const mrmp_reader_t *r, uint64_t p) {
+  uint64_t v;
+  memcpy(&v, r->pat + p * r->stride + (uint64_t)r->nw * sizeof(uint64_t), sizeof v);
+  return v;
+}
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -437,11 +495,10 @@ static void mrmp_open(mrmp_reader_t *r, const char *path) {
   uint64_t sz = (uint64_t)st.st_size;
   if (h->n_cpg > UINT32_MAX)
     die("MRMP artifact CpG count is implausible", path);
+  uint64_t pstride = mrmp_pattern_stride(h->n_samples);
   if (!region_ok(h->membership_offset, h->n_cpg, sizeof(uint32_t), sz) ||
-      !region_ok(h->patterns_offset, h->n_candidates,
-                 sizeof(mrmp_pattern_t), sz) ||
-      h->patterns_offset + h->n_candidates * sizeof(mrmp_pattern_t) >
-        h->membership_offset ||
+      !region_ok(h->patterns_offset, h->n_candidates, pstride, sz) ||
+      h->patterns_offset + h->n_candidates * pstride > h->membership_offset ||
       h->refname_offset >= sz || h->names_offset >= sz)
     die("MRMP artifact offsets are out of bounds", path);
   r->map = m; r->bytes = sz; r->fd = fd; r->h = h;
@@ -458,7 +515,9 @@ static void mrmp_open(mrmp_reader_t *r, const char *path) {
       die("MRMP artifact sample names are truncated", path);
     ((const char **)r->names)[s] = p; p += strlen(p) + 1;
   }
-  r->pat = (const mrmp_pattern_t *)((const char *)m + h->patterns_offset);
+  r->pat = (const char *)m + h->patterns_offset;
+  r->stride = (uint32_t)pstride;
+  r->nw = mrmp_key_words(h->n_samples);
   r->membership = (const uint32_t *)((const char *)m + h->membership_offset);
 }
 
@@ -505,15 +564,24 @@ int main_mrmp_inspect(int argc, char *argv[]) {
          h->mincov, h->beta_threshold, h->max_ambig_frac, h->min_major_fold);
   printf("content_checksum\t%016" PRIx64 "\n", h->content_checksum);
   char *buf = xcalloc(h->n_samples + 1, 1, "string buffer");
-  key_to_string(h->pna_key, h->n_samples, buf);
+  /* The header stores only word 0 of the sentinel, so rebuild the full key --
+   * it is all-'2' and therefore fully determined by n_samples -- and check the
+   * stored word agrees, which catches a header/sample-count mismatch. */
+  uint32_t pna_nw = mrmp_key_words(h->n_samples);
+  uint64_t *pna = xcalloc(pna_nw, sizeof(uint64_t), "pna key");
+  for (uint32_t s = 0; s < h->n_samples; ++s)
+    pna[s / MRMP_TRITS_PER_WORD] = pna[s / MRMP_TRITS_PER_WORD] * 3 + 2;
+  if (pna[0] != h->pna_key) die("PNA key disagrees with n_samples", path);
+  key_to_string(pna, h->n_samples, buf);
+  free(pna);
   printf("pna_pattern\t%s\n", buf);
   if (show_patterns) {
     uint64_t lim = top_k < h->n_candidates ? top_k : h->n_candidates;
     printf("#pattern\tlabel\tcount\t(top %" PRIu64 " of %" PRIu64 ")\n",
            lim, h->n_candidates);
     for (uint64_t p = 0; p < lim; ++p) {
-      key_to_string(r.pat[p].key, h->n_samples, buf);
-      printf("%s\tP%" PRIu64 "\t%" PRIu64 "\n", buf, p + 1, r.pat[p].count);
+      key_to_string(pat_key(&r, p), h->n_samples, buf);
+      printf("%s\tP%" PRIu64 "\t%" PRIu64 "\n", buf, p + 1, pat_count(&r, p));
     }
   }
   free(buf);
@@ -561,8 +629,8 @@ int main_mrmp_export(int argc, char *argv[]) {
     if (!f) die("cannot create --patterns", patterns);
     uint64_t lim = top_k < h->n_candidates ? top_k : h->n_candidates;
     for (uint64_t p = 0; p < lim; ++p) {
-      key_to_string(r.pat[p].key, ns, buf);
-      fprintf(f, "%s\tP%" PRIu64 "\t%" PRIu64 "\n", buf, p + 1, r.pat[p].count);
+      key_to_string(pat_key(&r, p), ns, buf);
+      fprintf(f, "%s\tP%" PRIu64 "\t%" PRIu64 "\n", buf, p + 1, pat_count(&r, p));
     }
     if (fclose(f)) die("error closing --patterns", patterns);
   }
@@ -572,10 +640,16 @@ int main_mrmp_export(int argc, char *argv[]) {
     FILE *f = fopen(counts, "w");
     if (!f) die("cannot create --counts", counts);
     for (uint64_t p = 0; p < h->n_candidates; ++p) {
-      key_to_string(r.pat[p].key, ns, buf);
-      fprintf(f, "%" PRIu64 "\t%s\n", r.pat[p].count, buf);
+      key_to_string(pat_key(&r, p), ns, buf);
+      fprintf(f, "%" PRIu64 "\t%s\n", pat_count(&r, p), buf);
     }
-    key_to_string(h->pna_key, ns, buf);
+    /* PNA is all-'2', so its key follows from ns; the header keeps only word 0. */
+    uint32_t pna_nw = mrmp_key_words(ns);
+    uint64_t *pna = xcalloc(pna_nw, sizeof(uint64_t), "pna key");
+    for (uint32_t s2 = 0; s2 < ns; ++s2)
+      pna[s2 / MRMP_TRITS_PER_WORD] = pna[s2 / MRMP_TRITS_PER_WORD] * 3 + 2;
+    key_to_string(pna, ns, buf);
+    free(pna);
     fprintf(f, "%" PRIu64 "\t%s\n", h->pna_cpg, buf);
     if (fclose(f)) die("error closing --counts", counts);
   }
