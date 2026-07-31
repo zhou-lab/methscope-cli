@@ -13,6 +13,7 @@
 #include "methscope.h"
 #include "bmeta.h"
 #include "bundle.h"
+#include "msfm.h"    /* ms_msfm_to_matrix -- the --data feature path */
 #include <xgboost/c_api.h>
 
 #define XGCHK(call) do {                                            \
@@ -47,6 +48,7 @@ static int predict_usage(void) {
     "Usage:\n"
     "  methscope classify [options] <query.cg> <model.ubjx>\n"
     "  methscope classify [options] <query.cg> <ref.mrmp> <booster.ubj>\n"
+    "  methscope classify --data <in.msfm> [options] <model.ubjx>\n"
     "\n"
     "Purpose:\n"
     "  Predict a label (cell type, sex, ... — whatever the model was trained on)\n"
@@ -67,6 +69,10 @@ static int predict_usage(void) {
     "  -o <out.tsv>   Write output to a file instead of stdout.\n"
     "  --probs        Append one column per class with its predicted probability.\n"
     "  --no-header    Suppress the header line.\n"
+    "  --data <in.msfm>  Score a prebuilt feature artifact (classify-featurize)\n"
+    "                 instead of featurizing <query.cg>. <query.cg> is then omitted.\n"
+    "                 Featurization dominates the cost, so this is how to score many\n"
+    "                 models on one test set without repeating it. xgboost only.\n"
     "  -h             Show this help message.\n"
     "\n"
     "Output columns:\n"
@@ -110,12 +116,13 @@ static int predict_linear(const char *query_cg, const char *ref_mrmp,
 }
 
 int main_predict(int argc, char *argv[]) {
-  const char *out_path = NULL;
+  const char *out_path = NULL, *data_path = NULL;
   int with_probs = 0;
   int no_header = 0;
   int i = 1;
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-o") == 0 && i + 1 < argc) out_path = argv[++i];
+    else if (strcmp(argv[i], "--data") == 0 && i + 1 < argc) data_path = argv[++i];
     else if (strcmp(argv[i], "--probs") == 0) with_probs = 1;
     else if (strcmp(argv[i], "--no-header") == 0) no_header = 1;
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -125,8 +132,14 @@ int main_predict(int argc, char *argv[]) {
       pdie("unrecognized or incomplete option", argv[i]);
     else break;
   }
-  if (argc - i != 2 && argc - i != 3) return predict_usage();
-  const char *query_cg  = argv[i];
+  /* With --data the features are prebuilt, so <query.cg> drops out of the
+   * positional list; the model forms are otherwise unchanged. This is what
+   * makes scoring many models on one test set cheap -- the featurization,
+   * which dominates, happens once in classify-featurize instead of per run. */
+  if (data_path) { if (argc - i != 1 && argc - i != 2) return predict_usage(); }
+  else           { if (argc - i != 2 && argc - i != 3) return predict_usage(); }
+  if (data_path) --i;                 /* so argv[i+1], argv[i+2] stay the model */
+  const char *query_cg  = data_path ? NULL : argv[i];
   const char *ref_mrmp  = NULL;     /* mrmp path (loose arg, or the bundle path itself) */
   const char *model_name;           /* for error messages */
   char *tmp_mrmp = NULL;            /* ms_mrmp_resolve temp (always NULL now; kept for API) */
@@ -146,6 +159,9 @@ int main_predict(int argc, char *argv[]) {
 
     if (strcmp(kind, "threshold") == 0 || strcmp(kind, "logistic") == 0) {
       /* linear frameworks: score + return */
+      if (data_path)
+        pdie("--data is xgboost-only; the linear frameworks featurize their own "
+             "query", model_name);
       size_t blen; void *bbuf = ms_bundle_section(model_name, "model", &blen);
       int rc = predict_linear(query_cg, ref_mrmp, bbuf, blen, out_path, with_probs, no_header);
       free(bbuf); free(kind);
@@ -171,16 +187,25 @@ int main_predict(int argc, char *argv[]) {
 
   bst_ulong num_feature = 0;
   XGCHK(XGBoosterGetNumFeature(booster, &num_feature));
-  int P = (int)num_feature;                 /* npattern = booster's feature count */
+  int P = (int)num_feature;                 /* booster's total feature count */
+
+  /* Models trained with --scalar-coverage carry ONE extra input after the
+   * pattern columns, so the pattern count is one less than num_feature. The
+   * model says so itself; guessing here would shift every column by one. */
+  int scalar_cov = ms_booster_has_scalar_cov(booster);
+  int n_pat = scalar_cov ? P - 1 : P;
+  if (n_pat < 1) pdie("booster has no pattern features", model_name);
 
   int K = 0;
   char **labels = ms_booster_get_labels(booster, &K);  /* NULL if not annotated */
 
-  ms_matrix_t *m = ms_matrix_build(query_cg, ref_mrmp);
-  if (m->n_patterns < P)
+  uint32_t *levels = NULL;
+  ms_matrix_t *m = data_path ? ms_msfm_to_matrix(data_path, NULL, &levels)
+                             : ms_matrix_build(query_cg, ref_mrmp);
+  if (m->n_patterns < n_pat)
     pdie("reference .mrmp has fewer patterns than the booster expects", ref_mrmp);
 
-  /* Pack the first P columns into a float matrix; NaN stays missing. */
+  /* Pack the first n_pat columns into a float matrix; NaN stays missing. */
   bst_ulong nrow = (bst_ulong)m->n_cells;
   bst_ulong ncol = (bst_ulong)P;
   float *data = malloc((size_t)nrow * ncol * sizeof(float));
@@ -188,7 +213,19 @@ int main_predict(int argc, char *argv[]) {
   for (int r = 0; r < m->n_cells; ++r) {
     const double *src = m->M + (size_t)r * m->n_patterns;
     float        *dst = data + (size_t)r * P;
-    for (int c = 0; c < P; ++c) dst[c] = (float)src[c]; /* NaN -> NaN */
+    for (int c = 0; c < n_pat; ++c) dst[c] = (float)src[c]; /* NaN -> NaN */
+    if (scalar_cov) {
+      /* Same quantity classify-featurize stores: covered CpGs over every
+       * pattern. Recomputed from N when scoring a .cg directly, so the two
+       * input paths agree. */
+      double total = 0;
+      if (levels) total = (double)levels[r];
+      else {
+        const int *n = m->N + (size_t)r * m->n_patterns;
+        for (int c = 0; c < m->n_patterns; ++c) if (n[c] > 0) total += n[c];
+      }
+      dst[n_pat] = (float)log1p(total);
+    }
   }
 
   DMatrixHandle  dmat;
@@ -233,7 +270,7 @@ int main_predict(int argc, char *argv[]) {
   #undef LABEL
 
   if (fout != stdout) fclose(fout);
-  free(data);
+  free(data); free(levels);
   XGDMatrixFree(dmat);
   XGBoosterFree(booster);
   if (labels) { for (int c = 0; c < K; ++c) free(labels[c]); free(labels); }

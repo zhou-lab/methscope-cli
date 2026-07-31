@@ -12,6 +12,7 @@
 #include <unistd.h>       /* isatty */
 #include "methscope.h"
 #include "mrmp.h"
+#include "msfm.h"
 #include "assets.h"       /* yame_assets_root -- the shared store methscope reads */
 #include "yame_version.h" /* YAME version this binary was built against */
 
@@ -44,6 +45,7 @@ static int usage(void) {
   fprintf(stderr, "\n%sClassification%s %s(cell type, sex, ...)%s\n", B, R, D, R);
   CMD("classify",     "Classify a methylome -> labels + confidence");
   CMD("classify-train","Fit a label classifier (xgboost / threshold / logistic)");
+  CMD("classify-featurize","Prebuild the .msfm feature matrix (parallel, reusable)");
 
   fprintf(stderr, "\n%sDeconvolution%s\n", B, R);
   CMD("deconv",         "Estimate cell-type proportions (NNLS) from a mixture");
@@ -58,7 +60,7 @@ static int usage(void) {
   fprintf(stderr, "\n%sModel bundles%s\n", B, R);
   CMD("bundle",       "Wrap a model + its MRMP into a self-contained bundle");
   CMD("unbundle",     "Unpack a bundle into its model, MRMP, and outcpg mask");
-  CMD("inspect",      "Describe any artifact: bundle, .mrmp, .msui, or .msur");
+  CMD("inspect",      "Describe any artifact: bundle, .mrmp, .msui, .msur, or .msfm");
 
   fprintf(stderr, "\n%sRun 'methscope <command> -h' for command-specific options.%s\n\n",
           D, R);
@@ -77,6 +79,7 @@ int main(int argc, char *argv[]) {
     return 0;
   }
   if (strcmp(argv[1], "classify")    == 0) return main_predict(argc - 1, argv + 1);
+  if (strcmp(argv[1], "classify-featurize") == 0) return main_classify_featurize(argc - 1, argv + 1);
   if (strcmp(argv[1], "deconv-build-ref") == 0) return main_build_reference(argc - 1, argv + 1);
   if (strcmp(argv[1], "matrix")     == 0) {   /* renamed 2026-07; alias kept */
     fprintf(stderr, "[methscope] 'matrix' was renamed to 'build-reference'\n");

@@ -47,6 +47,18 @@ void ms_booster_set_meta(BoosterHandle b, char *const *labels, int num_class) {
   free(csv);
 }
 
+void ms_booster_set_scalar_cov(BoosterHandle b) {
+  XGCHK(XGBoosterSetAttr(b, MS_ATTR_SCALARCOV, "log1p"));
+}
+
+int ms_booster_has_scalar_cov(BoosterHandle b) {
+  const char *val = NULL;
+  int success = 0;
+  if (XGBoosterGetAttr(b, MS_ATTR_SCALARCOV, &val, &success) != 0 || !success || !val)
+    return 0;
+  return 1;
+}
+
 char **ms_booster_get_labels(BoosterHandle b, int *num_class) {
   const char *val = NULL;
   int success = 0;

@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include "methscope.h"
+#include "msfm.h"
 #include "mrmp.h"
 #include "bundle.h"
 #include "bmeta.h"
@@ -42,6 +43,7 @@ static int inspect_usage(void) {
     "    .mrmp   MRMPIDX1  pattern set: dimensions, binstring parameters, top ranks\n"
     "    .msui   MSUIDX1   processing-unit index: units, memberships, CpG split\n"
     "    .msur   MSURAW2/3 training msur: cells, replicates, embedded truth\n"
+    "    .msfm   MSFMAT1   feature matrix: records, patterns, labels, coverage\n"
     "\n"
     "Options:\n"
     "  --patterns   .mrmp only: list the top-ranked patterns\n"
@@ -127,6 +129,7 @@ int main_inspect(int argc, char *argv[]) {
   if (!memcmp(magic, "MRMPIDX1", 8)) return main_mrmp_inspect(argc, argv);
   if (!memcmp(magic, "MSUIDX1", 7)) { ms_msui_report(path); return 0; }
   if (!memcmp(magic, "MSURAW2", 7) || !memcmp(magic, "MSURAW3", 7)) { ms_msur_report(path); return 0; }
+  if (!memcmp(magic, "MSFMAT1", 7)) { ms_msfm_report(path); return 0; }
 
   if (argc != 2) return inspect_usage();
   if (!ms_bundle_is(path))

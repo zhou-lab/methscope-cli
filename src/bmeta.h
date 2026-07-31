@@ -15,9 +15,19 @@
 
 #define MS_ATTR_LABELS "methscope_labels"   /* comma-separated, class-index order */
 
+/* Set when the model carries ONE extra feature after the pattern columns:
+ * log1p(covered CpGs) for the record. `classify` has to append the same column
+ * or every prediction silently shifts by a feature, so this lives in the model
+ * rather than relying on the caller to remember. Value is the transform name. */
+#define MS_ATTR_SCALARCOV "methscope_scalar_cov"
+
 /* Embed the class labels (class-index order) into the booster's attributes.
  * labels[] has num_class entries. Exits on XGBoost error. */
 void ms_booster_set_meta(BoosterHandle b, char *const *labels, int num_class);
+
+/* Mark / test the scalar coverage feature (see MS_ATTR_SCALARCOV). */
+void ms_booster_set_scalar_cov(BoosterHandle b);
+int  ms_booster_has_scalar_cov(BoosterHandle b);
 
 /* Read the embedded labels. Returns a malloc'd array of malloc'd strings and
  * sets *num_class, or NULL if the attribute is absent (caller then falls back

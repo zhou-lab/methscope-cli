@@ -16,6 +16,7 @@
 #include "methscope.h"
 #include "bmeta.h"
 #include "bundle.h"    /* ms_mrmp_resolve / ms_bundle_pack / ms_path_is_bundle_ext */
+#include "msfm.h"      /* ms_msfm_to_matrix -- the --data feature path */
 #include <xgboost/c_api.h>
 
 #define XGCHK(call) do {                                          \
@@ -99,6 +100,7 @@ static int train_usage(void) {
     "\n"
     "Usage:\n"
     "  methscope classify-train -l <labels.txt> -o <out.ubjx> [options] <query.cg> <ref.cm>\n"
+    "  methscope classify-train --data <in.msfm> -o <out.ubjx> [options] <ref.cm>\n"
     "\n"
     "Purpose:\n"
     "  Train a multiclass classifier for any per-record label (cell type, sex,\n"
@@ -133,6 +135,17 @@ static int train_usage(void) {
     "                     logistic   binary L2-regularized logistic regression.\n"
     "                   threshold/logistic are binary-only and require a .ubjx output.\n"
     "  -n <nrounds>     Boosting rounds, xgboost only (default: round(sqrt(n_cells))).\n"
+    "  --data <in.msfm> Train from a prebuilt feature artifact (classify-featurize)\n"
+    "                   instead of featurizing <query.cg> here. Only <ref.cm> is then\n"
+    "                   positional, and labels come from the artifact unless -l is\n"
+    "                   given. Featurization is single-threaded, so this is how to\n"
+    "                   train repeatedly on the same cells without repeating it.\n"
+    "  --scalar-coverage  Append ONE extra feature, log1p(covered CpGs) for the\n"
+    "                   record, after the pattern columns -- the classifier analogue\n"
+    "                   of the upscale model's `--features scalar`. Worth it when\n"
+    "                   training spans a coverage ladder, so the model can tell which\n"
+    "                   sparsity regime it is in. Requires --data (the artifact\n"
+    "                   carries the exact per-record total).\n"
     "  -h               Show this help message.\n"
     "\n");
   return 1;
@@ -140,10 +153,13 @@ static int train_usage(void) {
 
 int main_train(int argc, char *argv[]) {
   const char *labels_path = NULL, *out_path = NULL, *framework = "xgboost";
-  int npattern = 0, nrounds = 0, include_pna = 0;
+  const char *data_path = NULL;
+  int npattern = 0, nrounds = 0, include_pna = 0, scalar_cov = 0;
   int i = 1;
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-l") == 0 && i+1 < argc) labels_path = argv[++i];
+    else if (strcmp(argv[i], "--data") == 0 && i+1 < argc) data_path = argv[++i];
+    else if (strcmp(argv[i], "--scalar-coverage") == 0) scalar_cov = 1;
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out_path    = argv[++i];
     else if (strcmp(argv[i], "-p") == 0 && i+1 < argc)
       npattern = parse_nonneg_int(argv[++i], "-p expects a non-negative integer");
@@ -158,18 +174,34 @@ int main_train(int argc, char *argv[]) {
       tdie("unrecognized or incomplete option", argv[i]);
     else break;
   }
-  if (!labels_path || !out_path || argc - i != 2) return train_usage();
+  /* With --data the features are already built, so <query.cg> drops out and
+   * only <ref.cm> stays positional -- the bundle still has to carry the MRMP. */
+  int want_pos = data_path ? 1 : 2;
+  if (!out_path || argc - i != want_pos) return train_usage();
+  if (!data_path && !labels_path) return train_usage();
   int fw_xgb = strcmp(framework, "xgboost") == 0;
   int fw_lin = (strcmp(framework, "threshold") == 0) || (strcmp(framework, "logistic") == 0);
   if (!fw_xgb && !fw_lin) tdie("unknown --framework (xgboost|threshold|logistic)", framework);
   if (fw_lin && !ms_path_is_bundle_ext(out_path))
     tdie("threshold/logistic frameworks require a .ubjx output (bundled with the MRMP)", out_path);
-  const char *query_cg = argv[i];
+  if (scalar_cov && !data_path)
+    tdie("--scalar-coverage needs --data (the artifact carries the covered-CpG total)", NULL);
+  if (scalar_cov && fw_lin)
+    tdie("--scalar-coverage is xgboost-only", framework);
+  const char *query_cg = data_path ? NULL : argv[i];
   char *tmp_mrmp = NULL;
-  const char *ref_mrmp = ms_mrmp_resolve(argv[i + 1], &tmp_mrmp);
+  const char *ref_mrmp = ms_mrmp_resolve(argv[i + (data_path ? 0 : 1)], &tmp_mrmp);
 
-  /* ---- features ---- */
-  ms_matrix_t *m = ms_matrix_build(query_cg, ref_mrmp);
+  /* ---- features ----
+   * Featurize now, or reuse a .msfm built earlier by `classify-featurize`.
+   * Both yield the same ms_matrix_t, so nothing below this point differs. */
+  char **data_lab = NULL;
+  uint32_t *levels = NULL;
+  ms_matrix_t *m = data_path
+    ? ms_msfm_to_matrix(data_path, &data_lab, &levels)
+    : ms_matrix_build(query_cg, ref_mrmp);
+  if (data_path && !labels_path && !data_lab)
+    tdie("the artifact carries no labels; pass -l", data_path);
 
   /* "Pna" is the NA-background state (matrix sorts it last). Count it so we can
    * exclude it from features by default. */
@@ -186,9 +218,18 @@ int main_train(int argc, char *argv[]) {
   if (npattern <= 0 || npattern > m->n_patterns)
     tdie("invalid npattern", NULL);
 
-  /* ---- labels ---- */
+  /* ---- labels ----
+   * Embedded in the artifact by default: a .msfm cannot be paired with the
+   * wrong label file, which is the failure this used to die on. An explicit
+   * -l still wins, so a label set can be revised without re-featurizing. */
   int n_lab = 0;
-  char **lab = read_labels(labels_path, &n_lab);
+  char **lab;
+  if (labels_path) {
+    lab = read_labels(labels_path, &n_lab);
+    if (data_lab) { for (int j = 0; j < m->n_cells; ++j) free(data_lab[j]); free(data_lab); }
+  } else {
+    lab = data_lab; n_lab = m->n_cells;
+  }
   if (n_lab != m->n_cells)
     tdie("label count does not match number of query cells", labels_path);
 
@@ -245,13 +286,19 @@ int main_train(int argc, char *argv[]) {
     float *ylab = malloc((size_t)m->n_cells * sizeof(float));
     if (!ylab) tdie("out of memory", NULL);
     for (int r = 0; r < m->n_cells; ++r) ylab[r] = (float)yidx[r];
-    bst_ulong nrow = (bst_ulong)m->n_cells, ncol = (bst_ulong)npattern;
+    /* One extra column when --scalar-coverage: log1p(covered CpGs), appended
+     * after the patterns. Trees are scale-invariant, so unlike UPDEC2 this
+     * needs no mean/scale standardization -- but `classify` must build the
+     * column the same way, which is what the booster attribute below records. */
+    bst_ulong nrow = (bst_ulong)m->n_cells;
+    bst_ulong ncol = (bst_ulong)npattern + (scalar_cov ? 1 : 0);
     float *data = malloc((size_t)nrow * ncol * sizeof(float));
     if (!data) tdie("out of memory", NULL);
     for (int r = 0; r < m->n_cells; ++r) {
       const double *src = m->M + (size_t)r * m->n_patterns;
-      float        *dst = data + (size_t)r * npattern;
+      float        *dst = data + (size_t)r * ncol;
       for (int c = 0; c < npattern; ++c) dst[c] = (float)src[c];
+      if (scalar_cov) dst[npattern] = (float)log1p((double)levels[r]);
     }
     if (nrounds <= 0) nrounds = (int)(sqrt((double)m->n_cells) + 0.5);
     if (nrounds < 1) nrounds = 1;
@@ -270,6 +317,7 @@ int main_train(int argc, char *argv[]) {
 
     /* embed labels; save as loose .ubj or a (trimmed-mrmp) .ubjx bundle */
     ms_booster_set_meta(booster, uniq, K);
+    if (scalar_cov) ms_booster_set_scalar_cov(booster);
     if (bundled) {
       char tmpl[] = "/tmp/methscope_ubj_XXXXXX.ubj";
       int fd = mkstemps(tmpl, 4);
