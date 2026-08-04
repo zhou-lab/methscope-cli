@@ -22,7 +22,14 @@
  *                    class names (sorted, so the id IS the model's class index)
  *   [levels_offset]  u32 covered-CpG total per record
  *   [beta_offset]    u16 per (record, pattern), row-major
- *   [count_offset]   u32 per (record, pattern), row-major -- only with F_COUNTS
+ * count_offset is a RESERVED header slot, always 0. A per-pattern count block
+ * was specified but never populated: the sampled builder is the only featurize
+ * path and it tallied the counts to average the betas, then dropped them. Rather
+ * than plumb it through, `classify-featurize --counts N` now spends that
+ * information where it matters -- a beta backed by fewer than N measured CpGs is
+ * recorded MISSING instead of kept -- which needs no format change, since every
+ * reader already handles MSFM_NA. The slot stays so the 88-byte header layout,
+ * and therefore every existing .msfm, is unchanged.
  */
 #ifndef MSFM_H
 #define MSFM_H
@@ -31,10 +38,6 @@
 #include <string.h>
 
 #define MSFM_MAGIC "MSFMAT1"
-
-/* Full per-pattern covered-CpG counts. Off by default: training reads only
- * betas, and the one aggregate it wants is the always-present level. */
-#define MSFM_F_COUNTS 1u
 
 /* Beta is u16 fixed point, exactly the convention msur uses for its truth
  * matrix: code/65534 in [0,1], and MSFM_NA for missing. Half the size of f32,
@@ -65,7 +68,7 @@ typedef struct {
   uint64_t labels_offset;
   uint64_t levels_offset;
   uint64_t beta_offset;
-  uint64_t count_offset;    /* 0 when absent */
+  uint64_t count_offset;    /* RESERVED, always 0 -- see the header comment */
   uint64_t file_bytes;
 } msfm_header_t;
 #pragma pack(pop)
@@ -81,7 +84,6 @@ typedef struct {
   uint64_t         length;
   const msfm_header_t *header;
   const uint16_t  *beta;        /* n_records * n_patterns */
-  const uint32_t  *count;       /* NULL unless F_COUNTS */
   const uint32_t  *levels;      /* n_records */
   const uint16_t  *class_id;    /* n_records */
   char           **pattern_names;
@@ -127,7 +129,8 @@ void ms_msfm_report(const char *path);
  * major. Caller frees *beta_out, *levels_out, and *names_out (and its strings). */
 void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t patterns,
                            const uint32_t *rep_sample, uint32_t n_reps,
-                           int binarize, uint64_t seed, unsigned threads,
+                           int binarize, uint32_t min_cpgs,
+                           uint64_t seed, unsigned threads,
                            uint16_t **beta_out, uint32_t **levels_out,
                            char ***names_out, uint32_t *n_cells_out,
                            uint32_t *ncol_out);

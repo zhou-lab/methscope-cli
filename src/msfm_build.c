@@ -96,6 +96,7 @@ typedef struct {
   const uint32_t *rep_sample;  /* target covered CpGs per replicate; 0 = native */
   uint32_t        n_reps;
   int             binarize;
+  uint32_t        min_cpgs;    /* a beta from fewer measured CpGs is recorded NA */
   uint64_t        seed;
   uint16_t       *beta;        /* (n_reps * n_cells) x ncol */
   uint32_t       *levels;      /* n_reps * n_cells */
@@ -166,8 +167,15 @@ static void *worker(void *arg) {
 
       uint64_t row = (uint64_t)rep * J->n_cells + cell;
       uint16_t *out = J->beta + row * J->ncol;
+      /* Thin evidence is recorded as MISSING, not as a confident beta. A beta
+       * from one CpG can only be 0 or 1, so after the 0.5 threshold it is always
+       * a maximally-confident call and never a borderline one -- and it carries
+       * the same pattern weight as a beta backed by hundreds of CpGs. In mouse
+       * single cells 46.5% of observed pattern-betas are exactly 0, 0.5 or 1,
+       * i.e. rest on one or two measurements. Dropping them needs no format
+       * change: every reader already treats MSFM_NA as unobserved. */
       for (uint32_t g = 0; g < J->ncol; ++g)
-        out[g] = cnt[g] ? msfm_encode(sum[g] / cnt[g]) : MSFM_NA;
+        out[g] = cnt[g] >= J->min_cpgs ? msfm_encode(sum[g] / cnt[g]) : MSFM_NA;
       J->levels[row] = want;
     }
     free_cdata(&c);
@@ -186,7 +194,7 @@ ms_matrix_t *ms_matrix_build_threaded(const char *query, const char *mrmp,
                                       uint32_t **levels_out) {
   uint32_t one = 0;                       /* one replicate, native coverage */
   uint16_t *beta; uint32_t *levels; char **names; uint32_t n_cells, ncol;
-  ms_msfm_build_sampled(query, mrmp, patterns, &one, 1, 0, 1, threads,
+  ms_msfm_build_sampled(query, mrmp, patterns, &one, 1, 0, 1, 1, threads,
                         &beta, &levels, &names, &n_cells, &ncol);
 
   ms_matrix_t *m = bmal(sizeof(*m), "matrix");
@@ -214,7 +222,8 @@ ms_matrix_t *ms_matrix_build_threaded(const char *query, const char *mrmp,
 
 void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t patterns,
                            const uint32_t *rep_sample, uint32_t n_reps,
-                           int binarize, uint64_t seed, unsigned threads,
+                           int binarize, uint32_t min_cpgs,
+                           uint64_t seed, unsigned threads,
                            uint16_t **beta_out, uint32_t **levels_out,
                            char ***names_out, uint32_t *n_cells_out,
                            uint32_t *ncol_out) {
@@ -283,6 +292,8 @@ void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t pattern
   J.query = query; J.n_cells = n_cells; J.group = group; J.n_cpg = n_cpg;
   J.patterns = patterns; J.ncol = ncol; J.rep_sample = rep_sample;
   J.n_reps = n_reps; J.binarize = binarize; J.seed = seed;
+  /* 0 means "unset": keep any observed CpG, i.e. the old behaviour. */
+  J.min_cpgs = min_cpgs ? min_cpgs : 1;
   J.beta = beta; J.levels = levels; J.cursor = 0; J.progress = 1;
   J.offset = bmal((size_t)n_cells * sizeof(int64_t), "offsets");
   char **names = bmal((size_t)n_cells * sizeof(char *), "cell names");

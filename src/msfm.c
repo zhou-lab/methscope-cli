@@ -84,8 +84,7 @@ int ms_msfm_open(ms_msfm_t *f, const char *path, char *err, size_t errn) {
   uint64_t beta_bytes = nr * np * 2;
   if (h->beta_offset + beta_bytes > len ||
       h->levels_offset + nr * 4 > len ||
-      h->labels_offset + nr * 2 > len ||
-      ((h->flags & MSFM_F_COUNTS) && h->count_offset + nr * np * 4 > len)) {
+      h->labels_offset + nr * 2 > len) {
     snprintf(err, errn, "truncated msfm payload");
     munmap(map, (size_t)len); close(fd); return 0;
   }
@@ -93,8 +92,6 @@ int ms_msfm_open(ms_msfm_t *f, const char *path, char *err, size_t errn) {
   f->beta   = (const uint16_t *)((const char *)map + h->beta_offset);
   f->levels = (const uint32_t *)((const char *)map + h->levels_offset);
   f->class_id = (const uint16_t *)((const char *)map + h->labels_offset);
-  f->count  = (h->flags & MSFM_F_COUNTS)
-                ? (const uint32_t *)((const char *)map + h->count_offset) : NULL;
   f->pattern_names = blob_index((const char *)map, h->names_offset, h->n_patterns, len, err, errn);
   f->record_names  = blob_index((const char *)map, h->rows_offset, h->n_records, len, err, errn);
   f->class_names   = blob_index((const char *)map, h->labels_offset + nr * 2,
@@ -134,7 +131,7 @@ ms_matrix_t *ms_msfm_to_matrix(const char *path, char ***labels_out,
     /* Without a stored count block, N is only ever asked "is this observed?",
      * so a 1/0 indicator is faithful for that use and the per-record coverage
      * total is carried separately and exactly. */
-    m->N[k] = f.count ? (int)f.count[k] : (v == MSFM_NA ? 0 : 1);
+    m->N[k] = (v == MSFM_NA ? 0 : 1);
   }
   if (labels_out) {
     char **lab = NULL;
@@ -166,7 +163,6 @@ void ms_msfm_report(const char *path) {
   printf("records\t%u\n", h->n_records);
   printf("patterns\t%u\n", h->n_patterns);
   printf("beta\tu16 fixed point (code/65534; 65535 = NA)\n");
-  printf("counts\t%s\n", f.count ? "present (per pattern)" : "absent (levels only)");
   printf("classes\t%u\n", h->n_classes);
   if (h->n_classes) {
     printf("labels\t");
@@ -214,8 +210,7 @@ static char **read_labels(const char *path, int expect) {
   return v;
 }
 
-static void write_msfm(const char *out, const ms_matrix_t *m, char **lab,
-                       int with_counts) {
+static void write_msfm(const char *out, const ms_matrix_t *m, char **lab) {
   uint32_t nr = (uint32_t)m->n_cells, np = (uint32_t)m->n_patterns;
 
   /* class table = sorted unique labels, so the stored id IS the class index a
@@ -252,15 +247,14 @@ static void write_msfm(const char *out, const ms_matrix_t *m, char **lab,
   memset(&h, 0, sizeof(h));
   memcpy(h.magic, MSFM_MAGIC, 7);
   h.version = 1; h.n_records = nr; h.n_patterns = np; h.n_classes = nk;
-  h.flags = with_counts ? MSFM_F_COUNTS : 0;
+  h.flags = 0;
   h.names_offset  = sizeof(h);
   h.rows_offset   = h.names_offset + names_b;
   h.labels_offset = h.rows_offset + rows_b;
   h.levels_offset = h.labels_offset + (uint64_t)nr * 2 + class_b;
   h.beta_offset   = h.levels_offset + (uint64_t)nr * 4;
-  h.count_offset  = with_counts ? h.beta_offset + (uint64_t)nr * np * 2 : 0;
-  h.file_bytes    = (with_counts ? h.count_offset + (uint64_t)nr * np * 4
-                                 : h.beta_offset + (uint64_t)nr * np * 2);
+  h.count_offset  = 0;                  /* reserved; see msfm.h */
+  h.file_bytes    = h.beta_offset + (uint64_t)nr * np * 2;
 
   FILE *f = fopen(out, "wb");
   if (!f) fdie("cannot create output", out);
@@ -291,20 +285,10 @@ static void write_msfm(const char *out, const ms_matrix_t *m, char **lab,
     wr(f, row, (size_t)np * 2, out);
   }
   free(row);
-  if (with_counts) {
-    uint32_t *crow = xmal((size_t)np * 4, "count row");
-    for (uint32_t r = 0; r < nr; ++r) {
-      const int *n = m->N + (size_t)r * np;
-      for (uint32_t c = 0; c < np; ++c) crow[c] = n[c] > 0 ? (uint32_t)n[c] : 0u;
-      wr(f, crow, (size_t)np * 4, out);
-    }
-    free(crow);
-  }
   if (fclose(f)) fdie("cannot finalize output", out);
 
   fprintf(stderr, "[methscope] classify-featurize: %u records x %u patterns"
-          "%s, %u classes -> %s (%.1f MB)\n", nr, np,
-          with_counts ? " (+counts)" : "", nk, out,
+          ", %u classes -> %s (%.1f MB)\n", nr, np, nk, out,
           (double)h.file_bytes / 1048576.0);
   free(cid); free(uniq);
 }
@@ -413,14 +397,11 @@ static int merge_msfm(const char *out, char **in, int n_in) {
     for (uint32_t c = 0; c < f[0].header->n_patterns; ++c)
       if (strcmp(f[i].pattern_names[c], f[0].pattern_names[c]))
         fdie("chunks disagree on pattern names (different MRMP?)", in[i]);
-    if (!!f[i].count != !!f[0].count)
-      fdie("chunks disagree on whether counts are present", in[i]);
     nr_tot += f[i].header->n_records;
   }
   if (nr_tot > UINT32_MAX) fdie("too many records", NULL);
 
   uint32_t np = f[0].header->n_patterns;
-  int with_counts = f[0].count != NULL;
 
   /* union the class tables */
   uint32_t cap = 0;
@@ -445,15 +426,14 @@ static int merge_msfm(const char *out, char **in, int n_in) {
   memset(&h, 0, sizeof(h));
   memcpy(h.magic, MSFM_MAGIC, 7);
   h.version = 1; h.n_records = (uint32_t)nr_tot; h.n_patterns = np; h.n_classes = nk;
-  h.flags = with_counts ? MSFM_F_COUNTS : 0;
+  h.flags = 0;
   h.names_offset  = sizeof(h);
   h.rows_offset   = h.names_offset + names_b;
   h.labels_offset = h.rows_offset + rows_b;
   h.levels_offset = h.labels_offset + nr_tot * 2 + class_b;
   h.beta_offset   = h.levels_offset + nr_tot * 4;
-  h.count_offset  = with_counts ? h.beta_offset + nr_tot * np * 2 : 0;
-  h.file_bytes    = (with_counts ? h.count_offset + nr_tot * np * 4
-                                 : h.beta_offset + nr_tot * np * 2);
+  h.count_offset  = 0;                  /* reserved; see msfm.h */
+  h.file_bytes    = h.beta_offset + nr_tot * np * 2;
 
   FILE *o = fopen(out, "wb");
   if (!o) fdie("cannot create output", out);
@@ -487,9 +467,6 @@ static int merge_msfm(const char *out, char **in, int n_in) {
     wr(o, f[i].levels, (size_t)f[i].header->n_records * 4, out);
   for (int i = 0; i < n_in; ++i)
     wr(o, f[i].beta, (size_t)f[i].header->n_records * np * 2, out);
-  if (with_counts)
-    for (int i = 0; i < n_in; ++i)
-      wr(o, f[i].count, (size_t)f[i].header->n_records * np * 4, out);
   if (fclose(o)) fdie("cannot finalize output", out);
 
   fprintf(stderr, "[methscope] classify-featurize --merge: %d chunks -> "
@@ -540,9 +517,13 @@ static int usage(void) {
     "                 workers, each seeking its own records via the .cg index.\n"
     "  --legacy-summarize  Use the old genome-scan featurizer (single-threaded, no\n"
     "                 --sample). Kept for A/B checks; output is bit-identical.\n"
-    "  --counts       Also store per-pattern covered-CpG counts (doubles size).\n"
-    "                 The per-record coverage total is ALWAYS stored; this is\n"
-    "                 only needed for per-pattern coverage filtering.\n"
+    "  --counts <N>   Require N measured CpGs behind a pattern's beta; below that\n"
+    "                 the beta is recorded MISSING rather than kept. A beta from a\n"
+    "                 single CpG can only be 0 or 1, so after the 0.5 call it is\n"
+    "                 always maximally confident and never borderline -- yet it\n"
+    "                 carries the same weight as one backed by hundreds of CpGs.\n"
+    "                 In mouse single cells 46.5% of observed pattern-betas rest\n"
+    "                 on one or two CpGs. Default 1 (keep every observed pattern).\n"
     "  --merge        Concatenate .msfm chunks (pattern sets must match).\n"
     "  -h, --help     Show this help message.\n"
     "\n"
@@ -585,7 +566,8 @@ int main_classify_featurize(int argc, char *argv[]) {
   uint64_t seed = 1;
   unsigned threads = 1;
   int binarize = 0, legacy = 0;
-  int with_counts = 0, merge = 0, i = 1;
+  int merge = 0, i = 1;
+  uint32_t min_cpgs = 0;   /* --counts N: below N measured CpGs -> NA */
   for (; i < argc; ++i) {
     if      (!strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
     else if (!strcmp(argv[i], "-l") && i + 1 < argc) labels = argv[++i];
@@ -595,7 +577,8 @@ int main_classify_featurize(int argc, char *argv[]) {
     else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = strtoull(argv[++i], NULL, 10);
     else if (!strcmp(argv[i], "--threads") && i + 1 < argc) threads = (unsigned)strtoul(argv[++i], NULL, 10);
     else if (!strcmp(argv[i], "-b") || !strcmp(argv[i], "--binarize")) binarize = 1;
-    else if (!strcmp(argv[i], "--counts")) with_counts = 1;
+    else if (!strcmp(argv[i], "--counts") && i + 1 < argc)
+      min_cpgs = (uint32_t)strtoul(argv[++i], NULL, 10);
     else if (!strcmp(argv[i], "--legacy-summarize")) legacy = 1;
     else if (!strcmp(argv[i], "--merge")) merge = 1;
     else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(); return 0; }
@@ -638,7 +621,8 @@ int main_classify_featurize(int argc, char *argv[]) {
 
     uint16_t *beta; uint32_t *levels; char **names; uint32_t n_cells, ncol;
     ms_msfm_build_sampled(query, ref, patterns, rep_sample, n_reps, binarize,
-                          seed, threads, &beta, &levels, &names, &n_cells, &ncol);
+                          min_cpgs, seed, threads,
+                          &beta, &levels, &names, &n_cells, &ncol);
     char **lab = labels ? read_labels(labels, (int)n_cells) : NULL;
     write_msfm_raw(out, beta, levels, names, n_cells, n_reps, ncol, lab, rep_sample);
     if (lab) { for (uint32_t r = 0; r < n_cells; ++r) free(lab[r]); free(lab); }
@@ -650,7 +634,7 @@ int main_classify_featurize(int argc, char *argv[]) {
 
   ms_matrix_t *m = ms_matrix_build(query, ref);
   char **lab = labels ? read_labels(labels, m->n_cells) : NULL;
-  write_msfm(out, m, lab, with_counts);
+  write_msfm(out, m, lab);
   if (lab) { for (int r = 0; r < m->n_cells; ++r) free(lab[r]); free(lab); }
   ms_matrix_free(m);
   ms_mrmp_cleanup(tmp_mrmp);
