@@ -99,7 +99,10 @@ void ms_bundle_pack(const char *out, const char *kind, const char *model_path,
  * and rejects an unmarked bundle; upscale/deconv dispatch by subcommand.) */
 char *ms_bundle_kind(const char *path);
 
-/* 1 if `path` ends in ".ubjx" or ".updecx" (the bundled-model extensions). */
+/* 1 if `path` carries a bundled-model extension: ".clfx" (classifier),
+ * ".updecx" (upscale decoder), ".refx" (deconv reference), or the legacy
+ * ".ubjx". Detection of an actual bundle is by magic (ms_bundle_is); this only
+ * governs what a writer accepts as an output name. */
 int ms_path_is_bundle_ext(const char *path);
 
 /* subcommands */

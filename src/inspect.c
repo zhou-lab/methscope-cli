@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * `inspect` — describe a model bundle (.ubjx / .updecx / .refx) without running
+ * `inspect` — describe a model bundle (.clfx / .updecx / .refx) without running
  * inference: the framework mark (kind), the on-disk section layout (each section's
  * offset + size + a short description of its contents), and a breakdown of the
  * `model` section by framework:
@@ -39,7 +39,7 @@ static int inspect_usage(void) {
     "Purpose:\n"
     "  Describe any methscope artifact without running it. The format is detected\n"
     "  from its magic:\n"
-    "    .ubjx/.updecx/.refx  bundle: kind mark, section layout, model breakdown\n"
+    "    .clfx/.updecx/.refx  bundle: kind mark, section layout, model breakdown\n"
     "    .mrmp   MRMPIDX1  pattern set: dimensions, binstring parameters, top ranks\n"
     "    .msui   MSUIDX1   processing-unit index: units, memberships, CpG split\n"
     "    .msur   MSURAW2/3 training msur: cells, replicates, embedded truth\n"
@@ -177,6 +177,7 @@ int main_inspect(int argc, char *argv[]) {
   if (!is_updec2) mbuf = ms_bundle_section(path, "model", &mlen);
   int is_updec  = (mlen >= 6  && memcmp(mbuf, "UPDEC1", 6) == 0);
   int is_linear = (mlen >= 16 && memcmp(mbuf, "methscope-linear", 16) == 0);
+  int is_vio    = (mlen >= 19 && memcmp(mbuf, "methscope-violation", 19) == 0);
   int is_refx   = (kind && strcmp(kind, "refx") == 0) ||
                   (mlen >= 5 && memcmp(mbuf, "cell\t", 5) == 0);
 
@@ -197,6 +198,21 @@ int main_inspect(int argc, char *argv[]) {
   }
   int32_t ud[3] = {0, 0, 0};
   if (is_updec && mlen >= 20) memcpy(ud, (char *)mbuf + 8, 12);  /* magic(8) then n_in,n_hidden,n_out */
+  /* violation dims straight off the spec: labels from the tab count on the
+   * 'labels' line, features from the number of 'pattern' rows. */
+  int vio_lab = 0, vio_pat = 0;
+  if (is_vio) {
+    const char *s = (const char *)mbuf, *end = s + mlen;
+    for (const char *p = s; p < end; ) {
+      const char *nl = memchr(p, '\n', (size_t)(end - p));
+      size_t n = nl ? (size_t)(nl - p) : (size_t)(end - p);
+      if (n > 7 && memcmp(p, "labels\t", 7) == 0)
+        for (size_t k = 0; k < n; ++k) { if (p[k] == '\t') vio_lab++; }
+      else if (n > 8 && memcmp(p, "pattern\t", 8) == 0) vio_pat++;
+      if (!nl) break;
+      p = nl + 1;
+    }
+  }
 
   /* short "content" for the section table = the model section's inner type */
   char mdesc[160];
@@ -204,6 +220,9 @@ int main_inspect(int argc, char *argv[]) {
   else if (is_updec)  snprintf(mdesc, sizeof mdesc, "UPDEC1 MLP decoder (%d->%d->%d)", ud[0], ud[1], ud[2]);
   else if (is_refx)   snprintf(mdesc, sizeof mdesc, "refx signature TSV (%d cell types x %d patterns)", refx_cells, refx_pat);
   else if (is_linear) snprintf(mdesc, sizeof mdesc, "methscope-linear text spec");
+  else if (is_vio)    snprintf(mdesc, sizeof mdesc,
+                        "methscope-violation text spec (%d classes x %d patterns)",
+                        vio_lab, vio_pat);
   else                snprintf(mdesc, sizeof mdesc, "xgboost booster (UBJ binary)");
 
   /* role = how the whole bundle is used (its framework mark applies bundle-wide) */
@@ -212,6 +231,8 @@ int main_inspect(int argc, char *argv[]) {
   else if (is_updec)  snprintf(role, sizeof role, "upscale decoder - run via `upscale`");
   else if (is_refx)   snprintf(role, sizeof role, "deconvolution reference - run via `deconv`");
   else if (is_linear) snprintf(role, sizeof role, "%s linear classifier - run via `classify`", kind ? kind : "linear");
+  else if (is_vio)    snprintf(role, sizeof role,
+                        "violation rule (unfitted) - run via `classify`");
   else                snprintf(role, sizeof role, "xgboost classifier - run via `classify`");
 
   /* ---- container ---- */

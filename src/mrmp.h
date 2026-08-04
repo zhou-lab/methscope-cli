@@ -113,4 +113,21 @@ void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
 void ms_mrmp_group_map(const char *artifact, uint16_t *group, uint64_t n_cpg,
                        uint32_t patterns);
 
+/* Decoded top-K view: the per-pattern binstrings and their CpG counts, plus the
+ * reference sample names. For a per-cell-type reference those names ARE the
+ * class labels, and binstring position order matches them -- which is what lets
+ * the `violation` framework build a classifier straight from the artifact, with
+ * no training data and no fitted parameter. */
+typedef struct {
+  uint32_t  n_samples;    /* binstring length == number of labels */
+  uint32_t  n_patterns;   /* min(top_k, n_candidates) */
+  char    **labels;       /* n_samples reference sample names */
+  char    **binstring;    /* n_patterns strings, n_samples chars each */
+  uint64_t *count;        /* n_patterns CpG counts */
+} mrmp_top_t;
+
+/* Read the top `top_k` ranked patterns. Fatal on error; free with the below. */
+mrmp_top_t *ms_mrmp_top_read(const char *artifact, uint32_t top_k);
+void ms_mrmp_top_free(mrmp_top_t *t);
+
 #endif /* MS_MRMP_H */

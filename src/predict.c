@@ -47,9 +47,9 @@ static int predict_usage(void) {
   ms_help(stderr,
     "\n"
     "Usage:\n"
-    "  methscope classify [options] <query.cg> <model.ubjx>\n"
+    "  methscope classify [options] <query.cg> <model.clfx>\n"
     "  methscope classify [options] <query.cg> <ref.mrmp> <booster.ubj>\n"
-    "  methscope classify --data <in.msfm> [options] <model.ubjx>\n"
+    "  methscope classify --data <in.msfm> [options] <model.clfx>\n"
     "\n"
     "Purpose:\n"
     "  Predict a label (cell type, sex, ... — whatever the model was trained on)\n"
@@ -59,11 +59,11 @@ static int predict_usage(void) {
     "Arguments:\n"
     "  <query.cg>     Query methylome(s); '-' reads a .cg stream from stdin\n"
     "                 (cells are then named 1,2,3,... as a stream has no index).\n"
-    "  <model.ubjx>   A self-contained bundle of the booster + its MRMP (from\n"
-    "                 `train -o model.ubjx` or `bundle`) — the recommended\n"
+    "  <model.clfx>   A self-contained bundle of the model + its MRMP (from\n"
+    "                 `classify-train -o model.clfx` or `bundle`) — the recommended\n"
     "                 single-file form.\n"
     "  <ref.mrmp>     MRMP pattern definition (a YAME .cm) to featurize the query\n"
-    "                 (loose form). A bundle (.ubjx/.updecx) also works here.\n"
+    "                 (loose form). A bundle (.clfx/.updecx) also works here.\n"
     "  <booster.ubj>  Loose booster with class labels embedded (see train / bundle -l).\n"
     "\n"
     "Options:\n"
@@ -126,6 +126,75 @@ static int predict_linear(const char *query_cg, const char *ref_mrmp,
   return 0;
 }
 
+/* Inference for the `violation` framework: featurize (or take prebuilt
+ * features), then call the class the query contradicts least. Unlike the linear
+ * path this accepts --data and --threads, because it consumes plain betas
+ * exactly as the booster does -- which is also how the C and reference
+ * implementations get validated against one identical feature matrix. */
+static int predict_violation(const char *query_cg, const char *ref_mrmp,
+                             const char *data_path, unsigned threads,
+                             void *model_buf, size_t model_len,
+                             const char *out_path, int with_probs, int no_header) {
+  viomodel_t *vm = ms_viomodel_parse(model_buf, model_len);
+  uint32_t *levels = NULL;
+  ms_matrix_t *m;
+  if (data_path) {
+    m = ms_msfm_to_matrix(data_path, NULL, &levels);
+  } else if (threads > 1) {
+    char *fidx = get_fname_index((char *)query_cg);
+    int have_idx = fidx && access(fidx, R_OK) == 0;
+    free(fidx);
+    if (have_idx) {
+      m = ms_matrix_build_threaded(query_cg, ref_mrmp, (uint32_t)vm->n_feat,
+                                   threads, &levels);
+    } else {
+      fprintf(stderr, "[methscope] classify: --threads needs a .cg index; "
+              "falling back to the single-threaded scan\n");
+      m = ms_matrix_build(query_cg, ref_mrmp);
+    }
+  } else {
+    m = ms_matrix_build(query_cg, ref_mrmp);
+  }
+  if (m->n_patterns < vm->n_feat)
+    pdie("reference .mrmp has fewer patterns than the model expects", ref_mrmp);
+
+  FILE *fout = (out_path && strcmp(out_path, "-") != 0) ? fopen(out_path, "w") : stdout;
+  if (!fout) pdie("cannot open output", out_path);
+  if (!no_header) {
+    fputs("cell\tprediction_label\tconfidence", fout);
+    if (with_probs)
+      for (int k = 0; k < vm->n_label; ++k) fprintf(fout, "\t%s", vm->labels[k]);
+    fputc('\n', fout);
+  }
+  double *betas = malloc((size_t)vm->n_feat * sizeof(double));
+  double *all   = malloc((size_t)vm->n_label * sizeof(double));
+  if (!betas || !all) pdie("out of memory (violation scoring)", NULL);
+  for (int r = 0; r < m->n_cells; ++r) {
+    const double *src = m->M + (size_t)r * m->n_patterns;
+    for (int c = 0; c < vm->n_feat; ++c) betas[c] = src[c];
+    double score, margin;
+    int k = ms_viomodel_score(vm, betas, &score, &margin);
+    /* A record too sparse to clear min_patterns is reported as NA rather than
+     * given a fabricated call -- the whole point of the margin is to admit
+     * when the evidence is not there. */
+    if (k < 0) fprintf(fout, "%s\tNA\tNA", m->cell_names[r]);
+    else fprintf(fout, "%s\t%s\t%.6f", m->cell_names[r], vm->labels[k],
+                 margin == margin ? margin : 0.0);
+    if (with_probs) {
+      ms_viomodel_scores(vm, betas, all);
+      for (int c = 0; c < vm->n_label; ++c)
+        if (all[c] == all[c] && all[c] != (double)INFINITY)
+          fprintf(fout, "\t%.6f", all[c]);
+        else fputs("\tNA", fout);
+    }
+    fputc('\n', fout);
+  }
+  free(betas); free(all); free(levels);
+  if (fout != stdout) fclose(fout);
+  ms_matrix_free(m); ms_viomodel_free(vm);
+  return 0;
+}
+
 int main_predict(int argc, char *argv[]) {
   const char *out_path = NULL, *data_path = NULL;
   unsigned threads = 1;
@@ -167,7 +236,7 @@ int main_predict(int argc, char *argv[]) {
     /* bundle form: query.cg model.ubjx (model + mrmp in one file) */
     model_name = argv[i + 1];
     if (!ms_bundle_is(model_name))
-      pdie("expected a .ubjx bundle; for a bare booster give <ref.mrmp> <booster.ubj>", model_name);
+      pdie("expected a .clfx bundle; for a bare booster give <ref.mrmp> <booster.ubj>", model_name);
     char *kind = ms_bundle_kind(model_name);      /* framework mark is REQUIRED */
     if (!kind)
       pdie("bundle has no framework 'kind' mark — regenerate it with a current "
@@ -184,8 +253,16 @@ int main_predict(int argc, char *argv[]) {
       free(bbuf); free(kind);
       return rc;
     }
+    if (strcmp(kind, "violation") == 0) {
+      size_t blen; void *bbuf = ms_bundle_section(model_name, "model", &blen);
+      int rc = predict_violation(query_cg, ref_mrmp, data_path, threads,
+                                 bbuf, blen, out_path, with_probs, no_header);
+      free(bbuf); free(kind);
+      return rc;
+    }
     if (strcmp(kind, "xgboost") != 0)
-      pdie("unknown model framework 'kind' (expected xgboost/threshold/logistic)", kind);
+      pdie("unknown model framework 'kind' "
+           "(expected xgboost/violation/threshold/logistic)", kind);
     free(kind);
     size_t blen; void *bbuf = ms_bundle_section(model_name, "model", &blen);
     XGCHK(XGBoosterCreate(NULL, 0, &booster));
@@ -197,7 +274,7 @@ int main_predict(int argc, char *argv[]) {
     ref_mrmp   = ms_mrmp_resolve(argv[i + 1], &tmp_mrmp);
     model_name = argv[i + 2];
     if (ms_bundle_is(model_name))
-      pdie("got a bundle where a bare booster.ubj was expected; use: predict query.cg model.ubjx", model_name);
+      pdie("got a bundle where a bare booster.ubj was expected; use: classify query.cg model.clfx", model_name);
     XGCHK(XGBoosterCreate(NULL, 0, &booster));
     XGCHK(XGBoosterLoadModel(booster, model_name));
   }

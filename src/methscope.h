@@ -90,6 +90,41 @@ int  ms_linmodel_score(const linmodel_t *lm, const double *betas,
                        double *p1, double *conf);
 void ms_linmodel_free(linmodel_t *lm);
 
+/* ------------------------------------------------------------------ */
+/* Violation framework (multi-class, unfitted) — see violation.c       */
+/* ------------------------------------------------------------------ */
+/* Calls the class a query contradicts least, using only the MRMP's own
+ * binstrings: for each class, the weighted fraction of its expected-methylated
+ * patterns that came back unmethylated, plus the converse, minimized. There is
+ * no fitted parameter — the model IS the reference definition — so it is built
+ * by transcription from the MRMP artifact rather than by training. Confidence
+ * is the margin to the runner-up, which collapses toward zero when no class
+ * fits, i.e. when the query's true type is absent from the reference. */
+typedef struct viomodel_t {
+  int      n_label, n_feat;
+  char   **labels;                /* n_label, binstring position order */
+  char   **names;                 /* n_feat pattern names ("P1"...) */
+  char   **bin;                   /* n_feat binstrings, n_label chars each */
+  double  *w;                     /* n_feat pattern weights (derived from n_cpg) */
+  double   threshold;             /* beta call cutoff (0.5) */
+  int      min_patterns;          /* required observed patterns per side */
+  char    *weighting;             /* "sqrt" | "log1p" | "linear" | "flat" */
+} viomodel_t;
+
+/* Transcribe a classifier out of an MRMP artifact — no training data. */
+viomodel_t *ms_viomodel_from_mrmp(const char *artifact, uint32_t top_k,
+                                  double threshold, const char *weighting,
+                                  int min_patterns);
+void        ms_viomodel_write(const viomodel_t *vm, const char *path);
+viomodel_t *ms_viomodel_parse(const char *buf, size_t len);
+/* Per-label violation totals into out[n_label]; INFINITY where too sparse. */
+void ms_viomodel_scores(const viomodel_t *vm, const double *betas, double *out);
+/* Score betas[n_feat] (NaN = unobserved: skipped, never imputed). Returns the
+ * winning label index, or -1 when too sparse to call; sets *score and *margin. */
+int  ms_viomodel_score(const viomodel_t *vm, const double *betas,
+                       double *score, double *margin);
+void ms_viomodel_free(viomodel_t *vm);
+
 /* Render subcommand help text, ANSI-styled on a TTY, plain when redirected. */
 void ms_help(FILE *out, const char *text);
 

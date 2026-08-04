@@ -205,15 +205,18 @@ static int bundle_usage(void) {
     "Purpose:\n"
     "  Bundle a model with the MRMP definition it needs into one self-contained\n"
     "  file, so a query .cg can be featurized + run without a separate .mrmp.\n"
-    "  Works for any model; by convention give the output an 'x' suffix:\n"
-    "    booster.ubj  -> booster.ubjx   (predict)\n"
-    "    model.updec  -> model.updecx   (upscale)\n"
+    "  Works for any model; by convention the output extension names the ROLE:\n"
+    "    a classifier          -> model.clfx    (classify)\n"
+    "    an upscale decoder    -> model.updecx  (upscale)\n"
+    "    a deconv reference    -> panel.refx    (deconv)\n"
+    "  All three are the same MSBNDL1 container and are detected by magic, not by\n"
+    "  name; '.ubjx' is the former classifier extension and is still accepted.\n"
     "\n"
     "Options:\n"
     "  -m <ref.mrmp>   the MRMP definition (a YAME .cm) to bundle (required).\n"
-    "  -k <kind>       framework mark to record (xgboost/threshold/logistic); required\n"
-    "                  for a classifier .ubjx that `predict` will run (predict rejects\n"
-    "                  an unmarked bundle). Also used to re-stamp an existing model.\n"
+    "  -k <kind>       framework mark to record (xgboost/violation/threshold/logistic);\n"
+    "                  required for a classifier .clfx that `classify` will run (it\n"
+    "                  rejects an unmarked bundle). Also re-stamps an existing model.\n"
     "  -l <meta.tsv>   embed class labels (a 'labels<TAB>l1,l2,...' line) into the\n"
     "                  booster before bundling — for a raw (e.g. R-exported) .ubj.\n"
     "  -O <outcpg.cm>  output-CpG locations (upscale only): a YAME mask marking the\n"
@@ -274,10 +277,22 @@ char *ms_bundle_kind(const char *path) {
   return s;
 }
 
+/* Every bundle is the same MSBNDL1 container and is DETECTED by magic
+ * (ms_bundle_is), so this list is only about what a writer will accept as an
+ * output name. The extensions name the model's role: .clfx classifier, .updecx
+ * upscale decoder, .refx deconvolution reference. ".ubjx" was the classifier's
+ * former name -- it described the payload format (a UBJSON booster) rather than
+ * the role, and stopped being true the moment the threshold/logistic
+ * frameworks shipped a plain-text model section under it. Kept accepted
+ * indefinitely: detection never depended on it, so nothing is gained by
+ * breaking existing files or scripts. ".refx" was missing here entirely, which
+ * is the drift that having three names for one container invites. */
 int ms_path_is_bundle_ext(const char *path) {
   size_t n = strlen(path);
-  return (n >= 5 && strcmp(path + n - 5, ".ubjx")   == 0) ||
-         (n >= 7 && strcmp(path + n - 7, ".updecx") == 0);
+  return (n >= 5 && strcmp(path + n - 5, ".clfx")   == 0) ||
+         (n >= 7 && strcmp(path + n - 7, ".updecx") == 0) ||
+         (n >= 5 && strcmp(path + n - 5, ".refx")   == 0) ||
+         (n >= 5 && strcmp(path + n - 5, ".ubjx")   == 0);  /* legacy */
 }
 
 int main_bundle(int argc, char *argv[]) {
@@ -330,13 +345,13 @@ static int unbundle_usage(void) {
     "  methscope unbundle [-o <model_out>] [--mrmp <mrmp_out>] <bundle>\n"
     "\n"
     "Purpose:\n"
-    "  Unpack a bundle (.ubjx / .updecx / .refx) into its inner model, its MRMP,\n"
+    "  Unpack a bundle (.clfx / .updecx / .refx) into its inner model, its MRMP,\n"
     "  and (if present) the output-CpG mask.\n"
     "\n"
     "  With no -o/--mrmp, output names are derived from the bundle path (the\n"
     "  original .mrmp filename is not stored): drop the 'x' from the extension for\n"
     "  the model, and add sibling suffixes for the rest --\n"
-    "    foo.ubjx   -> foo.ubj   + foo.mrmp  (+ foo.outcpg.cm if present)\n"
+    "    foo.clfx   -> foo.model + foo.mrmp  (+ foo.outcpg.cm if present)\n"
     "    foo.updecx -> foo.updec + foo.mrmp\n"
     "    foo.refx   -> foo.ref   + foo.mrmp\n"
     "\n"

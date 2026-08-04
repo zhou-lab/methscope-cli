@@ -310,7 +310,7 @@ static int build_reference_usage(void) {
     "Arguments:\n"
     "  <celltypes.cg>  One .cg record per cell type (e.g. pseudobulks); '-' reads a\n"
     "                  stream from stdin (records named 1,2,3,... — no index).\n"
-    "  <ref.mrmp>      MRMP pattern definition (a YAME .cm). A bundle (.ubjx/.updecx)\n"
+    "  <ref.mrmp>      MRMP pattern definition (a YAME .cm). A bundle (.clfx/.updecx)\n"
     "                  is also accepted; its attached MRMP is used automatically.\n"
     "\n"
     "Options:\n"

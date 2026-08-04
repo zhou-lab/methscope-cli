@@ -527,6 +527,44 @@ static void mrmp_close(mrmp_reader_t *r) {
   if (r->fd >= 0) close(r->fd);
 }
 
+/* ---------------- top-K decoded view ------------------------------------ */
+
+/* Same decode `inspect --patterns` and `export --patterns` print, materialized
+ * for callers that need the patterns as data rather than as text. Copies out of
+ * the mapping so the artifact can be closed immediately. */
+mrmp_top_t *ms_mrmp_top_read(const char *artifact, uint32_t top_k) {
+  mrmp_reader_t r; mrmp_open(&r, artifact);
+  const mrmp_header_t *h = r.h;
+  uint64_t lim = top_k < h->n_candidates ? top_k : h->n_candidates;
+  if (lim > UINT32_MAX) die("top_k is implausible", artifact);
+
+  mrmp_top_t *t = xcalloc(1, sizeof(*t), "mrmp top view");
+  t->n_samples  = h->n_samples;
+  t->n_patterns = (uint32_t)lim;
+  t->labels     = xcalloc(h->n_samples, sizeof(char *), "top labels");
+  t->binstring  = xcalloc(lim ? lim : 1, sizeof(char *), "top binstrings");
+  t->count      = xcalloc(lim ? lim : 1, sizeof(uint64_t), "top counts");
+  for (uint32_t s = 0; s < h->n_samples; ++s) {
+    size_t n = strlen(r.names[s]) + 1;
+    t->labels[s] = xcalloc(n, 1, "top label");
+    memcpy(t->labels[s], r.names[s], n);
+  }
+  for (uint64_t p = 0; p < lim; ++p) {
+    t->binstring[p] = xcalloc((size_t)h->n_samples + 1, 1, "top binstring");
+    key_to_string(pat_key(&r, p), h->n_samples, t->binstring[p]);
+    t->count[p] = pat_count(&r, p);
+  }
+  mrmp_close(&r);
+  return t;
+}
+
+void ms_mrmp_top_free(mrmp_top_t *t) {
+  if (!t) return;
+  for (uint32_t s = 0; s < t->n_samples; ++s) free(t->labels[s]);
+  for (uint32_t p = 0; p < t->n_patterns; ++p) free(t->binstring[p]);
+  free(t->labels); free(t->binstring); free(t->count); free(t);
+}
+
 /* ---------------- inspect ----------------------------------------------- */
 
 int main_mrmp_inspect(int argc, char *argv[]) {
