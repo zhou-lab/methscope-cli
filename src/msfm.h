@@ -135,6 +135,27 @@ void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t pattern
                            char ***names_out, uint32_t *n_cells_out,
                            uint32_t *ncol_out);
 
+/* Same, over N MRMP sets in ONE pass over the query. Column layout is
+ * set-major: set s owns [set_col0[s], set_col0[s] + patterns[s]], the last of
+ * those being its PNA. With n_sets == 1 this is byte-identical to
+ * ms_msfm_build_sampled, which calls it.
+ *
+ * The reason this exists rather than N calls: a cell's decompress dominates the
+ * cost (the header note above), so scoring one inflated copy against every set
+ * turns N passes into one. Merging the masks instead would not work -- a .cm
+ * gives each CpG exactly one pattern, so overlapping sets would fight over the
+ * CpGs they share, and those are precisely the informative ones.
+ *
+ * set_col0_out (optional) receives the first column of each set. */
+void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
+                           const uint32_t *patterns, uint32_t n_sets,
+                           const uint32_t *rep_sample, uint32_t n_reps,
+                           int binarize, uint32_t min_cpgs,
+                           uint64_t seed, unsigned threads,
+                           uint16_t **beta_out, uint32_t **levels_out,
+                           char ***names_out, uint32_t *n_cells_out,
+                           uint32_t *ncol_out, uint32_t *set_col0_out);
+
 /* Subcommand entry point. */
 int  main_classify_featurize(int argc, char *argv[]);
 

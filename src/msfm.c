@@ -483,7 +483,7 @@ static int usage(void) {
   ms_help(stderr,
     "\n"
     "Usage:\n"
-    "  methscope classify-featurize [options] -o <out.msfm> <query.cg> <ref.cm>\n"
+    "  methscope classify-featurize [options] -o <out.msfm> <query.cg> <ref.cm> [ref2.cm ...]\n"
     "  methscope classify-featurize --merge  -o <out.msfm> <in1.msfm> [in2.msfm ...]\n"
     "\n"
     "Purpose:\n"
@@ -592,8 +592,9 @@ int main_classify_featurize(int argc, char *argv[]) {
     return merge_msfm(out, argv + i, argc - i);
   }
 
-  if (argc - i != 2) return usage();
+  if (argc - i < 2) return usage();
   const char *query = argv[i];
+  uint32_t n_sets = (uint32_t)(argc - i - 1);
   char *tmp_mrmp = NULL;
   const char *ref = ms_mrmp_resolve(argv[i + 1], &tmp_mrmp);
 
@@ -620,9 +621,42 @@ int main_classify_featurize(int argc, char *argv[]) {
     else { rep_sample = xmal(4, "rep sample"); rep_sample[0] = 0; n_reps = 1; }
 
     uint16_t *beta; uint32_t *levels; char **names; uint32_t n_cells, ncol;
-    ms_msfm_build_sampled(query, ref, patterns, rep_sample, n_reps, binarize,
-                          min_cpgs, seed, threads,
-                          &beta, &levels, &names, &n_cells, &ncol);
+    if (n_sets == 1) {
+      ms_msfm_build_sampled(query, ref, patterns, rep_sample, n_reps, binarize,
+                            min_cpgs, seed, threads,
+                            &beta, &levels, &names, &n_cells, &ncol);
+    } else {
+      /* Several MRMP sets in ONE pass over the query. Each cell is inflated
+       * once and scored against every set, so N sets cost N scatter-adds per
+       * sampled CpG rather than N decompressions -- and decompression is the
+       * dominant cost (see the msfm_build.c header). Merging the masks instead
+       * is not an option: a .cm gives each CpG exactly one pattern, so
+       * overlapping sets would fight over the CpGs they share, which are
+       * precisely the informative ones. */
+      const char **refs = xmal(n_sets * sizeof(char *), "mask list");
+      char **tmps = xmal(n_sets * sizeof(char *), "mask temps");
+      uint32_t *np = xmal(n_sets * sizeof(uint32_t), "pattern counts");
+      /* --patterns caps the FIRST set only. The others auto-detect from their
+       * own mask (np = 0), because a satellite holds 2-30 patterns and giving
+       * it the global's cap would pad it with thousands of empty columns --
+       * 15 satellites x 6001 would be 90k columns of which ~90 are real. */
+      refs[0] = ref; tmps[0] = tmp_mrmp; np[0] = patterns;
+      for (uint32_t s = 1; s < n_sets; ++s) {
+        tmps[s] = NULL;
+        refs[s] = ms_mrmp_resolve(argv[i + 1 + s], &tmps[s]);
+        np[s] = 0;
+      }
+      uint32_t *col0 = xmal(n_sets * sizeof(uint32_t), "set offsets");
+      ms_msfm_build_sampled_multi(query, refs, np, n_sets, rep_sample, n_reps,
+                                  binarize, min_cpgs, seed, threads,
+                                  &beta, &levels, &names, &n_cells, &ncol, col0);
+      fprintf(stderr, "[methscope] classify-featurize: %u sets fused, "
+              "%u columns; set starts:", n_sets, ncol);
+      for (uint32_t s = 0; s < n_sets; ++s) fprintf(stderr, " %u", col0[s]);
+      fputc('\n', stderr);
+      for (uint32_t s = 1; s < n_sets; ++s) ms_mrmp_cleanup(tmps[s]);
+      free(refs); free(tmps); free(np); free(col0);
+    }
     char **lab = labels ? read_labels(labels, (int)n_cells) : NULL;
     write_msfm_raw(out, beta, levels, names, n_cells, n_reps, ncol, lab, rep_sample);
     if (lab) { for (uint32_t r = 0; r < n_cells; ++r) free(lab[r]); free(lab); }

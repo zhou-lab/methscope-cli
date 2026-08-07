@@ -393,7 +393,9 @@ int main_mrmp_build(int argc, char *argv[]) {
   hd.refname_offset = off;   off += strlen(ref) + 1;
   hd.names_offset = off;     for (uint32_t s = 0; s < ns; ++s) off += strlen(names[s]) + 1;
   hd.patterns_offset = off;  off += n_cand * mrmp_pattern_stride(ns);
-  hd.membership_offset = off;
+  hd.membership_offset = off; off += n_cpg * sizeof(uint32_t);
+  hd.thresh_offset = off;
+  hd.flags |= MRMP_FLAG_THRESH;
 
   write_or_die(fp, &hd, sizeof(hd), out);
   write_or_die(fp, ref, strlen(ref) + 1, out);
@@ -404,24 +406,79 @@ int main_mrmp_build(int argc, char *argv[]) {
     write_or_die(fp, &pcount[x], sizeof(uint64_t), out);
   }
   /* per-CpG membership rank (re-derive keys from the planes; PNA sentinel
-   * where the CpG is the all-'2' pattern). */
-  {
-    const uint64_t CHUNK = 1u << 20;
-    uint32_t *buf = xcalloc(CHUNK, sizeof(uint32_t), "membership buffer");
-    for (uint64_t i = 0; i < n_cpg; ) {
-      uint64_t m = n_cpg - i < CHUNK ? n_cpg - i : CHUNK;
-      for (uint64_t j = 0; j < m; ++j) {
-        int is_pna;
-        resolve_cpg(meth, ambig, i + j, ns, stride, n_cpg,
-                    min_fold, max_ambig, pna_key, &is_pna, key);
-        uint32_t p = is_pna ? MRMP_PNA_MEMBERSHIP : phash_find(&h, key);
-        buf[j] = (p == MRMP_PNA_MEMBERSHIP) ? MRMP_PNA_MEMBERSHIP : rank_of[p];
-      }
-      write_or_die(fp, buf, (size_t)m * sizeof(uint32_t), out);
-      i += m;
-    }
-    free(buf);
+   * where the CpG is the all-'2' pattern). Materialised rather than streamed,
+   * because the threshold pass below needs the same mapping and re-deriving it
+   * twice would double the resolve_cpg work. */
+  uint32_t *memb = xcalloc(n_cpg, sizeof(uint32_t), "membership");
+  for (uint64_t i = 0; i < n_cpg; ++i) {
+    int is_pna;
+    resolve_cpg(meth, ambig, i, ns, stride, n_cpg,
+                min_fold, max_ambig, pna_key, &is_pna, key);
+    uint32_t p = is_pna ? MRMP_PNA_MEMBERSHIP : phash_find(&h, key);
+    memb[i] = (p == MRMP_PNA_MEMBERSHIP) ? MRMP_PNA_MEMBERSHIP : rank_of[p];
   }
+  write_or_die(fp, memb, (size_t)n_cpg * sizeof(uint32_t), out);
+
+  /* ---- per-pattern binarisation midpoints --------------------------------
+   *
+   * A second pass over the reference, because the ingestion above kept only the
+   * meth/ambig bit planes and the midpoint needs the actual betas. For each
+   * pattern, average the reference beta over its CpGs separately for the
+   * classes it calls 1 and those it calls 0, then take the midpoint. That is
+   * the cut which best separates the two groups AS THE REFERENCE SEES THEM --
+   * and it must not be a fixed 0.5, because inside a satellite the members are
+   * close relatives and a pattern can sit entirely above 0.5, where 0.5
+   * carries no information at all.
+   *
+   * NaN marks a pattern that cannot be binarised: a homogeneous binstring (no
+   * contrast to threshold), or a reference that puts the expected-0 group at or
+   * above the expected-1 group (the pattern does not hold up on its own
+   * reference). Consumers drop those rather than guess. */
+  {
+    double *sum = xcalloc(n_cand * ns, sizeof(double), "threshold sums");
+    uint64_t *cnt = xcalloc(n_cand * ns, sizeof(uint64_t), "threshold counts");
+    cfile_t cf2 = open_cfile((char *)ref);
+    for (uint32_t kk = 0; kk < ns; ++kk) {
+      cdata_t c = read_cdata1(&cf2);
+      if (!c.n) { free_cdata(&c); break; }
+      decompress_in_situ(&c);
+      for (uint64_t i = 0; i < n_cpg; ++i) {
+        uint32_t r = memb[i];
+        if (r == MRMP_PNA_MEMBERSHIP) continue;
+        uint64_t mu = f3_get_mu(&c, i);
+        if (!mu || MU2cov(mu) < mincov) continue;
+        sum[(uint64_t)r * ns + kk] += MU2beta(mu);
+        cnt[(uint64_t)r * ns + kk] += 1;
+      }
+      free_cdata(&c);
+    }
+    bgzf_close(cf2.fh);
+
+    float *thr = xcalloc(n_cand, sizeof(float), "thresholds");
+    uint64_t n_usable = 0;
+    char *bs = xcalloc((size_t)ns + 1, 1, "binstring");
+    for (uint64_t r = 0; r < n_cand; ++r) {
+      key_to_string(pkeys + (uint64_t)order[r] * nw, ns, bs);
+      double s1 = 0, s0 = 0; uint32_t n1 = 0, n0 = 0;
+      for (uint32_t kk = 0; kk < ns; ++kk) {
+        uint64_t c2 = cnt[(uint64_t)r * ns + kk];
+        if (!c2) continue;
+        double m = sum[(uint64_t)r * ns + kk] / (double)c2;
+        if (bs[kk] == '1') { s1 += m; ++n1; }
+        else if (bs[kk] == '0') { s0 += m; ++n0; }
+      }
+      if (!n1 || !n0) { thr[r] = (float)(0.0 / 0.0); continue; }
+      double hi = s1 / n1, lo = s0 / n0;
+      if (!(hi > lo)) { thr[r] = (float)(0.0 / 0.0); continue; }
+      thr[r] = (float)(0.5 * (hi + lo));
+      ++n_usable;
+    }
+    write_or_die(fp, thr, (size_t)n_cand * sizeof(float), out);
+    fprintf(stderr, "  thresholds: %" PRIu64 " of %" PRIu64
+            " patterns binarisable\n", n_usable, n_cand);
+    free(sum); free(cnt); free(thr); free(bs);
+  }
+  free(memb);
   free(meth); free(ambig);
   if (fclose(fp)) die("error closing output", out);
 

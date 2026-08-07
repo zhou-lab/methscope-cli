@@ -35,6 +35,22 @@
  * is gone; kept in the header so older artifacts stay readable. */
 #define MRMP_FLAG_INCLUDE_HOMOGENEOUS 1u
 
+/* Per-pattern binarisation midpoints are present at thresh_offset.
+ *
+ * The threshold belongs with the patterns, not with the featurizer. It is the
+ * midpoint between the mean reference beta of the classes a pattern calls 1 and
+ * of those it calls 0, so only mrmp-build -- which has the reference open -- can
+ * compute it, and any later recomputation risks disagreeing with the patterns it
+ * is applied to. Storing it here lets it travel .mrmp -> .msfm -> .clfx, so a
+ * shipped model binarises a new query exactly as training did.
+ *
+ * It must not be 0.5: inside a satellite the member classes are close
+ * relatives, and a pattern can sit entirely above 0.5 where that cut carries no
+ * information at all. NaN marks a pattern whose two groups are not both
+ * populated, or whose reference puts the expected-0 group above the expected-1
+ * group; such a pattern is unusable and consumers drop it. */
+#define MRMP_FLAG_THRESH 2u
+
 /* 128-byte fixed header; all little-endian, offsets are absolute file bytes. */
 typedef struct {
   char     magic[8];          /* "MRMPIDX1" */
@@ -63,7 +79,9 @@ typedef struct {
   uint64_t patterns_offset;   /* n_candidates * mrmp_pattern_t, rank order */
   uint64_t membership_offset; /* n_cpg * uint32 rank (PNA sentinel = -1) */
   uint64_t content_checksum;  /* FNV-1a over the per-CpG key stream */
-  uint64_t reserved;          /* pad to 128 bytes */
+  uint64_t thresh_offset;     /* n_candidates float32 binarisation midpoints,
+                               * or 0 in an artifact written before they were
+                               * stored. See MRMP_FLAG_THRESH. */
 } mrmp_header_t;
 
 /* One ranked candidate pattern (rank == array index; label = P(rank+1)).

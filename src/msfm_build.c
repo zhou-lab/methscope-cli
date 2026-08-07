@@ -89,10 +89,20 @@ typedef struct {
   const char     *query;
   const int64_t  *offset;      /* BGZF virtual offset per cell */
   uint32_t        n_cells;
-  const uint16_t *group;       /* n_cpg -> 1-based pattern, 0 = PNA/background */
+  /* One CpG->column map per MRMP set. An entry is a 1-based OUTPUT column, or
+   * 0 meaning this set calls the CpG background (which lands in pna_col[s]).
+   *
+   * Holding N maps rather than merging the sets into one mask is the point: a
+   * .cm assigns each CpG to exactly ONE pattern, so merging would force
+   * overlapping sets to fight over the CpGs they share -- and the informative
+   * CpGs are precisely the shared ones. With N maps every set keeps every CpG
+   * it selected, and the cell is still inflated only once. The cost is N
+   * scatter-adds per sampled CpG against a decompress that dominates. */
+  const uint16_t *const *groups;
+  const uint32_t *pna_col;     /* n_sets: each set's background column */
+  uint32_t        n_sets;
   uint64_t        n_cpg;
-  uint32_t        patterns;    /* feature patterns; column `patterns` is PNA */
-  uint32_t        ncol;        /* patterns + 1 */
+  uint32_t        ncol;        /* total output columns across every set */
   const uint32_t *rep_sample;  /* target covered CpGs per replicate; 0 = native */
   uint32_t        n_reps;
   int             binarize;
@@ -160,9 +170,11 @@ static void *worker(void *arg) {
         double b = MU2beta(f3_get_mu(&c, pos));
         /* One read at this CpG: the call is 0 or 1, never a fraction. */
         if (J->binarize) b = rng_01(&rng) < b ? 1.0 : 0.0;
-        uint16_t g = J->group[pos];
-        uint32_t col = g ? (uint32_t)g - 1 : J->patterns;   /* PNA last */
-        sum[col] += b; ++cnt[col];
+        for (uint32_t s = 0; s < J->n_sets; ++s) {
+          uint16_t g = J->groups[s][pos];
+          uint32_t col = g ? (uint32_t)g - 1 : J->pna_col[s];
+          sum[col] += b; ++cnt[col];
+        }
       }
 
       uint64_t row = (uint64_t)rep * J->n_cells + cell;
@@ -227,6 +239,27 @@ void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t pattern
                            uint16_t **beta_out, uint32_t **levels_out,
                            char ***names_out, uint32_t *n_cells_out,
                            uint32_t *ncol_out) {
+  const char *one[1] = {mrmp};
+  uint32_t np[1] = {patterns};
+  ms_msfm_build_sampled_multi(query, one, np, 1, rep_sample, n_reps, binarize,
+                              min_cpgs, seed, threads, beta_out, levels_out,
+                              names_out, n_cells_out, ncol_out, NULL);
+}
+
+/* N MRMP sets, one pass over the query. Column layout is set-major: set s owns
+ * [set_col0[s], set_col0[s] + patterns_s], the last of those being its PNA.
+ * With n_sets == 1 the layout and the arithmetic are identical to the old
+ * single-mask path, which is what lets the wrapper above stay byte-compatible. */
+void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
+                           const uint32_t *patterns_in, uint32_t n_sets,
+                           const uint32_t *rep_sample, uint32_t n_reps,
+                           int binarize, uint32_t min_cpgs,
+                           uint64_t seed, unsigned threads,
+                           uint16_t **beta_out, uint32_t **levels_out,
+                           char ***names_out, uint32_t *n_cells_out,
+                           uint32_t *ncol_out, uint32_t *set_col0_out) {
+  const char *mrmp = mrmps[0];
+  uint32_t patterns = patterns_in[0];
   /* record offsets from the .cg index -- the same mechanism `yame subset -l`
    * uses, and what lets workers seek instead of sharing one stream */
   int npairs = 0;
@@ -249,11 +282,23 @@ void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t pattern
   free_cdata(&c0);
   bgzf_close(cf0.fh);
 
-  /* CpG -> pattern. Prefer the MRMPIDX1 artifact so this map and the mask a
-   * model bundles come from one source; an exported .cm is still accepted. */
+  /* CpG -> pattern, once per set. Prefer the MRMPIDX1 artifact so this map and
+   * the mask a model bundles come from one source; an exported .cm is still
+   * accepted. Memory is n_sets * n_cpg * 2 B -- 44 MB per set at mm10 scale,
+   * shared read-only across workers, against an output matrix that is already
+   * larger. Chunking, if it is ever needed, belongs on the CELL axis: that
+   * keeps the single decompress, which is the whole point. */
+  uint16_t **groups = bmal((size_t)n_sets * sizeof(uint16_t *), "group maps");
+  uint32_t *pna_col = bmal((size_t)n_sets * sizeof(uint32_t), "pna cols");
+  uint32_t *set_col0 = bmal((size_t)n_sets * sizeof(uint32_t), "set offsets");
+  uint32_t ncol = 0;
+  for (uint32_t si = 0; si < n_sets; ++si) {
+  mrmp = mrmps[si];
+  patterns = patterns_in[si];
   uint16_t *group = bmal((size_t)n_cpg * sizeof(uint16_t), "group map");
   if (ms_mrmp_is_artifact(mrmp)) {
     ms_mrmp_group_map(mrmp, group, n_cpg, patterns);
+    if (!patterns) bdie("artifact needs an explicit pattern count", mrmp);
   } else {
     cfile_t cmf = open_cfile((char *)mrmp);
     cdata_t cm = read_cdata1(&cmf);
@@ -282,15 +327,27 @@ void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t pattern
     }
     free_cdata(&cm);
   }
+  /* set s occupies [set_col0[s], set_col0[s]+patterns], PNA last within it, and
+   * the map is rewritten to address the GLOBAL column so the worker needs no
+   * per-set offset arithmetic in its inner loop */
+  set_col0[si] = ncol;
+  for (uint64_t i = 0; i < n_cpg; ++i)
+    if (group[i]) group[i] = (uint16_t)(set_col0[si] + group[i]);
+  groups[si] = group;
+  pna_col[si] = ncol + patterns;
+  ncol += patterns + 1;
+  if (ncol > UINT16_MAX) bdie("fused column count exceeds uint16", mrmp);
+  }
 
-  uint32_t ncol = patterns + 1;                   /* + PNA, kept as the last column */
   uint64_t n_rows = (uint64_t)n_reps * n_cells;
   uint16_t *beta = bmal(n_rows * ncol * sizeof(uint16_t), "beta matrix");
   uint32_t *levels = bmal(n_rows * sizeof(uint32_t), "levels");
 
   job_t J = {0};
-  J.query = query; J.n_cells = n_cells; J.group = group; J.n_cpg = n_cpg;
-  J.patterns = patterns; J.ncol = ncol; J.rep_sample = rep_sample;
+  J.query = query; J.n_cells = n_cells; J.n_cpg = n_cpg;
+  J.groups = (const uint16_t *const *)groups; J.pna_col = pna_col;
+  J.n_sets = n_sets;
+  J.ncol = ncol; J.rep_sample = rep_sample;
   J.n_reps = n_reps; J.binarize = binarize; J.seed = seed;
   /* 0 means "unset": keep any observed CpG, i.e. the old behaviour. */
   J.min_cpgs = min_cpgs ? min_cpgs : 1;
@@ -309,13 +366,17 @@ void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t pattern
   pthread_t *tid = bmal(threads * sizeof(pthread_t), "threads");
   fprintf(stderr, "[methscope] classify-featurize: %u cells x %u replicate(s) "
           "x %u patterns, %u thread(s)%s\n",
-          n_cells, n_reps, patterns, threads, binarize ? ", binarized" : "");
+          n_cells, n_reps, ncol - n_sets, threads, binarize ? ", binarized" : "");
   for (unsigned t = 0; t < threads; ++t)
     if (pthread_create(&tid[t], NULL, worker, &J)) bdie("cannot create thread", NULL);
   for (unsigned t = 0; t < threads; ++t) pthread_join(tid[t], NULL);
   pthread_mutex_destroy(&J.lock);
 
-  free((void *)J.offset); free(tid); free(group);
+  free((void *)J.offset); free(tid);
+  for (uint32_t si = 0; si < n_sets; ++si) free(groups[si]);
+  free(groups); free(pna_col);
+  if (set_col0_out) memcpy(set_col0_out, set_col0, n_sets * sizeof(uint32_t));
+  free(set_col0);
   *beta_out = beta; *levels_out = levels; *names_out = names;
   *n_cells_out = n_cells; *ncol_out = ncol;
 }
