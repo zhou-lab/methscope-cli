@@ -444,7 +444,8 @@ int main_mrmp_build(int argc, char *argv[]) {
 /* ---------------- shared reader for inspect / export -------------------- */
 
 typedef struct {
-  void *map; size_t bytes; int fd;
+  void *map; size_t bytes; int fd;      /* the whole mapping, for munmap */
+  const char *blk; uint64_t blk_bytes;  /* this MRMPIDX1 within the mapping */
   const mrmp_header_t *h;
   const char *refname;
   const char **names;           /* n_samples */
@@ -477,22 +478,35 @@ static int region_ok(uint64_t offset, uint64_t count, uint64_t size,
   return size == 0 || count <= (bytes - offset) / size;
 }
 
-static void mrmp_open(mrmp_reader_t *r, const char *path) {
+/* Open the MRMPIDX1 block that begins at `base`. base == 0 is a bare artifact;
+ * a nonzero base addresses one block inside a MRMPSET1 container. Every offset
+ * in a block header is relative to that block, so the only change from the
+ * single-artifact case is which pointer the offsets are added to, and which
+ * length they are bounds-checked against. `blk_bytes` == 0 means "to the end of
+ * the file", which is what a bare artifact wants. */
+static void mrmp_open_at(mrmp_reader_t *r, const char *path, uint64_t base,
+                         uint64_t blk_bytes) {
   memset(r, 0, sizeof(*r));
   int fd = open(path, O_RDONLY);
   if (fd < 0) die("cannot open MRMP artifact", path);
   struct stat st;
   if (fstat(fd, &st) || (uint64_t)st.st_size < sizeof(mrmp_header_t))
     die("MRMP artifact is truncated", path);
-  void *m = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+  uint64_t fsz = (uint64_t)st.st_size;
+  if (base > fsz || fsz - base < sizeof(mrmp_header_t))
+    die("MRMP block starts past the end of the file", path);
+  uint64_t sz = blk_bytes ? blk_bytes : fsz - base;
+  if (sz > fsz - base) die("MRMP block extends past the end of the file", path);
+  void *m = mmap(NULL, fsz, PROT_READ, MAP_SHARED, fd, 0);
   if (m == MAP_FAILED) die("cannot mmap MRMP artifact", path);
-  const mrmp_header_t *h = (const mrmp_header_t *)m;
+  const char *blk = (const char *)m + base;
+  const mrmp_header_t *h = (const mrmp_header_t *)(const void *)blk;
   if (memcmp(h->magic, MRMPIDX_MAGIC, 8) || h->version != MRMPIDX_VERSION)
     die("bad MRMPIDX1 magic or version", path);
   /* Header counts are attacker-controlled; validate every region (overflow-safe)
    * before dereferencing, and require the pattern block to end at or before the
-   * membership block, matching the writer's layout. */
-  uint64_t sz = (uint64_t)st.st_size;
+   * membership block, matching the writer's layout. Bounds are the BLOCK's, not
+   * the file's, so a corrupt block cannot read into its neighbour. */
   if (h->n_cpg > UINT32_MAX)
     die("MRMP artifact CpG count is implausible", path);
   uint64_t pstride = mrmp_pattern_stride(h->n_samples);
@@ -501,24 +515,29 @@ static void mrmp_open(mrmp_reader_t *r, const char *path) {
       h->patterns_offset + h->n_candidates * pstride > h->membership_offset ||
       h->refname_offset >= sz || h->names_offset >= sz)
     die("MRMP artifact offsets are out of bounds", path);
-  r->map = m; r->bytes = sz; r->fd = fd; r->h = h;
-  /* refname and each sample name must be NUL-terminated inside the map, or the
+  r->map = m; r->bytes = fsz; r->fd = fd; r->h = h;
+  r->blk = blk; r->blk_bytes = sz;
+  /* refname and each sample name must be NUL-terminated inside the block, or the
    * strlen walk below would run off the end of a truncated/crafted file. */
-  const char *map_end = (const char *)m + sz;
-  r->refname = (const char *)m + h->refname_offset;
-  if (!memchr(r->refname, '\0', (size_t)(map_end - r->refname)))
+  const char *blk_end = blk + sz;
+  r->refname = blk + h->refname_offset;
+  if (!memchr(r->refname, '\0', (size_t)(blk_end - r->refname)))
     die("MRMP artifact refname is not terminated", path);
   r->names = xcalloc(h->n_samples, sizeof(char *), "names index");
-  const char *p = (const char *)m + h->names_offset;
+  const char *p = blk + h->names_offset;
   for (uint32_t s = 0; s < h->n_samples; ++s) {
-    if (p >= map_end || !memchr(p, '\0', (size_t)(map_end - p)))
+    if (p >= blk_end || !memchr(p, '\0', (size_t)(blk_end - p)))
       die("MRMP artifact sample names are truncated", path);
     ((const char **)r->names)[s] = p; p += strlen(p) + 1;
   }
-  r->pat = (const char *)m + h->patterns_offset;
+  r->pat = blk + h->patterns_offset;
   r->stride = (uint32_t)pstride;
   r->nw = mrmp_key_words(h->n_samples);
-  r->membership = (const uint32_t *)((const char *)m + h->membership_offset);
+  r->membership = (const uint32_t *)(const void *)(blk + h->membership_offset);
+}
+
+static void mrmp_open(mrmp_reader_t *r, const char *path) {
+  mrmp_open_at(r, path, 0, 0);
 }
 
 static void mrmp_close(mrmp_reader_t *r) {
@@ -532,8 +551,9 @@ static void mrmp_close(mrmp_reader_t *r) {
 /* Same decode `inspect --patterns` and `export --patterns` print, materialized
  * for callers that need the patterns as data rather than as text. Copies out of
  * the mapping so the artifact can be closed immediately. */
-mrmp_top_t *ms_mrmp_top_read(const char *artifact, uint32_t top_k) {
-  mrmp_reader_t r; mrmp_open(&r, artifact);
+mrmp_top_t *ms_mrmp_top_read_at(const char *artifact, uint64_t base,
+                                uint32_t top_k) {
+  mrmp_reader_t r; mrmp_open_at(&r, artifact, base, 0);
   const mrmp_header_t *h = r.h;
   uint64_t lim = top_k < h->n_candidates ? top_k : h->n_candidates;
   if (lim > UINT32_MAX) die("top_k is implausible", artifact);
@@ -558,11 +578,135 @@ mrmp_top_t *ms_mrmp_top_read(const char *artifact, uint32_t top_k) {
   return t;
 }
 
+mrmp_top_t *ms_mrmp_top_read(const char *artifact, uint32_t top_k) {
+  return ms_mrmp_top_read_at(artifact, 0, top_k);
+}
+
 void ms_mrmp_top_free(mrmp_top_t *t) {
   if (!t) return;
   for (uint32_t s = 0; s < t->n_samples; ++s) free(t->labels[s]);
   for (uint32_t p = 0; p < t->n_patterns; ++p) free(t->binstring[p]);
   free(t->labels); free(t->binstring); free(t->count); free(t);
+}
+
+/* ---------------- MRMPSET1 container ------------------------------------ */
+
+int ms_mrmpset_is(const char *path) {
+  char magic[8];
+  FILE *f = fopen(path, "rb");
+  if (!f) return 0;
+  size_t got = fread(magic, 1, sizeof(magic), f);
+  fclose(f);
+  return got == sizeof(magic) && !memcmp(magic, MRMPSET_MAGIC, 8);
+}
+
+ms_mrmpset_t *ms_mrmpset_open(const char *path) {
+  FILE *f = fopen(path, "rb");
+  if (!f) die("cannot open MRMP set", path);
+  mrmpset_header_t h;
+  if (fread(&h, 1, sizeof h, f) != sizeof h) die("MRMP set is truncated", path);
+  if (memcmp(h.magic, MRMPSET_MAGIC, 8) || h.version != MRMPSET_VERSION)
+    die("bad MRMPSET1 magic or version", path);
+  if (!h.n_sets || h.n_sets > 4096) die("MRMP set count is implausible", path);
+  if (fseek(f, 0, SEEK_END)) die("cannot size MRMP set", path);
+  uint64_t fsz = (uint64_t)ftell(f);
+  if (!region_ok(h.table_offset, h.n_sets, sizeof(mrmpset_entry_t), fsz) ||
+      h.names_offset >= fsz)
+    die("MRMP set offsets are out of bounds", path);
+
+  ms_mrmpset_t *s = xcalloc(1, sizeof(*s), "mrmp set");
+  s->n_sets      = h.n_sets;
+  s->name        = xcalloc(h.n_sets, sizeof(char *), "set names");
+  s->block_off   = xcalloc(h.n_sets, sizeof(uint64_t), "block offsets");
+  s->block_bytes = xcalloc(h.n_sets, sizeof(uint64_t), "block sizes");
+
+  mrmpset_entry_t *ent = xcalloc(h.n_sets, sizeof(*ent), "set table");
+  if (fseek(f, (long)h.table_offset, SEEK_SET) ||
+      fread(ent, sizeof(*ent), h.n_sets, f) != h.n_sets)
+    die("cannot read the MRMP set table", path);
+  for (uint32_t i = 0; i < h.n_sets; ++i) {
+    /* every block must lie wholly inside the file, so a bad entry fails here
+     * rather than when a reader dereferences into another set's bytes */
+    if (ent[i].block_offset > fsz || ent[i].block_bytes > fsz - ent[i].block_offset ||
+        ent[i].block_bytes < sizeof(mrmp_header_t))
+      die("MRMP set block extends past the end of the file", path);
+    s->block_off[i]   = ent[i].block_offset;
+    s->block_bytes[i] = ent[i].block_bytes;
+  }
+  free(ent);
+
+  /* names: n_sets NUL-terminated strings from names_offset to the first block */
+  uint64_t nend = fsz;
+  for (uint32_t i = 0; i < h.n_sets; ++i)
+    if (s->block_off[i] > h.names_offset && s->block_off[i] < nend)
+      nend = s->block_off[i];
+  uint64_t nbytes = nend - h.names_offset;
+  char *blob = xcalloc(nbytes + 1, 1, "set name blob");
+  if (fseek(f, (long)h.names_offset, SEEK_SET) ||
+      fread(blob, 1, nbytes, f) != nbytes)
+    die("cannot read MRMP set names", path);
+  blob[nbytes] = '\0';
+  const char *p = blob;
+  for (uint32_t i = 0; i < h.n_sets; ++i) {
+    if ((uint64_t)(p - blob) >= nbytes) die("MRMP set names are truncated", path);
+    size_t n = strlen(p) + 1;
+    s->name[i] = xcalloc(n, 1, "set name");
+    memcpy(s->name[i], p, n);
+    p += n;
+  }
+  free(blob);
+  fclose(f);
+  return s;
+}
+
+void ms_mrmpset_free(ms_mrmpset_t *s) {
+  if (!s) return;
+  for (uint32_t i = 0; i < s->n_sets; ++i) free(s->name[i]);
+  free(s->name); free(s->block_off); free(s->block_bytes); free(s);
+}
+
+void ms_mrmpset_write(const char *out, uint32_t n_sets, const char *const *name,
+                      const void *const *block, const uint64_t *block_bytes) {
+  if (!n_sets) die("a MRMP set needs at least one set", out);
+  uint64_t names_bytes = 0;
+  for (uint32_t i = 0; i < n_sets; ++i) names_bytes += strlen(name[i]) + 1;
+
+  mrmpset_header_t h;
+  memset(&h, 0, sizeof h);
+  memcpy(h.magic, MRMPSET_MAGIC, 8);
+  h.version      = MRMPSET_VERSION;
+  h.n_sets       = n_sets;
+  h.table_offset = sizeof h;
+  h.names_offset = h.table_offset + (uint64_t)n_sets * sizeof(mrmpset_entry_t);
+
+  /* Blocks are 8-byte aligned so a reader can cast a block header in place
+   * rather than memcpy it out; the header is a multiple of 8 already. */
+  mrmpset_entry_t *ent = xcalloc(n_sets, sizeof(*ent), "set table");
+  uint64_t off = h.names_offset + names_bytes;
+  for (uint32_t i = 0; i < n_sets; ++i) {
+    off = (off + 7u) & ~7ull;
+    ent[i].block_offset = off;
+    ent[i].block_bytes  = block_bytes[i];
+    off += block_bytes[i];
+  }
+  h.file_bytes = off;
+
+  FILE *f = fopen(out, "wb");
+  if (!f) die("cannot write MRMP set", out);
+  write_or_die(f, &h, sizeof h, out);
+  write_or_die(f, ent, (size_t)n_sets * sizeof(*ent), out);
+  for (uint32_t i = 0; i < n_sets; ++i)
+    write_or_die(f, name[i], strlen(name[i]) + 1, out);
+  uint64_t at = h.names_offset + names_bytes;
+  for (uint32_t i = 0; i < n_sets; ++i) {
+    static const char pad[8] = {0};
+    uint64_t want = ent[i].block_offset;
+    if (want > at) { write_or_die(f, pad, (size_t)(want - at), out); at = want; }
+    write_or_die(f, block[i], (size_t)block_bytes[i], out);
+    at += block_bytes[i];
+  }
+  fclose(f);
+  free(ent);
 }
 
 /* ---------------- inspect ----------------------------------------------- */
@@ -710,9 +854,9 @@ int ms_mrmp_is_artifact(const char *path) {
   return got == sizeof(magic) && !memcmp(magic, MRMPIDX_MAGIC, 8);
 }
 
-void ms_mrmp_group_map(const char *artifact, uint16_t *group, uint64_t n_cpg,
-                       uint32_t patterns) {
-  mrmp_reader_t r; mrmp_open(&r, artifact);
+void ms_mrmp_group_map_at(const char *artifact, uint64_t base, uint16_t *group,
+                          uint64_t n_cpg, uint32_t patterns) {
+  mrmp_reader_t r; mrmp_open_at(&r, artifact, base, 0);
   if (r.h->n_cpg != n_cpg) die("MRMP artifact CpG count disagrees", artifact);
   uint32_t K = r.h->n_selected < patterns ? r.h->n_selected : patterns;
   /* group[] is uint16 (1-based rank, 0 = PNA), so a selectable rank must fit in
@@ -724,6 +868,11 @@ void ms_mrmp_group_map(const char *artifact, uint16_t *group, uint64_t n_cpg,
              ? (uint16_t)(rank + 1) : 0;
   }
   mrmp_close(&r);
+}
+
+void ms_mrmp_group_map(const char *artifact, uint16_t *group, uint64_t n_cpg,
+                       uint32_t patterns) {
+  ms_mrmp_group_map_at(artifact, 0, group, n_cpg, patterns);
 }
 
 void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
@@ -806,3 +955,133 @@ void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
   mrmp_close(&r);
 }
 
+
+/* ---------------- mrmp-pack: combine artifacts into a container ---------- */
+
+/* Exists because the sets in a container are ordinary MRMPIDX1 artifacts, so
+ * combining ones already on disk is just concatenation plus a table. That makes
+ * the container testable on its own, and lets a pipeline that already built its
+ * sets separately adopt the fused featurizer without rebuilding them. */
+int main_mrmp_pack(int argc, char *argv[]) {
+  g_cmd = "mrmp-pack";
+  const char *out = NULL;
+  int i = 1;
+  for (; i < argc; ++i) {
+    if (!strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
+    else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+      fprintf(stderr,
+        "Usage: methscope mrmp-pack -o OUT.mrmpset NAME:IN.mrmp [NAME:IN.mrmp ...]\n\n"
+        "  Combine MRMPIDX1 artifacts into one MRMPSET1 container, in the order\n"
+        "  given. Set 0 is conventionally the global set and the rest satellites;\n"
+        "  the featurizer pools patterns across all of them.\n");
+      return 0;
+    }
+    else if (argv[i][0] == '-') die("unrecognized option", argv[i]);
+    else break;
+  }
+  if (!out || argc - i < 1) { die("need -o OUT and at least one NAME:IN.mrmp", NULL); }
+
+  uint32_t n = (uint32_t)(argc - i);
+  char **name = xcalloc(n, sizeof(char *), "set names");
+  void **blk  = xcalloc(n, sizeof(void *), "blocks");
+  uint64_t *len = xcalloc(n, sizeof(uint64_t), "block sizes");
+  for (uint32_t k = 0; k < n; ++k) {
+    char *spec = argv[i + k];
+    char *colon = strchr(spec, ':');
+    if (!colon) die("expected NAME:IN.mrmp", spec);
+    *colon = '\0';
+    name[k] = spec;
+    const char *path = colon + 1;
+    if (!ms_mrmp_is_artifact(path)) die("not a MRMPIDX1 artifact", path);
+    FILE *f = fopen(path, "rb");
+    if (!f) die("cannot open", path);
+    if (fseek(f, 0, SEEK_END)) die("cannot size", path);
+    len[k] = (uint64_t)ftell(f);
+    rewind(f);
+    blk[k] = xcalloc(len[k], 1, "block");
+    if (fread(blk[k], 1, len[k], f) != len[k]) die("short read", path);
+    fclose(f);
+  }
+  ms_mrmpset_write(out, n, (const char *const *)name,
+                   (const void *const *)blk, len);
+  fprintf(stderr, "[methscope] mrmp-pack: %u sets -> %s\n", n, out);
+  for (uint32_t k = 0; k < n; ++k) free(blk[k]);
+  free(name); free(blk); free(len);
+  return 0;
+}
+
+/* ---------------- inspect: the MRMPSET1 arm ------------------------------ */
+
+/* Per-set dimensions, then the POOLED view -- which sets would actually
+ * contribute at a given rank cut. That second table is the one that matters in
+ * practice: a satellite holding 2-30 patterns is unaffected by a per-set
+ * `--top 1000`, so the only cut that means anything is the pooled one, and this
+ * is where you see whether a set earns its place or is crowded out. */
+int main_mrmpset_inspect(const char *path) {
+  g_cmd = "inspect";
+  ms_mrmpset_t *s = ms_mrmpset_open(path);
+  printf("MRMPSET1 container: %s\n", path);
+  printf("  sets: %u\n\n", s->n_sets);
+
+  /* gather every pattern from every set for the pooled table */
+  uint64_t total = 0;
+  mrmp_top_t **top = xcalloc(s->n_sets, sizeof(*top), "per-set tops");
+  for (uint32_t i = 0; i < s->n_sets; ++i) {
+    top[i] = ms_mrmp_top_read_at(path, s->block_off[i], UINT32_MAX);
+    total += top[i]->n_patterns;
+  }
+
+  printf("  %-12s %7s %9s %12s  %s\n", "set", "classes", "patterns", "CpGs", "members");
+  for (uint32_t i = 0; i < s->n_sets; ++i) {
+    mrmp_top_t *t = top[i];
+    uint64_t cpg = 0;
+    for (uint32_t p = 0; p < t->n_patterns; ++p) cpg += t->count[p];
+    printf("  %-12s %7u %9u %12" PRIu64 "  ", s->name[i], t->n_samples,
+           t->n_patterns, cpg);
+    /* naming every class is the point for a satellite; for a big global set it
+     * would be noise, so elide past a handful */
+    if (t->n_samples <= 8) {
+      for (uint32_t k = 0; k < t->n_samples; ++k)
+        printf("%s%s", k ? ", " : "", t->labels[k]);
+    } else {
+      printf("%s, %s, ... (%u more)", t->labels[0], t->labels[1],
+             t->n_samples - 2);
+    }
+    putchar('\n');
+  }
+
+  /* pooled rank by CpG count, the same order the featurizer selects in */
+  typedef struct { uint64_t cnt; uint32_t set; } pc_t;
+  pc_t *all = xcalloc(total ? total : 1, sizeof(*all), "pooled");
+  uint64_t n = 0;
+  for (uint32_t i = 0; i < s->n_sets; ++i)
+    for (uint32_t p = 0; p < top[i]->n_patterns; ++p) {
+      all[n].cnt = top[i]->count[p]; all[n].set = i; ++n;
+    }
+  for (uint64_t a = 1; a < n; ++a) {            /* insertion sort by -cnt */
+    pc_t v = all[a]; uint64_t b = a;
+    while (b && all[b-1].cnt < v.cnt) { all[b] = all[b-1]; --b; }
+    all[b] = v;
+  }
+  static const uint64_t CUTS[] = {100, 500, 1000, 2000};
+  printf("\n  pooled selection by CpG count (what --top actually keeps)\n");
+  printf("  %-8s %10s  %s\n", "--top", "CpG floor", "columns per set");
+  uint32_t *per = xcalloc(s->n_sets, sizeof(uint32_t), "per-set counts");
+  for (unsigned c = 0; c < sizeof(CUTS)/sizeof(*CUTS); ++c) {
+    uint64_t k = CUTS[c] < n ? CUTS[c] : n;
+    if (!k) continue;
+    memset(per, 0, s->n_sets * sizeof(uint32_t));
+    for (uint64_t a = 0; a < k; ++a) per[all[a].set]++;
+    printf("  %-8" PRIu64 " %10" PRIu64 "  ", CUTS[c], all[k-1].cnt);
+    for (uint32_t i = 0; i < s->n_sets; ++i)
+      printf("%s%s=%u", i ? " " : "", s->name[i], per[i]);
+    putchar('\n');
+  }
+  printf("\n  %" PRIu64 " patterns available across all sets\n", n);
+
+  free(per); free(all);
+  for (uint32_t i = 0; i < s->n_sets; ++i) ms_mrmp_top_free(top[i]);
+  free(top);
+  ms_mrmpset_free(s);
+  return 0;
+}

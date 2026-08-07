@@ -127,6 +127,7 @@ int main_inspect(int argc, char *argv[]) {
   close(mfd);
   if (got < 8) idie("file is too short to identify", path);
   if (!memcmp(magic, "MRMPIDX1", 8)) return main_mrmp_inspect(argc, argv);
+  if (!memcmp(magic, "MRMPSET1", 8)) return main_mrmpset_inspect(path);
   if (!memcmp(magic, "MSUIDX1", 7)) { ms_msui_report(path); return 0; }
   if (!memcmp(magic, "MSURAW2", 7) || !memcmp(magic, "MSURAW3", 7)) { ms_msur_report(path); return 0; }
   if (!memcmp(magic, "MSFMAT1", 7)) { ms_msfm_report(path); return 0; }

@@ -41,6 +41,7 @@ static int usage(void) {
   fprintf(stderr, "\n%sMRMP construction%s %s— the feature foundation%s\n", B, R, D, R);
   CMD("mrmp-build",   "Construct the MRMP artifact from a discretized reference .cg");
   CMD("mrmp-export",  "Emit the runtime .cm mask (and pattern / count tables)");
+  CMD("mrmp-pack",    "Combine MRMP artifacts into one multi-set container");
 
   fprintf(stderr, "\n%sClassification%s %s(cell type, sex, ...)%s\n", B, R, D, R);
   CMD("classify",     "Classify a methylome -> labels + confidence");
@@ -115,6 +116,7 @@ int main(int argc, char *argv[]) {
   }
   if (strcmp(argv[1], "mrmp-build")   == 0) return main_mrmp_build(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-export")  == 0) return main_mrmp_export(argc - 1, argv + 1);
+  if (strcmp(argv[1], "mrmp-pack")    == 0) return main_mrmp_pack(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-train")      == 0) return main_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "inspect")    == 0) return main_inspect(argc - 1, argv + 1);
   if (strcmp(argv[1], "bundle")     == 0) return main_bundle(argc - 1, argv + 1);

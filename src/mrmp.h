@@ -91,7 +91,9 @@ static inline uint64_t mrmp_pattern_stride(uint32_t n_samples) {
 
 int main_mrmp_build(int argc, char *argv[]);
 int main_mrmp_export(int argc, char *argv[]);
-int main_mrmp_inspect(int argc, char *argv[]);   /* the MRMPIDX1 arm of `inspect` */
+int main_mrmp_inspect(int argc, char *argv[]);
+int main_mrmp_pack(int argc, char *argv[]);
+int main_mrmpset_inspect(const char *path);   /* the MRMPIDX1 arm of `inspect` */
 
 /* The artifact is the build pipeline's currency: `upscale-featurize`,
  * `upscale-set-units`, and `upscale-train` all read it, so the per-CpG mask and
@@ -129,5 +131,69 @@ typedef struct {
 /* Read the top `top_k` ranked patterns. Fatal on error; free with the below. */
 mrmp_top_t *ms_mrmp_top_read(const char *artifact, uint32_t top_k);
 void ms_mrmp_top_free(mrmp_top_t *t);
+
+/* ---------------- MRMPSET1: several MRMP sets in one artifact -------------
+ *
+ * One global MRMP cannot serve many similar cell types: its CpG filter is a
+ * conjunction across every class, so the chance a CpG is spoiled by at least
+ * one class is 1-(1-p)^N -- 98% at N=41 against 26% at N=3. The answer is a
+ * global set plus small "satellite" sets over confusable blocks, each free to
+ * be strict precisely because it constrains few classes. That turns the MRMP
+ * from one object into several, and they have to travel together: a feature
+ * vector fused across sets is meaningless if the sets can drift apart.
+ *
+ * The container is deliberately dumb. Each block is a complete MRMPIDX1
+ * artifact, byte-for-byte, at some offset -- so every reader above works on a
+ * block once told where it starts, and a one-set container is exactly today's
+ * artifact plus a wrapper. A block's internal offsets stay relative to that
+ * block, which is what makes "write standalone, then concatenate" correct.
+ */
+#define MRMPSET_MAGIC "MRMPSET1"
+#define MRMPSET_VERSION 1u
+
+typedef struct {
+  uint64_t block_offset;   /* absolute file offset of a complete MRMPIDX1 */
+  uint64_t block_bytes;
+} mrmpset_entry_t;
+
+/* 64-byte fixed header; little-endian, offsets absolute. */
+typedef struct {
+  char     magic[8];       /* "MRMPSET1" */
+  uint32_t version;
+  uint32_t n_sets;
+  uint32_t flags;
+  uint32_t reserved;
+  uint64_t table_offset;   /* n_sets * mrmpset_entry_t */
+  uint64_t names_offset;   /* n_sets NUL-terminated set names, set order */
+  uint64_t file_bytes;
+  uint64_t reserved2[2];
+} mrmpset_header_t;
+
+/* Opened container: names and block extents, copied out so the file can close. */
+typedef struct {
+  uint32_t   n_sets;
+  char     **name;         /* n_sets */
+  uint64_t  *block_off;    /* n_sets */
+  uint64_t  *block_bytes;  /* n_sets */
+} ms_mrmpset_t;
+
+/* Nonzero if PATH is a MRMPSET1 container rather than a bare MRMPIDX1. */
+int ms_mrmpset_is(const char *path);
+
+/* Open/close. Fatal on a bad or truncated container. */
+ms_mrmpset_t *ms_mrmpset_open(const char *path);
+void ms_mrmpset_free(ms_mrmpset_t *s);
+
+/* Write one. `block[i]` are complete MRMPIDX1 images with their own lengths;
+ * the container copies them and owns nothing afterwards. Fatal on I/O error. */
+void ms_mrmpset_write(const char *out, uint32_t n_sets, const char *const *name,
+                      const void *const *block, const uint64_t *block_bytes);
+
+/* Block-addressed forms of the two readers above. `base` is a block_offset from
+ * the container; 0 addresses a bare MRMPIDX1, which is what the un-suffixed
+ * functions pass. */
+mrmp_top_t *ms_mrmp_top_read_at(const char *path, uint64_t base, uint32_t top_k);
+void ms_mrmp_group_map_at(const char *path, uint64_t base, uint16_t *group,
+                          uint64_t n_cpg, uint32_t patterns);
 
 #endif /* MS_MRMP_H */
