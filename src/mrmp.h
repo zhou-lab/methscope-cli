@@ -51,6 +51,23 @@
  * group; such a pattern is unusable and consumers drop it. */
 #define MRMP_FLAG_THRESH 2u
 
+/* The membership section is RLE-compressed (a YAME format-2 payload) and is
+ * `membership_bytes` long; without this flag it is the legacy dense array of
+ * n_cpg uint32. Readers inflate on open, so `membership` is an owned array
+ * either way and every consumer indexes it identically.
+ *
+ * Dense membership is one uint32 per genomic CpG whether or not the set has
+ * anything to say there, and ~99% of it is the PNA sentinel -- so a 2-class
+ * satellite describing ~1,200 CpGs cost the same 87 MB as a 34-class global.
+ * That was the whole size of a pooled container (8.2 GB for 100 sets) against
+ * 6 MB for the same sets exported as .cm, which is the same RLE applied one
+ * step later. Compressing in the artifact closes that gap.
+ *
+ * The flag is absent in artifacts written before this, and `membership_bytes`
+ * reuses a formerly zeroed pad, so old files stay readable with no version
+ * bump -- the same compatibility discipline the derived key width used. */
+#define MRMP_FLAG_MEMB_RLE 4u
+
 /* 128-byte fixed header; all little-endian, offsets are absolute file bytes. */
 typedef struct {
   char     magic[8];          /* "MRMPIDX1" */
@@ -69,11 +86,22 @@ typedef struct {
                                * membership sentinel, not by matching this. */
   uint64_t pna_cpg;           /* CpGs resolved to the PNA sentinel */
   uint32_t mincov;            /* binstring -c (min coverage) */
-  uint32_t pad0;
+  uint32_t membership_bytes;  /* on-disk size of the membership section when
+                               * MRMP_FLAG_MEMB_RLE is set. 0 (a zeroed pad in
+                               * every older artifact) means the dense form,
+                               * whose size is n_cpg * 4. */
   float    beta_threshold;    /* binstring -b */
   float    max_ambig_frac;    /* binstring -m */
   float    min_major_fold;    /* binstring -M */
-  float    pad1;
+  uint32_t name_offset;       /* block-relative offset of the set's NUL-terminated
+                               * name, or 0 for an unnamed set (which is what
+                               * every artifact written before this reads as, and
+                               * what a reader labels positionally).
+                               *
+                               * The name lives in the block because the block is
+                               * the unit that travels: sets are concatenated, so
+                               * anything held outside a block would be lost the
+                               * moment two files are cat'd together. */
   uint64_t refname_offset;    /* NUL-terminated reference path */
   uint64_t names_offset;      /* n_samples NUL-terminated sample names */
   uint64_t patterns_offset;   /* n_candidates * mrmp_pattern_t, rank order */
@@ -108,14 +136,17 @@ static inline uint64_t mrmp_pattern_stride(uint32_t n_samples) {
 }
 
 int main_mrmp_build(int argc, char *argv[]);
-/* One 2-class satellite per (thin class, partner), as one MRMPSET1 container.
+/* One 2-class satellite per (thin class, partner), as one chain.
  * Thin == store labels minus the global's, so the split needs no side file. */
 int main_mrmp_build_thin(int argc, char *argv[]);
+/* One 2-class satellite per (class, near neighbour) over the classes the global
+ * already covers, as one chain. Overlapping pairs, NOT a partition:
+ * a class appears in as many sets as it has close neighbours. */
+int main_mrmp_build_neighbor(int argc, char *argv[]);
 int main_mrmp_export(int argc, char *argv[]);
 int main_mrmp_inspect(int argc, char *argv[]);
-int main_mrmp_pack(int argc, char *argv[]);
-/* Pool sets into one container AND cut to a shared column budget. Distinct
- * from mrmp-pack, which concatenates without selecting. */
+/* Pool sets into one chain AND cut to a shared column budget. Concatenation
+ * alone is just `cat`; this is the step that selects. */
 int main_mrmp_pool(int argc, char *argv[]);
 int main_mrmpset_inspect(const char *path);   /* the MRMPIDX1 arm of `inspect` */
 
@@ -133,6 +164,15 @@ int ms_mrmp_is_artifact(const char *path);
  * Fatal on error. */
 void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
                         const char *pna_label, uint32_t top_k);
+
+/* Block-addressed form: `base`/`blk_bytes` are a block_offset/block_bytes pair
+ * from a walked chain, and (0, 0) addresses the first block. This is what
+ * lets a POOLED artifact reach the featurizer: mrmp-pool emits a container, and
+ * classify-featurize consumes .cm masks, so without a per-block export the four
+ * -command workflow has no path from one to the other. */
+void ms_mrmp_write_mask_at(const char *artifact, uint64_t base,
+                           uint64_t blk_bytes, const char *out_cm,
+                           const char *pna_label, uint32_t top_k);
 
 /* Fill group[0..n_cpg-1] with each CpG's 1-based selected-pattern index, or 0
  * for PNA and ranks at or beyond `patterns`. Fatal on error or size mismatch. */
@@ -156,7 +196,7 @@ typedef struct {
 mrmp_top_t *ms_mrmp_top_read(const char *artifact, uint32_t top_k);
 void ms_mrmp_top_free(mrmp_top_t *t);
 
-/* ---------------- MRMPSET1: several MRMP sets in one artifact -------------
+/* ---------------- several sets in one file: a CHAIN, not a container ------
  *
  * One global MRMP cannot serve many similar cell types: its CpG filter is a
  * conjunction across every class, so the chance a CpG is spoiled by at least
@@ -166,56 +206,75 @@ void ms_mrmp_top_free(mrmp_top_t *t);
  * from one object into several, and they have to travel together: a feature
  * vector fused across sets is meaningless if the sets can drift apart.
  *
- * The container is deliberately dumb. Each block is a complete MRMPIDX1
- * artifact, byte-for-byte, at some offset -- so every reader above works on a
- * block once told where it starts, and a one-set container is exactly today's
- * artifact plus a wrapper. A block's internal offsets stay relative to that
- * block, which is what makes "write standalone, then concatenate" correct.
+ * They travel by CONCATENATION. A file is one or more complete MRMPIDX1 blocks
+ * laid end to end -- no wrapper, no table, no second magic. A reader walks it:
+ * read a 128-byte header, check the magic, take the block's own size, seek past
+ * it, repeat until EOF. A single-set file is exactly one block, so "one set" and
+ * "many sets" are the same format and there is no .mrmp / .mrmpset ambiguity.
+ *
+ * This replaces an earlier MRMPSET1 wrapper that put an offset table and a name
+ * list at the front. Three things fall out of dropping it:
+ *
+ *   cat a.mrmp b.mrmp > c.mrmp  is a legal, exact combine, so `mrmp-pack` is
+ *   just `cat` and no longer exists.
+ *
+ *   Appending is O(1) rather than a rewrite of a front table.
+ *
+ *   A set's NAME rides inside its block (see name_offset), so it survives the
+ *   concatenation. A front name list could not.
+ *
+ * A block's size is DERIVED, not stored: sections are laid out in header order,
+ * so the block ends after the last one, rounded up to 8. See ms_mrmp_block_bytes.
+ * The rounding is what keeps the next block's header 8-aligned, which a reader
+ * casting the header in place requires -- and it is why every writer pads.
+ *
+ * There is deliberately no end-of-chain marker. A trailer at EOF would sit in
+ * the MIDDLE of the chain after a cat, which is the one property worth
+ * protecting. Truncation is instead caught by the bounds check: a file that ends
+ * mid-block has a block claiming more bytes than remain. Only a cut landing
+ * exactly on a block boundary is silent, and that is not what a failed write or
+ * a full disk produces.
  */
-#define MRMPSET_MAGIC "MRMPSET1"
-#define MRMPSET_VERSION 1u
 
-typedef struct {
-  uint64_t block_offset;   /* absolute file offset of a complete MRMPIDX1 */
-  uint64_t block_bytes;
-} mrmpset_entry_t;
+/* Bytes this block occupies, including the pad that 8-aligns the next one.
+ * Sections sit in header order, so the end is the furthest section end; taking
+ * the max rather than assuming which is last keeps this correct if the layout
+ * ever gains a section. */
+static inline uint64_t ms_mrmp_block_bytes(const mrmp_header_t *h) {
+  uint64_t end = sizeof(mrmp_header_t);
+  uint64_t memb = (h->flags & MRMP_FLAG_MEMB_RLE)
+                ? h->membership_bytes : h->n_cpg * sizeof(uint32_t);
+  uint64_t cand = h->patterns_offset + h->n_candidates * mrmp_pattern_stride(h->n_samples);
+  if (cand > end) end = cand;
+  if (h->membership_offset + memb > end) end = h->membership_offset + memb;
+  if ((h->flags & MRMP_FLAG_THRESH) &&
+      h->thresh_offset + (uint64_t)h->n_candidates * sizeof(float) > end)
+    end = h->thresh_offset + (uint64_t)h->n_candidates * sizeof(float);
+  return (end + 7u) & ~7ull;
+}
 
-/* 64-byte fixed header; little-endian, offsets absolute. */
-typedef struct {
-  char     magic[8];       /* "MRMPSET1" */
-  uint32_t version;
-  uint32_t n_sets;
-  uint32_t flags;
-  uint32_t reserved;
-  uint64_t table_offset;   /* n_sets * mrmpset_entry_t */
-  uint64_t names_offset;   /* n_sets NUL-terminated set names, set order */
-  uint64_t file_bytes;
-  uint64_t reserved2[2];
-} mrmpset_header_t;
-
-/* Opened container: names and block extents, copied out so the file can close. */
+/* A walked chain: one entry per block, in file order. Same shape the old
+ * container view had, so every consumer of it is unchanged. */
 typedef struct {
   uint32_t   n_sets;
-  char     **name;         /* n_sets */
+  char     **name;         /* n_sets; synthesized "set<N>" when unnamed */
   uint64_t  *block_off;    /* n_sets */
   uint64_t  *block_bytes;  /* n_sets */
 } ms_mrmpset_t;
 
-/* Nonzero if PATH is a MRMPSET1 container rather than a bare MRMPIDX1. */
-int ms_mrmpset_is(const char *path);
-
-/* Open/close. Fatal on a bad or truncated container. */
+/* Walk PATH's chain. Fatal on a bad magic or a block running past EOF. */
 ms_mrmpset_t *ms_mrmpset_open(const char *path);
 void ms_mrmpset_free(ms_mrmpset_t *s);
 
-/* Write one. `block[i]` are complete MRMPIDX1 images with their own lengths;
- * the container copies them and owns nothing afterwards. Fatal on I/O error. */
-void ms_mrmpset_write(const char *out, uint32_t n_sets, const char *const *name,
-                      const void *const *block, const uint64_t *block_bytes);
+/* Write a chain: `block[i]` are complete MRMPIDX1 images, each already padded to
+ * a multiple of 8 by its builder, written back to back. Nothing is added -- the
+ * result is byte-for-byte what `cat` of the same blocks would produce, which is
+ * the property that makes `cat` a supported combine. Fatal on I/O error. */
+void ms_mrmp_chain_write(const char *out, uint32_t n_sets,
+                         const void *const *block, const uint64_t *block_bytes);
 
-/* Block-addressed forms of the two readers above. `base` is a block_offset from
- * the container; 0 addresses a bare MRMPIDX1, which is what the un-suffixed
- * functions pass. */
+/* Block-addressed forms of the two readers above. `base` is a block_off from a
+ * walked chain; 0 addresses the first (or only) block. */
 mrmp_top_t *ms_mrmp_top_read_at(const char *path, uint64_t base, uint32_t top_k);
 void ms_mrmp_group_map_at(const char *path, uint64_t base, uint16_t *group,
                           uint64_t n_cpg, uint32_t patterns);

@@ -126,8 +126,14 @@ int main_inspect(int argc, char *argv[]) {
   ssize_t got = pread(mfd, magic, sizeof(magic), 0);
   close(mfd);
   if (got < 8) idie("file is too short to identify", path);
-  if (!memcmp(magic, "MRMPIDX1", 8)) return main_mrmp_inspect(argc, argv);
-  if (!memcmp(magic, "MRMPSET1", 8)) return main_mrmpset_inspect(path);
+  /* One magic for both arities: a .mrmp is a chain of MRMPIDX1 blocks, so the
+   * SET COUNT picks the report rather than a second magic. */
+  if (!memcmp(magic, "MRMPIDX1", 8)) {
+    ms_mrmpset_t *s = ms_mrmpset_open(path);
+    uint32_t n = s->n_sets;
+    ms_mrmpset_free(s);
+    return n > 1 ? main_mrmpset_inspect(path) : main_mrmp_inspect(argc, argv);
+  }
   if (!memcmp(magic, "MSUIDX1", 7)) { ms_msui_report(path); return 0; }
   if (!memcmp(magic, "MSURAW2", 7) || !memcmp(magic, "MSURAW3", 7)) { ms_msur_report(path); return 0; }
   if (!memcmp(magic, "MSFMAT1", 7)) { ms_msfm_report(path); return 0; }

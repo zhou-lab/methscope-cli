@@ -6,6 +6,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -260,9 +261,14 @@ static void write_or_die(FILE *fp, const void *p, size_t n, const char *path) {
   if (n && fwrite(p, 1, n, fp) != n) die("write failed", path);
 }
 
+/* Membership RLE, defined with the reader further down since inflating is where
+ * the format is interpreted; declared here because mrmp-build deflates. */
+static uint8_t *memb_compress(const uint32_t *memb, uint64_t n_cpg,
+                              uint64_t n_cand, uint64_t *out_n);
+
 int main_mrmp_build(int argc, char *argv[]) {
   g_cmd = "mrmp-build";
-  const char *pos[2] = {NULL, NULL};
+  const char *pos[2] = {NULL, NULL}, *set_name = NULL;
   int npos = 0;
   uint32_t mincov = MRMP_DEF_MINCOV;
   float beta_thr = MRMP_DEF_BETA_THRESH, max_ambig = MRMP_DEF_MAX_AMBIG,
@@ -344,6 +350,7 @@ int main_mrmp_build(int argc, char *argv[]) {
     }
     else if (!strcmp(a, "--max-frac-na") && i + 1 < argc) max_frac_na = (float)atof(argv[++i]);
     else if (!strcmp(a, "--min-cg-depth") && i + 1 < argc) min_cg_depth = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--name") && i + 1 < argc) set_name = argv[++i];
     else if (!strcmp(a, "--force")) force = 1;
     else if (a[0] == '-') die("unrecognized or incomplete option", a);
     else if (npos < 2) pos[npos++] = a;
@@ -352,6 +359,20 @@ int main_mrmp_build(int argc, char *argv[]) {
   if (npos != 2) die("need REF.cg and OUT.mrmp (see mrmp-build -h)", NULL);
   const char *ref = pos[0], *out = pos[1];
   if (!force) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
+
+  /* The set's name travels INSIDE the block, so it survives being cat'd into a
+   * chain. Defaulting to the output's basename means the common case needs no
+   * flag and still produces a readable pooled table. */
+  char *name_buf = NULL;
+  if (!set_name) {
+    const char *b = strrchr(out, '/'); b = b ? b + 1 : out;
+    size_t n = strlen(b);
+    const char *dot = strrchr(b, '.');
+    if (dot && dot != b) n = (size_t)(dot - b);
+    name_buf = xcalloc(n + 1, 1, "set name");
+    memcpy(name_buf, b, n);
+    set_name = name_buf;
+  }
 
   uint32_t ns = 0;
   char **names = read_sample_names(ref, &ns);
@@ -490,6 +511,29 @@ int main_mrmp_build(int argc, char *argv[]) {
   for (uint64_t p = 0; p < n_pat; ++p) rank_of[p] = MRMP_PNA_MEMBERSHIP;
   for (uint64_t r = 0; r < n_cand; ++r) rank_of[order[r]] = (uint32_t)r;
 
+  /* per-CpG membership rank (re-derive keys from the planes; PNA sentinel
+   * where the CpG is the all-'2' pattern). Materialised rather than streamed,
+   * because the threshold pass below needs the same mapping and re-deriving it
+   * twice would double the resolve_cpg work.
+   *
+   * Built BEFORE the header is laid out, because the section is compressed and
+   * the layout cannot place what follows it until its size is known. */
+  uint32_t *memb = xcalloc(n_cpg, sizeof(uint32_t), "membership");
+  for (uint64_t i = 0; i < n_cpg; ++i) {
+    if (keep && !keep[i]) { memb[i] = MRMP_PNA_MEMBERSHIP; continue; }
+    int is_pna;
+    resolve_cpg(meth, ambig, i, ns, stride, n_cpg,
+                min_fold, max_ambig, pna_key, &is_pna, key);
+    uint32_t p = is_pna ? MRMP_PNA_MEMBERSHIP : phash_find(&h, key);
+    memb[i] = (p == MRMP_PNA_MEMBERSHIP) ? MRMP_PNA_MEMBERSHIP : rank_of[p];
+  }
+  uint64_t memb_n = 0;
+  uint8_t *memb_rle = memb_compress(memb, n_cpg, n_cand, &memb_n);
+  if (memb_n > UINT32_MAX) die("compressed membership exceeds 4 GB", out);
+  fprintf(stderr, "  membership: %" PRIu64 " -> %" PRIu64 " bytes (%.0fx)\n",
+          n_cpg * sizeof(uint32_t), memb_n,
+          (double)(n_cpg * sizeof(uint32_t)) / (double)(memb_n ? memb_n : 1));
+
   /* Serialize MRMPIDX1. Sections are laid out in header order. */
   FILE *fp = fopen(out, "wb");
   if (!fp) die("cannot create output", out);
@@ -504,37 +548,31 @@ int main_mrmp_build(int argc, char *argv[]) {
   hd.mincov = mincov; hd.beta_threshold = beta_thr;
   hd.max_ambig_frac = max_ambig; hd.min_major_fold = min_fold;
   hd.content_checksum = checksum;
+  hd.membership_bytes = (uint32_t)memb_n;
 
   uint64_t off = sizeof(hd);
   hd.refname_offset = off;   off += strlen(ref) + 1;
+  hd.name_offset = (uint32_t)off; off += strlen(set_name) + 1;
   hd.names_offset = off;     for (uint32_t s = 0; s < ns; ++s) off += strlen(names[s]) + 1;
   hd.patterns_offset = off;  off += n_cand * mrmp_pattern_stride(ns);
-  hd.membership_offset = off; off += n_cpg * sizeof(uint32_t);
-  hd.thresh_offset = off;
-  hd.flags |= MRMP_FLAG_THRESH;
+  hd.membership_offset = off; off += memb_n;
+  hd.thresh_offset = off;    off += (uint64_t)n_cand * sizeof(float);
+  hd.flags |= MRMP_FLAG_THRESH | MRMP_FLAG_MEMB_RLE;
+  /* Pad to 8 so this file can be cat'd in front of another one and leave its
+   * header aligned. Every MRMPIDX1 is self-padding for exactly this reason. */
+  const uint64_t pad_bytes = (((off + 7u) & ~7ull) - off);
 
   write_or_die(fp, &hd, sizeof(hd), out);
   write_or_die(fp, ref, strlen(ref) + 1, out);
+  write_or_die(fp, set_name, strlen(set_name) + 1, out);
   for (uint32_t s = 0; s < ns; ++s) write_or_die(fp, names[s], strlen(names[s]) + 1, out);
   for (uint64_t r = 0; r < n_cand; ++r) {   /* nw key words, then the count */
     uint32_t x = order[r];
     write_or_die(fp, pkeys + (uint64_t)x * nw, nw * sizeof(uint64_t), out);
     write_or_die(fp, &pcount[x], sizeof(uint64_t), out);
   }
-  /* per-CpG membership rank (re-derive keys from the planes; PNA sentinel
-   * where the CpG is the all-'2' pattern). Materialised rather than streamed,
-   * because the threshold pass below needs the same mapping and re-deriving it
-   * twice would double the resolve_cpg work. */
-  uint32_t *memb = xcalloc(n_cpg, sizeof(uint32_t), "membership");
-  for (uint64_t i = 0; i < n_cpg; ++i) {
-    if (keep && !keep[i]) { memb[i] = MRMP_PNA_MEMBERSHIP; continue; }
-    int is_pna;
-    resolve_cpg(meth, ambig, i, ns, stride, n_cpg,
-                min_fold, max_ambig, pna_key, &is_pna, key);
-    uint32_t p = is_pna ? MRMP_PNA_MEMBERSHIP : phash_find(&h, key);
-    memb[i] = (p == MRMP_PNA_MEMBERSHIP) ? MRMP_PNA_MEMBERSHIP : rank_of[p];
-  }
-  write_or_die(fp, memb, (size_t)n_cpg * sizeof(uint32_t), out);
+  write_or_die(fp, memb_rle, (size_t)memb_n, out);
+  free(memb_rle);
 
   /* ---- per-pattern binarisation midpoints --------------------------------
    *
@@ -595,6 +633,10 @@ int main_mrmp_build(int argc, char *argv[]) {
             " patterns binarisable\n", n_usable, n_cand);
     free(sum); free(cnt); free(thr); free(bs);
   }
+  if (pad_bytes) {
+    static const char pad[8] = {0};
+    write_or_die(fp, pad, (size_t)pad_bytes, out);
+  }
   free(memb);
   free(meth); free(ambig);
   free(keep); free(sel_max0); free(sel_min1); free(sel_cov); free(sel_pres);
@@ -621,6 +663,71 @@ int main_mrmp_build(int argc, char *argv[]) {
   return 0;
 }
 
+/* ---------------- membership RLE (YAME format-2 payload) ---------------- */
+
+/* The membership array is one pattern rank per genomic CpG and ~99% of it is
+ * the PNA sentinel, so it is exactly what YAME's format-2 run-length coder is
+ * for -- the same coder mrmp-export already runs when it writes a .cm, applied
+ * in the artifact instead of one step later.
+ *
+ * It goes through a fmt2 cdata_t rather than a bare codec because
+ * compressDataToRLE() is static in YAME's format2.c and reads its values via
+ * f2_get_uint64(), so the public way in is to hand it a fmt2. That costs a
+ * synthesized key table we never read back; the note in YAME/tmp asks for the
+ * codec to be exported over plain values instead.
+ *
+ * Key id == rank, with n_cand standing for PNA. That identity is the point: the
+ * decoder takes ranks straight out of f2_get_uint64 and never parses a label,
+ * unlike ms_mrmp_write_mask, which assigns ids in first-seen order because a .cm
+ * is meant to be read BY name. */
+
+static uint8_t *memb_compress(const uint32_t *memb, uint64_t n_cpg,
+                              uint64_t n_cand, uint64_t *out_n) {
+  size_t keys_bytes = 0;
+  for (uint64_t r = 0; r < n_cand; ++r) {
+    char lbl[32];
+    keys_bytes += (size_t)snprintf(lbl, sizeof lbl, "P%" PRIu64, r + 1) + 1;
+  }
+  keys_bytes += 4;                                   /* "Pna\0" */
+
+  cdata_t c; memset(&c, 0, sizeof c);
+  c.fmt = '2'; c.compressed = 0; c.unit = 8; c.n = n_cpg;
+  c.s = xcalloc(keys_bytes + 1 + (size_t)n_cpg * 8, 1, "membership fmt2 buffer");
+  size_t pos = 0;
+  for (uint64_t r = 0; r < n_cand; ++r)
+    pos += (size_t)snprintf((char *)c.s + pos, keys_bytes + 1 - pos,
+                            "P%" PRIu64, r + 1) + 1;
+  memcpy(c.s + pos, "Pna", 4); pos += 4;
+  c.s[pos++] = '\0';                                 /* key/data double NUL */
+  for (uint64_t i = 0; i < n_cpg; ++i) {
+    uint64_t v = memb[i] == MRMP_PNA_MEMBERSHIP ? n_cand : memb[i];
+    uint8_t *d = c.s + pos + i * 8;
+    for (int b = 0; b < 8; ++b) d[b] = (uint8_t)(v >> (8 * b));
+  }
+  cdata_compress(&c);                                /* -> RLE fmt2 */
+  *out_n = c.n;
+  return c.s;                                        /* caller owns */
+}
+
+static uint32_t *memb_decompress(const uint8_t *buf, uint64_t nbytes,
+                                 uint64_t n_cpg, uint64_t n_cand,
+                                 const char *what) {
+  cdata_t c; memset(&c, 0, sizeof c);
+  c.fmt = '2'; c.compressed = 1; c.unit = 8; c.n = nbytes;
+  c.s = xcalloc(nbytes ? nbytes : 1, 1, "membership rle");
+  memcpy(c.s, buf, nbytes);
+  cdata_t d = decompress(c);
+  free(c.s);
+  if (cdata_n(&d) != n_cpg) die("membership inflates to the wrong CpG count", what);
+  uint32_t *memb = xcalloc(n_cpg, sizeof(uint32_t), "membership");
+  for (uint64_t i = 0; i < n_cpg; ++i) {
+    uint64_t v = f2_get_uint64(&d, i);
+    memb[i] = v >= n_cand ? MRMP_PNA_MEMBERSHIP : (uint32_t)v;
+  }
+  free_cdata(&d);
+  return memb;
+}
+
 /* ---------------- shared reader for inspect / export -------------------- */
 
 typedef struct {
@@ -632,7 +739,9 @@ typedef struct {
   const char *pat;              /* n_candidates records, `stride` apart */
   uint32_t stride;              /* mrmp_pattern_stride(n_samples) */
   uint32_t nw;                  /* mrmp_key_words(n_samples) */
-  const uint32_t *membership;   /* n_cpg */
+  const uint32_t *membership;   /* n_cpg; NULL until mrmp_membership() if RLE */
+  uint32_t *memb_owned;         /* non-NULL once inflated, freed by mrmp_close */
+  int memb_rle;                 /* section is compressed, inflate on demand */
 } mrmp_reader_t;
 
 /* A pattern record is nw key words followed by the count, so it is addressed by
@@ -659,7 +768,7 @@ static int region_ok(uint64_t offset, uint64_t count, uint64_t size,
 }
 
 /* Open the MRMPIDX1 block that begins at `base`. base == 0 is a bare artifact;
- * a nonzero base addresses one block inside a MRMPSET1 container. Every offset
+ * a nonzero base addresses a later block in the chain. Every offset
  * in a block header is relative to that block, so the only change from the
  * single-artifact case is which pointer the offsets are added to, and which
  * length they are bounds-checked against. `blk_bytes` == 0 means "to the end of
@@ -690,7 +799,13 @@ static void mrmp_open_at(mrmp_reader_t *r, const char *path, uint64_t base,
   if (h->n_cpg > UINT32_MAX)
     die("MRMP artifact CpG count is implausible", path);
   uint64_t pstride = mrmp_pattern_stride(h->n_samples);
-  if (!region_ok(h->membership_offset, h->n_cpg, sizeof(uint32_t), sz) ||
+  /* The membership section is n_cpg * 4 dense, or membership_bytes when RLE. */
+  const int memb_rle = (h->flags & MRMP_FLAG_MEMB_RLE) != 0;
+  const uint64_t memb_bytes = memb_rle ? h->membership_bytes
+                                       : h->n_cpg * sizeof(uint32_t);
+  if (memb_rle && !h->membership_bytes)
+    die("MRMP artifact claims RLE membership but records no size", path);
+  if (!region_ok(h->membership_offset, memb_bytes, 1, sz) ||
       !region_ok(h->patterns_offset, h->n_candidates, pstride, sz) ||
       h->patterns_offset + h->n_candidates * pstride > h->membership_offset ||
       h->refname_offset >= sz || h->names_offset >= sz)
@@ -713,7 +828,26 @@ static void mrmp_open_at(mrmp_reader_t *r, const char *path, uint64_t base,
   r->pat = blk + h->patterns_offset;
   r->stride = (uint32_t)pstride;
   r->nw = mrmp_key_words(h->n_samples);
-  r->membership = (const uint32_t *)(const void *)(blk + h->membership_offset);
+  /* Inflated LAZILY, by mrmp_membership(). Most openers -- inspect, the pattern
+   * decoder, both satellite builders reading the global's header -- never touch
+   * membership at all, and `inspect` on a container opens every block in turn,
+   * so inflating here would cost one full array per set to answer a question
+   * about pattern counts. */
+  r->memb_rle = memb_rle;
+  r->membership = memb_rle
+    ? NULL : (const uint32_t *)(const void *)(blk + h->membership_offset);
+}
+
+/* The membership array, inflating it on first use when the section is RLE.
+ * Both consumers walk it once and linearly, and each opens one block at a time,
+ * so the peak is one array live rather than one per set in a container. */
+static const uint32_t *mrmp_membership(mrmp_reader_t *r) {
+  if (!r->membership && r->memb_rle)
+    r->membership = r->memb_owned =
+      memb_decompress((const uint8_t *)(r->blk + r->h->membership_offset),
+                      r->h->membership_bytes, r->h->n_cpg, r->h->n_candidates,
+                      "membership");
+  return r->membership;
 }
 
 static void mrmp_open(mrmp_reader_t *r, const char *path) {
@@ -722,6 +856,7 @@ static void mrmp_open(mrmp_reader_t *r, const char *path) {
 
 static void mrmp_close(mrmp_reader_t *r) {
   free((void *)r->names);
+  free(r->memb_owned);
   if (r->map) munmap(r->map, r->bytes);
   if (r->fd >= 0) close(r->fd);
 }
@@ -769,73 +904,71 @@ void ms_mrmp_top_free(mrmp_top_t *t) {
   free(t->labels); free(t->binstring); free(t->count); free(t);
 }
 
-/* ---------------- MRMPSET1 container ------------------------------------ */
+/* ---------------- the chain: sets concatenated, walked ------------------- */
 
-int ms_mrmpset_is(const char *path) {
-  char magic[8];
-  FILE *f = fopen(path, "rb");
-  if (!f) return 0;
-  size_t got = fread(magic, 1, sizeof(magic), f);
-  fclose(f);
-  return got == sizeof(magic) && !memcmp(magic, MRMPSET_MAGIC, 8);
-}
-
+/* Walk the file's blocks. Each MRMPIDX1 carries everything needed to find the
+ * next one -- its sections are at known offsets and its size is derivable -- so
+ * the chain needs no table and no wrapper, and `cat a.mrmp b.mrmp` is an exact
+ * combine. This is the whole reader side of that format. */
 ms_mrmpset_t *ms_mrmpset_open(const char *path) {
   FILE *f = fopen(path, "rb");
-  if (!f) die("cannot open MRMP set", path);
-  mrmpset_header_t h;
-  if (fread(&h, 1, sizeof h, f) != sizeof h) die("MRMP set is truncated", path);
-  if (memcmp(h.magic, MRMPSET_MAGIC, 8) || h.version != MRMPSET_VERSION)
-    die("bad MRMPSET1 magic or version", path);
-  if (!h.n_sets || h.n_sets > 4096) die("MRMP set count is implausible", path);
-  if (fseek(f, 0, SEEK_END)) die("cannot size MRMP set", path);
-  uint64_t fsz = (uint64_t)ftell(f);
-  if (!region_ok(h.table_offset, h.n_sets, sizeof(mrmpset_entry_t), fsz) ||
-      h.names_offset >= fsz)
-    die("MRMP set offsets are out of bounds", path);
+  if (!f) die("cannot open MRMP", path);
+  if (fseeko(f, 0, SEEK_END)) die("cannot size MRMP", path);
+  uint64_t fsz = (uint64_t)ftello(f);
 
-  ms_mrmpset_t *s = xcalloc(1, sizeof(*s), "mrmp set");
-  s->n_sets      = h.n_sets;
-  s->name        = xcalloc(h.n_sets, sizeof(char *), "set names");
-  s->block_off   = xcalloc(h.n_sets, sizeof(uint64_t), "block offsets");
-  s->block_bytes = xcalloc(h.n_sets, sizeof(uint64_t), "block sizes");
+  ms_mrmpset_t *s = xcalloc(1, sizeof(*s), "mrmp chain");
+  uint32_t cap = 8;
+  s->name        = xcalloc(cap, sizeof(char *), "set names");
+  s->block_off   = xcalloc(cap, sizeof(uint64_t), "block offsets");
+  s->block_bytes = xcalloc(cap, sizeof(uint64_t), "block sizes");
 
-  mrmpset_entry_t *ent = xcalloc(h.n_sets, sizeof(*ent), "set table");
-  if (fseek(f, (long)h.table_offset, SEEK_SET) ||
-      fread(ent, sizeof(*ent), h.n_sets, f) != h.n_sets)
-    die("cannot read the MRMP set table", path);
-  for (uint32_t i = 0; i < h.n_sets; ++i) {
-    /* every block must lie wholly inside the file, so a bad entry fails here
-     * rather than when a reader dereferences into another set's bytes */
-    if (ent[i].block_offset > fsz || ent[i].block_bytes > fsz - ent[i].block_offset ||
-        ent[i].block_bytes < sizeof(mrmp_header_t))
-      die("MRMP set block extends past the end of the file", path);
-    s->block_off[i]   = ent[i].block_offset;
-    s->block_bytes[i] = ent[i].block_bytes;
+  uint64_t at = 0;
+  while (at < fsz) {
+    if (fsz - at < sizeof(mrmp_header_t))
+      die("MRMP chain ends mid-header -- the file is truncated", path);
+    mrmp_header_t h;
+    if (fseeko(f, (off_t)at, SEEK_SET) || fread(&h, 1, sizeof h, f) != sizeof h)
+      die("cannot read MRMP block header", path);
+    if (memcmp(h.magic, MRMPIDX_MAGIC, 8) || h.version != MRMPIDX_VERSION)
+      die("bad MRMPIDX1 magic or version in chain", path);
+    uint64_t nb = ms_mrmp_block_bytes(&h);
+    /* The truncation check the dropped container table used to give for free:
+     * a block claiming more bytes than remain means the file was cut short. */
+    if (nb < sizeof(mrmp_header_t) || nb > fsz - at)
+      die("MRMP block extends past the end of the file", path);
+
+    if (s->n_sets == cap) {
+      cap <<= 1;
+      s->name        = realloc(s->name, cap * sizeof(char *));
+      s->block_off   = realloc(s->block_off, cap * sizeof(uint64_t));
+      s->block_bytes = realloc(s->block_bytes, cap * sizeof(uint64_t));
+      if (!s->name || !s->block_off || !s->block_bytes)
+        die("out of memory", "mrmp chain grow");
+    }
+    s->block_off[s->n_sets]   = at;
+    s->block_bytes[s->n_sets] = nb;
+
+    /* The name rides in the block, so it survives a cat. An older artifact has
+     * name_offset 0 and gets a positional label instead. */
+    char *nm = NULL;
+    if (h.name_offset && h.name_offset < nb) {
+      char buf[256];
+      if (fseeko(f, (off_t)(at + h.name_offset), SEEK_SET)) die("cannot seek", path);
+      size_t got = fread(buf, 1, sizeof buf - 1, f);
+      buf[got] = '\0';
+      if (got) { nm = xcalloc(strlen(buf) + 1, 1, "set name"); strcpy(nm, buf); }
+    }
+    if (!nm) {
+      char buf[32]; snprintf(buf, sizeof buf, "set%u", s->n_sets);
+      nm = xcalloc(strlen(buf) + 1, 1, "set name"); strcpy(nm, buf);
+    }
+    s->name[s->n_sets] = nm;
+
+    ++s->n_sets;
+    at += nb;
   }
-  free(ent);
-
-  /* names: n_sets NUL-terminated strings from names_offset to the first block */
-  uint64_t nend = fsz;
-  for (uint32_t i = 0; i < h.n_sets; ++i)
-    if (s->block_off[i] > h.names_offset && s->block_off[i] < nend)
-      nend = s->block_off[i];
-  uint64_t nbytes = nend - h.names_offset;
-  char *blob = xcalloc(nbytes + 1, 1, "set name blob");
-  if (fseek(f, (long)h.names_offset, SEEK_SET) ||
-      fread(blob, 1, nbytes, f) != nbytes)
-    die("cannot read MRMP set names", path);
-  blob[nbytes] = '\0';
-  const char *p = blob;
-  for (uint32_t i = 0; i < h.n_sets; ++i) {
-    if ((uint64_t)(p - blob) >= nbytes) die("MRMP set names are truncated", path);
-    size_t n = strlen(p) + 1;
-    s->name[i] = xcalloc(n, 1, "set name");
-    memcpy(s->name[i], p, n);
-    p += n;
-  }
-  free(blob);
   fclose(f);
+  if (!s->n_sets) die("MRMP file holds no sets", path);
   return s;
 }
 
@@ -845,48 +978,62 @@ void ms_mrmpset_free(ms_mrmpset_t *s) {
   free(s->name); free(s->block_off); free(s->block_bytes); free(s);
 }
 
-void ms_mrmpset_write(const char *out, uint32_t n_sets, const char *const *name,
-                      const void *const *block, const uint64_t *block_bytes) {
-  if (!n_sets) die("a MRMP set needs at least one set", out);
-  uint64_t names_bytes = 0;
-  for (uint32_t i = 0; i < n_sets; ++i) names_bytes += strlen(name[i]) + 1;
-
-  mrmpset_header_t h;
-  memset(&h, 0, sizeof h);
-  memcpy(h.magic, MRMPSET_MAGIC, 8);
-  h.version      = MRMPSET_VERSION;
-  h.n_sets       = n_sets;
-  h.table_offset = sizeof h;
-  h.names_offset = h.table_offset + (uint64_t)n_sets * sizeof(mrmpset_entry_t);
-
-  /* Blocks are 8-byte aligned so a reader can cast a block header in place
-   * rather than memcpy it out; the header is a multiple of 8 already. */
-  mrmpset_entry_t *ent = xcalloc(n_sets, sizeof(*ent), "set table");
-  uint64_t off = h.names_offset + names_bytes;
-  for (uint32_t i = 0; i < n_sets; ++i) {
-    off = (off + 7u) & ~7ull;
-    ent[i].block_offset = off;
-    ent[i].block_bytes  = block_bytes[i];
-    off += block_bytes[i];
-  }
-  h.file_bytes = off;
-
+void ms_mrmp_chain_write(const char *out, uint32_t n_sets,
+                         const void *const *block, const uint64_t *block_bytes) {
+  if (!n_sets) die("a MRMP file needs at least one set", out);
   FILE *f = fopen(out, "wb");
-  if (!f) die("cannot write MRMP set", out);
-  write_or_die(f, &h, sizeof h, out);
-  write_or_die(f, ent, (size_t)n_sets * sizeof(*ent), out);
-  for (uint32_t i = 0; i < n_sets; ++i)
-    write_or_die(f, name[i], strlen(name[i]) + 1, out);
-  uint64_t at = h.names_offset + names_bytes;
+  if (!f) die("cannot write MRMP", out);
   for (uint32_t i = 0; i < n_sets; ++i) {
-    static const char pad[8] = {0};
-    uint64_t want = ent[i].block_offset;
-    if (want > at) { write_or_die(f, pad, (size_t)(want - at), out); at = want; }
+    /* Each block is already padded to a multiple of 8 by whoever built it, so
+     * nothing is inserted between them. That is what makes this identical to
+     * `cat` of the same blocks, and what keeps the next header 8-aligned for a
+     * reader that casts it in place. */
+    if (block_bytes[i] & 7u) die("MRMP block is not 8-aligned", out);
     write_or_die(f, block[i], (size_t)block_bytes[i], out);
-    at += block_bytes[i];
   }
   fclose(f);
-  free(ent);
+}
+
+/* Write a chain by COPYING each block from its source file, patching only its
+ * n_selected on the way past.
+ *
+ * mrmp-pool needs this and an in-memory writer cannot serve it: a block carries
+ * a membership section per genomic CpG, so holding every input at once costs the
+ * SUM of the inputs -- 8.7 GB for ~100 dense sets, which OOMed a login node.
+ * Streaming makes the peak one 8 MB buffer regardless of set count.
+ *
+ * The pooled cut is the only mutation, and n_selected lives in the block's first
+ * 128 bytes, so patching the first chunk is enough; no block is rewritten, and
+ * the output is byte-for-byte a concatenation of the (patched) inputs. */
+static void chain_write_streamed(const char *out, uint32_t n_sets,
+                                 const char *const *src, const uint64_t *src_off,
+                                 const uint64_t *block_bytes,
+                                 const uint32_t *keep) {
+  if (!n_sets) die("a MRMP file needs at least one set", out);
+  FILE *f = fopen(out, "wb");
+  if (!f) die("cannot write MRMP", out);
+  const size_t CH = 8u << 20;
+  char *buf = xcalloc(CH, 1, "block copy buffer");
+  for (uint32_t i = 0; i < n_sets; ++i) {
+    if (block_bytes[i] & 7u) die("MRMP block is not 8-aligned", src[i]);
+    FILE *in = fopen(src[i], "rb");
+    if (!in) die("cannot open", src[i]);
+    if (fseeko(in, (off_t)src_off[i], SEEK_SET)) die("cannot seek", src[i]);
+    uint64_t left = block_bytes[i], done = 0;
+    while (left) {
+      size_t want = left < (uint64_t)CH ? (size_t)left : CH;
+      if (fread(buf, 1, want, in) != want) die("short read", src[i]);
+      if (!done) {
+        if (want < sizeof(mrmp_header_t)) die("block is smaller than its header", src[i]);
+        memcpy(buf + offsetof(mrmp_header_t, n_selected), &keep[i], sizeof(uint32_t));
+      }
+      write_or_die(f, buf, want, out);
+      left -= want; done += want;
+    }
+    fclose(in);
+  }
+  free(buf);
+  fclose(f);
 }
 
 /* ---------------- inspect ----------------------------------------------- */
@@ -953,25 +1100,76 @@ int main_mrmp_inspect(int argc, char *argv[]) {
 
 /* ---------------- export ------------------------------------------------ */
 
+/* Export every set of a container as <dir>/<name>.cm, plus an order.txt naming
+ * them in set order.
+ *
+ * This is the step that CLOSES the four-command workflow. mrmp-pool emits a
+ * a chain and classify-featurize consumes .cm masks, so without a per-block
+ * export there is no path from a pooled artifact to a feature vector, and the
+ * pooling is unusable however correct it is.
+ *
+ * One file PER SET rather than one fused mask, because a set's pattern ranks are
+ * its own: P1 names a different pattern in each, so they cannot share a label
+ * space in one .cm. The featurizer already takes N masks and pools their columns
+ * itself, which is the same reason mrmp-pool does not have to.
+ *
+ * order.txt is the one thing a reader cannot recover from the .cm files alone --
+ * a directory listing is alphabetical, while the pooled feature vector is laid
+ * out in SET order, and a classifier handed its columns in the wrong order fails
+ * silently rather than loudly. */
+static int export_container(const char *path, const char *dir,
+                            const char *pna_label, uint32_t top_k) {
+  ms_mrmpset_t *s = ms_mrmpset_open(path);
+  if (mkdir(dir, 0777) && errno != EEXIST)
+    die("cannot create output directory", dir);
+  char buf[PATH_MAX];
+  for (uint32_t k = 0; k < s->n_sets; ++k) {
+    if (snprintf(buf, sizeof buf, "%s/%s.cm", dir, s->name[k]) >= (int)sizeof buf)
+      die("output path too long for set", s->name[k]);
+    ms_mrmp_write_mask_at(path, s->block_off[k], s->block_bytes[k], buf,
+                          pna_label, top_k);
+  }
+  if (snprintf(buf, sizeof buf, "%s/order.txt", dir) >= (int)sizeof buf)
+    die("output path too long", dir);
+  FILE *f = fopen(buf, "w");
+  if (!f) die("cannot create order.txt", buf);
+  for (uint32_t k = 0; k < s->n_sets; ++k) fprintf(f, "%s\n", s->name[k]);
+  if (fclose(f)) die("error closing order.txt", buf);
+  fprintf(stderr, "[methscope] mrmp-export: %u sets -> %s/\n", s->n_sets, dir);
+  ms_mrmpset_free(s);
+  return 0;
+}
+
 int main_mrmp_export(int argc, char *argv[]) {
   g_cmd = "mrmp-export";
   const char *pos[2] = {NULL, NULL}, *patterns = NULL, *counts = NULL,
-             *pna_label = "Pna";
+             *pna_label = "Pna", *set_name = NULL;
   int npos = 0;
   uint32_t top_k = 1000;
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       ms_help(stderr,
-        "Usage: methscope mrmp-export [options] IN.mrmp OUT.cm\n\n"
-        "  IN.mrmp          MRMPIDX1 artifact\n"
-        "  OUT.cm           per-CpG P1..PK/Pna labels as a YAME format-2 mask\n\n"
+        "Usage: methscope mrmp-export [options] IN.mrmp OUT.cm\n"
+        "       methscope mrmp-export [options] IN.mrmpset OUTDIR\n\n"
+        "  IN               a .mrmp: one set, or a chain of several\n"
+        "  OUT.cm           per-CpG P1..PK/Pna labels as a YAME format-2 mask\n"
+        "  OUTDIR           for a container with no --set: one <name>.cm per set\n"
+        "                   plus order.txt. This is what turns a POOLED artifact\n"
+        "                   into something classify-featurize can read -- it takes\n"
+        "                   N masks, and a set's ranks are its own, so P1 means a\n"
+        "                   different pattern in each and they cannot share one\n"
+        "                   .cm. order.txt records SET order, which a directory\n"
+        "                   listing (alphabetical) loses and a classifier handed\n"
+        "                   its columns out of order fails silently on.\n\n"
+        "  --set NAME       export just this set of a container, to OUT.cm\n"
         "  --top K          rank cut for the mask and --patterns (default 1000)\n"
         "  --patterns TSV   also write top-K patterns: string<tab>P<rank><tab>count\n"
         "  --counts TSV     also write every pattern (incl. PNA): count<tab>string\n"
         "  --pna-label NAME background label in the mask (default Pna)\n");
       return 0;
-    } else if (!strcmp(a, "--patterns") && i + 1 < argc) patterns = argv[++i];
+    } else if (!strcmp(a, "--set") && i + 1 < argc) set_name = argv[++i];
+    else if (!strcmp(a, "--patterns") && i + 1 < argc) patterns = argv[++i];
     else if (!strcmp(a, "--counts") && i + 1 < argc) counts = argv[++i];
     else if (!strcmp(a, "--top") && i + 1 < argc) top_k = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--pna-label") && i + 1 < argc) pna_label = argv[++i];
@@ -981,7 +1179,26 @@ int main_mrmp_export(int argc, char *argv[]) {
   }
   if (npos != 2) die("need IN.mrmp and OUT.cm (see mrmp-export -h)", NULL);
   const char *path = pos[0], *mask = pos[1];
-  mrmp_reader_t r; mrmp_open(&r, path);
+
+  /* One set or many is the same format now, so the arity decides: a multi-set
+   * chain with no --set goes to a directory, a single-set file to one .cm. */
+  ms_mrmpset_t *s = ms_mrmpset_open(path);
+  if (s->n_sets > 1 && !set_name) {
+    if (patterns || counts)
+      die("--patterns/--counts describe ONE set; add --set NAME", path);
+    ms_mrmpset_free(s);
+    return export_container(path, mask, pna_label, top_k);
+  }
+  uint64_t base = 0, blk_bytes = 0;
+  if (set_name) {
+    uint32_t k = 0;
+    for (; k < s->n_sets && strcmp(s->name[k], set_name); ++k) {}
+    if (k == s->n_sets) die("no such set in the file", set_name);
+    base = s->block_off[k]; blk_bytes = s->block_bytes[k];
+  } else {
+    base = s->block_off[0]; blk_bytes = s->block_bytes[0];
+  }
+  mrmp_reader_t r; mrmp_open_at(&r, path, base, blk_bytes);
   const mrmp_header_t *h = r.h;
   const uint32_t ns = h->n_samples;
   char *buf = xcalloc(ns + 1, 1, "string buffer");
@@ -1016,10 +1233,11 @@ int main_mrmp_export(int argc, char *argv[]) {
     if (fclose(f)) die("error closing --counts", counts);
   }
 
-  if (mask) ms_mrmp_write_mask(path, mask, pna_label, top_k);
+  if (mask) ms_mrmp_write_mask_at(path, base, blk_bytes, mask, pna_label, top_k);
 
   free(buf);
   mrmp_close(&r);
+  if (s) ms_mrmpset_free(s);
   return 0;
 }
 
@@ -1042,8 +1260,9 @@ void ms_mrmp_group_map_at(const char *artifact, uint64_t base, uint16_t *group,
   /* group[] is uint16 (1-based rank, 0 = PNA), so a selectable rank must fit in
    * 15 usable bits; guard against a caller/artifact that would alias rank+1. */
   if (K > UINT16_MAX - 1) die("MRMP selectable pattern count exceeds uint16", artifact);
+  const uint32_t *memb = mrmp_membership(&r);
   for (uint64_t i = 0; i < n_cpg; ++i) {
-    uint32_t rank = r.membership[i];
+    uint32_t rank = memb[i];
     group[i] = (rank != MRMP_PNA_MEMBERSHIP && rank < K)
              ? (uint16_t)(rank + 1) : 0;
   }
@@ -1055,9 +1274,10 @@ void ms_mrmp_group_map(const char *artifact, uint16_t *group, uint64_t n_cpg,
   ms_mrmp_group_map_at(artifact, 0, group, n_cpg, patterns);
 }
 
-void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
-                        const char *pna_label, uint32_t top_k) {
-  mrmp_reader_t r; mrmp_open(&r, artifact);
+void ms_mrmp_write_mask_at(const char *artifact, uint64_t base,
+                           uint64_t blk_bytes, const char *out_cm,
+                           const char *pna_label, uint32_t top_k) {
+  mrmp_reader_t r; mrmp_open_at(&r, artifact, base, blk_bytes);
   const mrmp_header_t *h = r.h;
   if (!pna_label) pna_label = "Pna";
   if (!top_k) die("mask needs a positive rank cut", out_cm);
@@ -1078,8 +1298,9 @@ void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
     /* worst case: K selected labels + 1 PNA */
     char **keys = xcalloc(K + 1, sizeof(char *), "label keys");
     size_t keys_bytes = 0;
+    const uint32_t *memb = mrmp_membership(&r);
     for (uint64_t i = 0; i < n; ++i) {
-      uint32_t rank = r.membership[i];
+      uint32_t rank = memb[i];
       int is_sel = (rank != MRMP_PNA_MEMBERSHIP && rank < K);
       int32_t id;
       if (is_sel) {
@@ -1135,60 +1356,15 @@ void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
   mrmp_close(&r);
 }
 
-
-/* ---------------- mrmp-pack: combine artifacts into a container ---------- */
-
-/* Exists because the sets in a container are ordinary MRMPIDX1 artifacts, so
- * combining ones already on disk is just concatenation plus a table. That makes
- * the container testable on its own, and lets a pipeline that already built its
- * sets separately adopt the fused featurizer without rebuilding them. */
-int main_mrmp_pack(int argc, char *argv[]) {
-  g_cmd = "mrmp-pack";
-  const char *out = NULL;
-  int i = 1;
-  for (; i < argc; ++i) {
-    if (!strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
-    else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-      fprintf(stderr,
-        "Usage: methscope mrmp-pack -o OUT.mrmpset NAME:IN.mrmp [NAME:IN.mrmp ...]\n\n"
-        "  Combine MRMPIDX1 artifacts into one MRMPSET1 container, in the order\n"
-        "  given. Set 0 is conventionally the global set and the rest satellites;\n"
-        "  the featurizer pools patterns across all of them.\n");
-      return 0;
-    }
-    else if (argv[i][0] == '-') die("unrecognized option", argv[i]);
-    else break;
-  }
-  if (!out || argc - i < 1) { die("need -o OUT and at least one NAME:IN.mrmp", NULL); }
-
-  uint32_t n = (uint32_t)(argc - i);
-  char **name = xcalloc(n, sizeof(char *), "set names");
-  void **blk  = xcalloc(n, sizeof(void *), "blocks");
-  uint64_t *len = xcalloc(n, sizeof(uint64_t), "block sizes");
-  for (uint32_t k = 0; k < n; ++k) {
-    char *spec = argv[i + k];
-    char *colon = strchr(spec, ':');
-    if (!colon) die("expected NAME:IN.mrmp", spec);
-    *colon = '\0';
-    name[k] = spec;
-    const char *path = colon + 1;
-    if (!ms_mrmp_is_artifact(path)) die("not a MRMPIDX1 artifact", path);
-    FILE *f = fopen(path, "rb");
-    if (!f) die("cannot open", path);
-    if (fseek(f, 0, SEEK_END)) die("cannot size", path);
-    len[k] = (uint64_t)ftell(f);
-    rewind(f);
-    blk[k] = xcalloc(len[k], 1, "block");
-    if (fread(blk[k], 1, len[k], f) != len[k]) die("short read", path);
-    fclose(f);
-  }
-  ms_mrmpset_write(out, n, (const char *const *)name,
-                   (const void *const *)blk, len);
-  fprintf(stderr, "[methscope] mrmp-pack: %u sets -> %s\n", n, out);
-  for (uint32_t k = 0; k < n; ++k) free(blk[k]);
-  free(name); free(blk); free(len);
-  return 0;
+void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
+                        const char *pna_label, uint32_t top_k) {
+  ms_mrmp_write_mask_at(artifact, 0, 0, out_cm, pna_label, top_k);
 }
+
+
+/* mrmp-pack is gone: a chain IS a concatenation, so `cat a.mrmp b.mrmp > c.mrmp`
+ * is the exact combine it used to perform. mrmp-pool remains, because applying
+ * a shared column budget is selection rather than merging and cat cannot do it. */
 
 /* One pooled candidate: which set it came from and how many CpGs carry it.
  * File scope, with a plain comparator -- a nested function would be a GCC
@@ -1212,35 +1388,36 @@ int main_mrmp_pool(int argc, char *argv[]) {
       pooled_top = (uint32_t)parse_u64(argv[++i], "--pooled-top");
     else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
       ms_help(stderr,
-        "Usage: methscope mrmp-pool [options] -o OUT.mrmpset NAME:IN.mrmp ...\n\n"
-        "Pool several MRMP sets into one MRMPSET1 container and cut them to a\n"
+        "Usage: methscope mrmp-pool [options] -o OUT.mrmp IN.mrmp [IN.mrmp ...]\n\n"
+        "Pool several MRMP sets into one chain and cut them to a\n"
         "shared column budget. Needs no store and no reference -- pattern CpG\n"
         "counts are already in each artifact -- so re-pooling at a different\n"
-        "budget costs seconds. Distinct from mrmp-pack, which concatenates\n"
-        "without selecting.\n\n"
+        "budget costs seconds. Plain concatenation is just `cat`; this is the\n"
+        "step that SELECTS.\n\n"
         "A set is a set: the inputs may come from any generator and from\n"
         "DIFFERENT stores, as long as they share a row space. Nothing here\n"
         "distinguishes a global from a satellite.\n\n"
-        "An input may be a bare MRMPIDX1 or a MRMPSET1 container, and a\n"
-        "container EXPANDS into its member sets under their own names -- so a\n"
-        "mrmp-build-thin output competes for slots as the many 2-class sets it\n"
-        "is, not as one blob. NAME then labels only the bare inputs.\n\n"
+        "Each input is a CHAIN of one or more sets and expands into all of\n"
+        "them under their own names, so a mrmp-build-thin output competes for\n"
+        "slots as the many 2-class sets it is, not as one blob. A set carries\n"
+        "its name in its own block (mrmp-build --name), so pooling needs no\n"
+        "NAME: prefix and cannot mislabel anything.\n\n"
         "  --pooled-top N   total pattern budget across every input, ranked by\n"
         "                   CpG count (default 1000). Sets COMPETE for these\n"
         "                   slots rather than being reserved any, so a set that\n"
         "                   cannot field well-covered patterns loses -- the right\n"
         "                   verdict, since a pattern too thin to rank is too thin\n"
-        "                   to trust. 0 disables the cut (same as mrmp-pack).\n"
+        "                   to trust. 0 disables the cut, leaving a plain `cat`\n"
+        "                   plus the row-space check.\n"
         "  -o OUT           output container\n");
       return 0;
     }
     else if (argv[i][0] == '-') die("unrecognized option", argv[i]);
     else break;
   }
-  if (!out || argc - i < 1) die("need -o OUT and at least one NAME:IN.mrmp", NULL);
+  if (!out || argc - i < 1) die("need -o OUT and at least one IN.mrmp", NULL);
 
-  /* An input may be a bare MRMPIDX1 or a MRMPSET1 container, and a container
-   * expands into its member sets. That is what makes the four-command workflow
+  /* Every input is a chain of one or more sets and expands into all of them. That is what makes the four-command workflow
    * close: mrmp-build-thin emits ONE file holding many 2-class sets, and pooling
    * has to see them as the separate competitors they are, not as one blob.
    * Expanded blocks keep the container's own set names -- those came from the
@@ -1248,67 +1425,68 @@ int main_mrmp_pool(int argc, char *argv[]) {
    * table readable. So the input count is not the set count. */
   uint32_t cap = (uint32_t)(argc - i), n = 0;
   char **name = xcalloc(cap, sizeof(char *), "set names");
-  void **blk  = xcalloc(cap, sizeof(void *), "blocks");
   uint64_t *len = xcalloc(cap, sizeof(uint64_t), "block sizes");
+  uint64_t *soff = xcalloc(cap, sizeof(uint64_t), "block offsets");
   const char **path = xcalloc(cap, sizeof(char *), "paths");
   for (uint32_t k = 0; k < (uint32_t)(argc - i); ++k) {
-    char *spec = argv[i + k], *colon = strchr(spec, ':');
-    if (!colon) die("expected NAME:IN.mrmp", spec);
-    *colon = '\0';
-    char *nm = spec; const char *p = colon + 1;
-    uint32_t take = 1;
-    ms_mrmpset_t *s = NULL;
-    if (ms_mrmpset_is(p)) { s = ms_mrmpset_open(p); take = s->n_sets; }
-    else if (!ms_mrmp_is_artifact(p)) die("not a MRMPIDX1 artifact or MRMPSET1 container", p);
+    const char *p = argv[i + k];
+    ms_mrmpset_t *s = ms_mrmpset_open(p);
+    uint32_t take = s->n_sets;
     if (n + take > cap) {
       cap = n + take + 8;
       name = realloc(name, cap * sizeof(char *));
-      blk  = realloc(blk, cap * sizeof(void *));
       len  = realloc(len, cap * sizeof(uint64_t));
+      soff = realloc(soff, cap * sizeof(uint64_t));
       path = realloc(path, cap * sizeof(char *));
-      if (!name || !blk || !len || !path) die("out of memory", "pool input grow");
+      if (!name || !len || !soff || !path) die("out of memory", "pool input grow");
     }
-    FILE *f = fopen(p, "rb");
-    if (!f) die("cannot open", p);
     for (uint32_t j = 0; j < take; ++j) {
-      uint64_t at = 0, nb;
-      if (s) { at = s->block_off[j]; nb = s->block_bytes[j]; name[n] = s->name[j]; }
-      else {
-        if (fseek(f, 0, SEEK_END)) die("cannot size", p);
-        nb = (uint64_t)ftell(f); name[n] = nm;
-      }
-      path[n] = p; len[n] = nb;
-      blk[n] = xcalloc(nb, 1, "block");
-      if (fseek(f, (long)at, SEEK_SET) || fread(blk[n], 1, nb, f) != nb)
-        die("short read", p);
+      soff[n] = s->block_off[j]; len[n] = s->block_bytes[j];
+      name[n] = s->name[j]; path[n] = p;
       ++n;
     }
-    fclose(f);
-    /* the container's name STRINGS are now owned by name[], so release its
-     * arrays but not ms_mrmpset_free, which would take the strings with them */
-    if (s) { free(s->block_off); free(s->block_bytes); free(s->name); free(s); }
+    /* the name STRINGS are now owned by name[], so release the walk's arrays
+     * but not ms_mrmpset_free, which would take the strings with them */
+    free(s->block_off); free(s->block_bytes); free(s->name); free(s);
   }
 
   /* Expansion can yield nothing even though inputs were given: a container
-   * with n_sets == 0. ms_mrmpset_write refuses to produce one, but a truncated
-   * or hand-made file can be one, and without this the blk[0] below reads
-   * unallocated memory and segfaults instead of saying what is wrong. */
+   * holding no blocks. The walker rejects an empty file, but this keeps the
+   * guard local rather than depending on that. */
   if (!n) die("inputs expanded to no sets at all", NULL);
+
+  /* Headers only, never whole blocks. A block carries one membership entry per
+   * genomic CpG -- 87 MB at 21.8 M CpGs -- so reading them all in costs the SUM
+   * of the inputs, which was ~8.7 GB for the ~100 sets the pair generators now
+   * produce and OOMed a login node. Everything pooling needs (n_cpg to check the
+   * row space, n_candidates and the counts to rank) sits in the header and the
+   * pattern records, which together are kilobytes. */
+  mrmp_header_t *hd = xcalloc(n, sizeof(mrmp_header_t), "block headers");
+  for (uint32_t k = 0; k < n; ++k) {
+    FILE *f = fopen(path[k], "rb");
+    if (!f) die("cannot open", path[k]);
+    if (fseeko(f, (off_t)soff[k], SEEK_SET) ||
+        fread(&hd[k], 1, sizeof hd[k], f) != sizeof hd[k])
+      die("cannot read MRMP block header", path[k]);
+    fclose(f);
+    if (memcmp(hd[k].magic, MRMPIDX_MAGIC, 8)) die("not a MRMPIDX1 block", path[k]);
+  }
 
   /* Same row space, ENFORCED not assumed. Membership arrays are indexed by CpG
    * row, so mixing references would scramble pattern-to-CpG assignment exactly
    * the way a hand-concatenated .cg scrambles sample-to-data. n_cpg is in the
    * header, so the check is free. */
-  const mrmp_header_t *h0 = (const mrmp_header_t *)blk[0];
   for (uint32_t k = 1; k < n; ++k) {
-    const mrmp_header_t *hk = (const mrmp_header_t *)blk[k];
-    if (hk->n_cpg != h0->n_cpg) {
+    if (hd[k].n_cpg != hd[0].n_cpg) {
       fprintf(stderr, "[methscope] mrmp-pool: %s has %" PRIu64 " CpGs but %s "
               "has %" PRIu64 " -- different row spaces cannot be pooled\n",
-              path[k], hk->n_cpg, path[0], h0->n_cpg);
+              path[k], hd[k].n_cpg, path[0], hd[0].n_cpg);
       exit(1);
     }
   }
+
+  uint32_t *won = xcalloc(n, sizeof(uint32_t), "per-set winners");
+  for (uint32_t k = 0; k < n; ++k) won[k] = hd[k].n_selected;
 
   if (pooled_top) {
     /* Both the within-set ranking and the pooled ranking are by CpG count
@@ -1317,42 +1495,44 @@ int main_mrmp_pool(int argc, char *argv[]) {
      * n_selected: no pattern has to be dropped from the middle, and every
      * consumer already takes min(n_selected, its own K). */
     uint64_t n_all = 0;
-    for (uint32_t k = 0; k < n; ++k)
-      n_all += ((const mrmp_header_t *)blk[k])->n_candidates;
+    for (uint32_t k = 0; k < n; ++k) n_all += hd[k].n_candidates;
     ent_t *e = xcalloc(n_all ? n_all : 1, sizeof(ent_t), "pooled entries");
     uint64_t m = 0;
-    /* Counts come straight out of the in-memory block. Re-reading the file
-     * would need the block's base offset too, since an input may be one set
+    /* Just the pattern records of each block -- n_candidates * stride bytes,
+     * kilobytes -- read at the block's own base, since an input may be one set
      * inside a container rather than a whole file. */
     for (uint32_t k = 0; k < n; ++k) {
-      const mrmp_header_t *hk = (const mrmp_header_t *)blk[k];
-      const char *rec = (const char *)blk[k] + hk->patterns_offset;
-      uint64_t st = mrmp_pattern_stride(hk->n_samples);
-      uint64_t koff = (uint64_t)mrmp_key_words(hk->n_samples) * sizeof(uint64_t);
-      for (uint64_t r = 0; r < hk->n_candidates; ++r) {
+      uint64_t st = mrmp_pattern_stride(hd[k].n_samples);
+      uint64_t koff = (uint64_t)mrmp_key_words(hd[k].n_samples) * sizeof(uint64_t);
+      uint64_t nb = hd[k].n_candidates * st;
+      if (!nb) continue;
+      char *rec = xcalloc(nb, 1, "pattern records");
+      FILE *f = fopen(path[k], "rb");
+      if (!f) die("cannot open", path[k]);
+      if (fseeko(f, (off_t)(soff[k] + hd[k].patterns_offset), SEEK_SET) ||
+          fread(rec, 1, nb, f) != nb)
+        die("cannot read MRMP pattern records", path[k]);
+      fclose(f);
+      for (uint64_t r = 0; r < hd[k].n_candidates; ++r) {
         memcpy(&e[m].count, rec + r * st + koff, sizeof(uint64_t));
         e[m].set = k; ++m;
       }
+      free(rec);
     }
     qsort(e, m, sizeof(ent_t), pooled_cmp);
     uint64_t take = m < pooled_top ? m : pooled_top;
-    uint32_t *won = xcalloc(n, sizeof(uint32_t), "per-set winners");
+    memset(won, 0, n * sizeof(uint32_t));
     for (uint64_t j = 0; j < take; ++j) ++won[e[j].set];
-    for (uint32_t k = 0; k < n; ++k) {
-      mrmp_header_t *hk = (mrmp_header_t *)blk[k];
+    for (uint32_t k = 0; k < n; ++k)
       fprintf(stderr, "  %-22s %6u of %" PRIu64 " patterns keep a column\n",
-              name[k], won[k], hk->n_candidates);
-      hk->n_selected = won[k];
-    }
-    free(e); free(won);
+              name[k], won[k], hd[k].n_candidates);
+    free(e);
   }
 
-  ms_mrmpset_write(out, n, (const char *const *)name,
-                   (const void *const *)blk, len);
+  chain_write_streamed(out, n, path, soff, len, won);
   fprintf(stderr, "[methscope] mrmp-pool: %u sets, budget %u -> %s\n",
           n, pooled_top, out);
-  for (uint32_t k = 0; k < n; ++k) free(blk[k]);
-  free(name); free(blk); free(len); free(path);
+  free(name); free(len); free(soff); free(path); free(hd); free(won);
   return 0;
 }
 
@@ -1411,6 +1591,7 @@ static void build_subset_block(const char *store, uint32_t ns,
                                char *const *label, const int64_t *voff,
                                const mrmp_header_t *gh,
                                const ms_select_opt_t *sel,
+                               const char *set_name,
                                subset_block_t *out) {
   const uint32_t mincov = gh->mincov;
   const float beta_thr = gh->beta_threshold, max_ambig = gh->max_ambig_frac,
@@ -1574,7 +1755,7 @@ static void build_subset_block(const char *store, uint32_t ns,
   free(sum); free(cnt); free(bs);
 
   /* Serialize into memory, in header order, exactly as mrmp-build lays a file
-   * out -- a block in a MRMPSET1 container is a byte-identical MRMPIDX1. */
+   * out -- a block in a chain is a byte-identical standalone MRMPIDX1. */
   mrmp_header_t hd; memset(&hd, 0, sizeof(hd));
   memcpy(hd.magic, MRMPIDX_MAGIC, 8);
   hd.version = MRMPIDX_VERSION; hd.n_samples = ns;
@@ -1588,25 +1769,41 @@ static void build_subset_block(const char *store, uint32_t ns,
   hd.max_ambig_frac = max_ambig; hd.min_major_fold = min_fold;
   hd.content_checksum = checksum;
 
+  /* This is where compression earns its keep: a 2-class satellite describes a
+   * few thousand CpGs and the dense array would still be one uint32 for every
+   * one of the ~21.8 M in the genome. */
+  uint64_t memb_n = 0;
+  uint8_t *memb_rle = memb_compress(memb2, n_cpg, n_cand, &memb_n);
+  if (memb_n > UINT32_MAX) die("compressed membership exceeds 4 GB", label[0]);
+  hd.membership_bytes = (uint32_t)memb_n;
+  hd.flags |= MRMP_FLAG_MEMB_RLE;
+
   uint64_t off = sizeof(hd);
   hd.refname_offset = off;    off += strlen(store) + 1;
+  hd.name_offset = (uint32_t)off; off += strlen(set_name) + 1;
   hd.names_offset = off;      for (uint32_t s = 0; s < ns; ++s) off += strlen(label[s]) + 1;
   hd.patterns_offset = off;   off += n_cand * mrmp_pattern_stride(ns);
-  hd.membership_offset = off; off += n_cpg * sizeof(uint32_t);
+  hd.membership_offset = off; off += memb_n;
   hd.thresh_offset = off;     off += n_cand * sizeof(float);
+  /* Pad to 8 so the NEXT block's header is aligned when this one is
+   * concatenated after it -- readers cast the header in place. */
+  const uint64_t img_bytes = (off + 7u) & ~7ull;
 
-  char *img = xcalloc(off, 1, "mrmp block");
+  char *img = xcalloc(img_bytes, 1, "mrmp block");
   uint64_t at = 0;
   img_put(img, &at, &hd, sizeof(hd));
   img_put(img, &at, store, strlen(store) + 1);
+  img_put(img, &at, set_name, strlen(set_name) + 1);
   for (uint32_t s = 0; s < ns; ++s)
     img_put(img, &at, label[s], strlen(label[s]) + 1);
   for (uint64_t r = 0; r < n_cand; ++r) {
     img_put(img, &at, pkeys + (uint64_t)ord2[r] * nw, nw * sizeof(uint64_t));
     img_put(img, &at, &ncount[ord2[r]], sizeof(uint64_t));
   }
-  img_put(img, &at, memb2, (size_t)n_cpg * sizeof(uint32_t));
+  img_put(img, &at, memb_rle, (size_t)memb_n);
   img_put(img, &at, thr, (size_t)n_cand * sizeof(float));
+  at = img_bytes;                        /* the pad is part of the block */
+  free(memb_rle);
 
   free(pkeys); free(ncount); free(ord2); free(memb2); free(thr); free(pna_key);
   out->img = img; out->bytes = at;
@@ -1661,15 +1858,18 @@ static int cand_cmp(const void *a, const void *b) {
   return strcmp(x->name, y->name);          /* ties resolve by name, not by luck */
 }
 
-/* `th_<thin>_<partner>`, lowercased with '-' removed -- the names the Python
- * driver wrote, so a rebuilt satellite is recognisable against the runs that
- * measured these settings. */
-static char *thin_set_name(const char *t, const char *p) {
-  size_t n = strlen(t) + strlen(p) + 5;
+/* `<prefix><a>_<b>`, lowercased with '-' removed -- `th_` for the thin
+ * generator, matching the names the Python driver wrote so a rebuilt satellite
+ * is recognisable against the runs that measured these settings, and `nb_` for
+ * the neighbor one. The prefix is what tells a pooled `inspect` table which
+ * generator proposed a set, since nothing else downstream distinguishes them. */
+static char *pair_set_name(const char *prefix, const char *t, const char *p) {
+  size_t np = strlen(prefix);
+  size_t n = np + strlen(t) + strlen(p) + 2;   /* '_' separator, then NUL */
   char *s = xcalloc(n, 1, "set name");
-  size_t j = 0;
+  size_t j = np;
   const char *src[2] = {t, p};
-  memcpy(s, "th_", 3); j = 3;
+  memcpy(s, prefix, np);
   for (int u = 0; u < 2; ++u) {
     if (u) s[j++] = '_';
     for (const char *c = src[u]; *c; ++c) {
@@ -1694,7 +1894,7 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
       ms_help(stderr,
         "Usage: methscope mrmp-build-thin [options] STORE.cg GLOBAL.mrmp OUT.mrmp\n\n"
         "  One 2-class satellite per (thin class, partner) pair, written as one\n"
-        "  MRMPSET1 container. Thin classes are derived as (store labels -\n"
+        "  chain. Thin classes are derived as (store labels -\n"
         "  GLOBAL.mrmp labels). A class is thin because it LACKS THE CELLS to\n"
         "  define a pattern, not because it resembles anything -- no distance\n"
         "  metric finds ANP/ASC (196th of 820 by weighted Hamming, correctly,\n"
@@ -1762,8 +1962,8 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
         "        than the class can give\". At depth 20 a beta carries SE ~ 0.11,\n"
         "        and a class at 112 gains nothing from being asked for 112.\n\n"
         "  --force                   overwrite an existing output\n\n"
-        "  Output is a MRMPSET1 container of 2-class sets, which mrmp-pool takes\n"
-        "  directly (it expands a container into its sets). Sets are sets: a\n"
+        "  Output is a chain of 2-class sets, which mrmp-pool takes\n"
+        "  directly (it expands a chain into its sets). Sets are sets: a\n"
         "  satellite here is the same object mrmp-build writes, and nothing\n"
         "  downstream distinguishes them.\n");
       return 0;
@@ -1804,8 +2004,12 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
   uint32_t nstore = 0; int64_t *voff = NULL;
   char **slab = read_store_index(store, &nstore, &voff);
 
-  if (ms_mrmpset_is(global))
-    die("GLOBAL must be a bare MRMPIDX1, not a MRMPSET1 container", global);
+  {  /* the global must be ONE set: its binstring columns define the classes */
+    ms_mrmpset_t *gs = ms_mrmpset_open(global);
+    uint32_t gn = gs->n_sets;
+    ms_mrmpset_free(gs);
+    if (gn != 1) die("GLOBAL must hold exactly one set", global);
+  }
   mrmp_reader_t gr; mrmp_open(&gr, global);
   const mrmp_header_t gh = *gr.h;
   const uint32_t ngl = gr.h->n_samples;
@@ -1841,7 +2045,7 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
   ms_msfm_t f; char err[256];
   if (!ms_msfm_open(&f, ref_msfm, err, sizeof err)) die("--ref-msfm", err);
   uint32_t np = f.header->n_patterns;
-  if (np && !strcmp(f.pattern_names[np - 1], "Pna")) --np;   /* background column */
+  if (np && ms_is_pna_name(f.pattern_names[np - 1])) --np;  /* background column */
   const uint32_t K = proj_top < np ? proj_top : np;
   uint32_t *row = xcalloc(nstore, sizeof(uint32_t), "msfm rows");
   for (uint32_t s = 0; s < nstore; ++s) {
@@ -1893,17 +2097,16 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
     uint32_t k1 = pa[q] < pb[q] ? pb[q] : pa[q];
     char *lab[2] = {slab[k0], slab[k1]};
     int64_t vo[2] = {voff[k0], voff[k1]};
-    name[q] = thin_set_name(slab[pa[q]], slab[pb[q]]);
+    name[q] = pair_set_name("th_", slab[pa[q]], slab[pb[q]]);
     fprintf(stderr, "  [%u/%u] %-24s %s + %s  projection %.5f\n",
             q + 1, npair, name[q], slab[pa[q]], slab[pb[q]], pd[q]);
     subset_block_t sb;
-    build_subset_block(store, 2, lab, vo, &gh, &sel, &sb);
+    build_subset_block(store, 2, lab, vo, &gh, &sel, name[q], &sb);
     blk[q] = sb.img; len[q] = sb.bytes;
     fprintf(stderr, "      %" PRIu64 " patterns over %" PRIu64 " CpGs\n",
             sb.n_pat, sb.n_kept);
   }
-  ms_mrmpset_write(out, npair, (const char *const *)name,
-                   (const void *const *)blk, len);
+  ms_mrmp_chain_write(out, npair, (const void *const *)blk, len);
   fprintf(stderr, "[methscope] %s: %u sets -> %s\n", g_cmd, npair, out);
 
   for (uint32_t q = 0; q < npair; ++q) { free(blk[q]); free(name[q]); }
@@ -1914,7 +2117,287 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
   return 0;
 }
 
-/* ---------------- inspect: the MRMPSET1 arm ------------------------------ */
+/* ---------------- mrmp-build-neighbor ----------------------------------- */
+
+/* Satellites for classes that GENUINELY RESEMBLE each other, so their evidence
+ * overlaps and a distance metric finds them. Complementary to mrmp-build-thin,
+ * which addresses a measurement artifact rather than a real similarity, and
+ * neither subsumes the other.
+ *
+ * Deliberately NOT a port of the WPGMA partition this replaces. WPGMA
+ * PARTITIONS -- each class lands in at most one block, and the 3-class cap then
+ * truncates -- and that is where three quarters of the remaining error was
+ * living: measured on the 10-fold arm, 73.5% of it sat in confusion pairs no
+ * satellite covered, because IT-L4 and MGE-Pvalb fell out of the vocabulary
+ * entirely and PAL-Inh <-> LSX-Inh was split across two blocks. Overlapping
+ * closest-N pairs fix that by construction: a class appears in as many sets as
+ * it has close neighbours, and every pair that matters is reachable.
+ *
+ * Pairs rather than blocks is also the better trade per column. Pattern count
+ * grows as 2^N-2 while covered error does not -- a 2-class set spent 2 pooled
+ * columns for 7.4% of error where a 6-class one spent 62 for 4.6%. */
+
+/* Distance between two class columns of the global: the CpG-weighted share of
+ * DISAGREEMENTS among the CpGs where at least one of the two is called 0. A
+ * small distance is a predicted confusion, since this is the evidence the
+ * classifier scores with.
+ *
+ * Weighted by CpG count rather than counting patterns, because a pattern
+ * carrying 10,000 CpGs and one carrying 3 are not equal evidence -- the global's
+ * counts are violently skewed (median 17).
+ *
+ * The denominator is the point, and plain Hamming (dividing by ALL weight) is
+ * wrong here. Every class is called 1 on 81-93% of weighted CpGs, so the
+ * disagreement weight collapses to roughly (1 - frac1(a)) + (1 - frac1(b)) and
+ * the nearest neighbour of EVERY class comes out as whichever class is called 1
+ * most often -- PAL-Inh for 19 of 34 classes, with ASC-PAL-Inh ranked nearest of
+ * all. That is the binstring-centroid artifact that got the A-score partner gate
+ * dropped, reproduced exactly. Normalising by the union of the ZERO calls
+ * removes the marginal-frequency term, because a class that is almost never 0
+ * lands far from everything instead of close to it.
+ *
+ * Measured against the 10-fold confusion matrix, over the pairs each metric
+ * proposes at --n-partner 3: same share of deep-deep error covered (68.0% vs
+ * 67.4%) from 81 sets rather than 85, and a less degenerate partner list. A
+ * disagreement implies at least one 0, so num <= den and the result is in [0,1]. */
+static double column_dist(const mrmp_top_t *t, uint32_t a, uint32_t b) {
+  double num = 0, den = 0;
+  for (uint32_t p = 0; p < t->n_patterns; ++p) {
+    const char ca = t->binstring[p][a], cb = t->binstring[p][b];
+    const double w = (double)t->count[p];
+    if (ca != cb) num += w;
+    if (ca == '0' || cb == '0') den += w;
+  }
+  return den > 0 ? num / den : 1.0 / 0.0;
+}
+
+int main_mrmp_build_neighbor(int argc, char *argv[]) {
+  g_cmd = "mrmp-build-neighbor";
+  const char *pos[3] = {NULL, NULL, NULL};
+  int npos = 0, force = 0, dry_run = 0;
+  uint32_t n_partner = 3, dist_top = 6000;
+  double max_dist = 0.0;                  /* 0 == no distance gate; see help */
+  ms_select_opt_t sel; ms_select_defaults(&sel);
+  sel.depth_floor_frac = 1.0f;   /* satellites turn the RELATIVE floor on */
+  for (int i = 1; i < argc; ++i) {
+    const char *a = argv[i];
+    if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
+      ms_help(stderr,
+        "Usage: methscope mrmp-build-neighbor [options] STORE.cg GLOBAL.mrmp OUT.mrmp\n\n"
+        "  One 2-class satellite per (class, near neighbour) pair over the\n"
+        "  classes GLOBAL.mrmp already covers, written as one chain.\n"
+        "   Complementary to mrmp-build-thin: this one finds classes\n"
+        "  that GENUINELY RESEMBLE each other, where thin covers classes too\n"
+        "  shallow to define a pattern at all. Thin classes are absent from the\n"
+        "  global by construction, so the two generators cannot propose the same\n"
+        "  pair and neither subsumes the other.\n\n"
+        "  Needs no reference featurization: the binstring columns and their CpG\n"
+        "  counts are already in GLOBAL.mrmp, so the distance is a pure artifact\n"
+        "  computation. The store is read only to BUILD the chosen pairs.\n\n"
+        "  OVERLAPPING PAIRS, NOT A PARTITION. The WPGMA generator this replaces\n"
+        "  put each class in at most one block and then truncated at 3, which is\n"
+        "  where 73.5% of all remaining error was living -- IT-L4 and MGE-Pvalb\n"
+        "  fell out of the vocabulary entirely and PAL-Inh <-> LSX-Inh was split\n"
+        "  across two blocks. A class here appears in as many sets as it has\n"
+        "  close neighbours. Pairs also buy more per pooled column than blocks:\n"
+        "  pattern count grows as 2^N-2 while covered error does not.\n\n"
+        "  --n-partner N             (default 3)\n"
+        "        Nearest classes each class is given a satellite against. A pair\n"
+        "        reachable from both ends is emitted ONCE, so the set count is\n"
+        "        well below N x classes. Raising it buys coverage at a rising\n"
+        "        price in pooled columns -- measured on a 34-class global against\n"
+        "        the share of deep-deep confusion error the proposed pairs cover:\n"
+        "          N=1  28 sets 37.8%   N=2  55 sets 59.6%   N=3  81 sets 68.0%\n"
+        "          N=4 105 sets 76.2%   N=5 130 sets 79.9%\n"
+        "        against an 80.9% ceiling for the 85 worst pairs chosen with the\n"
+        "        confusion matrix in hand. Each 2-class set spends ~2 of\n"
+        "        mrmp-pool's columns, so N=5 puts a quarter of a 1,000 budget\n"
+        "        here. 3 is the default for the same reason it is in\n"
+        "        mrmp-build-thin, not because 3 is special.\n\n"
+        "  --max-dist D              (default 0 = no gate)\n"
+        "        Skip a partner farther than D, so an isolated class is not given\n"
+        "        arbitrary neighbours just to fill its quota. Deliberately OFF by\n"
+        "        default: the tempting number is the old --wpgma-height 0.011,\n"
+        "        but that was a WPGMA MERGE HEIGHT -- an average over cluster\n"
+        "        members -- not a pairwise distance, and it was measured on a\n"
+        "        different metric besides. Use --dry-run to see the scale on your\n"
+        "        own reference before setting this.\n\n"
+        "  --dist-top K              (default 6000)\n"
+        "        Pattern columns of GLOBAL.mrmp the distance is taken over,\n"
+        "        highest CpG count first. Matches mrmp-build's --top so the\n"
+        "        distance is computed over the patterns that actually ship.\n\n"
+        "  --qfilter LO,HI           (default 0.25,0.6)\n"
+        "        As mrmp-build. Forms the FLOOR leg of the selection rule.\n\n"
+        "  --qfilter-strict LO,HI    (default 0.1,0.8)\n"
+        "        Tighter gate forming the SELF-SIZING leg: every CpG passing it\n"
+        "        is kept regardless of budget, so a pair with genuinely clean\n"
+        "        positions contributes all of them.\n\n"
+        "  --delta-mean-top N        (default 1000)\n"
+        "        PER BINSTRING, keep the N highest by delta_mean among --qfilter\n"
+        "        passers. The floor leg: it guarantees a pattern is never starved\n"
+        "        when --qfilter-strict returns almost nothing.\n\n"
+        "  --depth-floor-frac F      (default 1.0)\n"
+        "        Per class, require coverage of at least F times THAT CLASS'S OWN\n"
+        "        genome-wide mean depth. Relative, so one number serves classes\n"
+        "        spanning depth 5 to 112.\n\n"
+        "  --depth-floor-cap N       (default 20)\n"
+        "        Cap the above at N cells: \"enough to be reliable, never more\n"
+        "        than the class can give\".\n\n"
+        "  --dry-run                 print the chosen pairs and their distances,\n"
+        "        then stop without building anything. The pairing is seconds of\n"
+        "        artifact arithmetic while the build is hours of store passes, so\n"
+        "        this is how --max-dist and --n-partner get tuned: the absolute\n"
+        "        distance scale is not knowable in advance, and committing to a\n"
+        "        full build to discover it is the expensive way to find out.\n\n"
+        "  --force                   overwrite an existing output\n\n"
+        "  Binstring resolution (mincov, beta threshold, ambiguity, majority\n"
+        "  fold) is read from GLOBAL.mrmp's header rather than re-declared here,\n"
+        "  for the same reason as mrmp-build-thin: a satellite resolved on a\n"
+        "  different rule than the global it supplements would put two\n"
+        "  incompatible pattern definitions in one pooled feature vector.\n");
+      return 0;
+    }
+    else if (!strcmp(a, "--n-partner") && i + 1 < argc)
+      n_partner = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--dist-top") && i + 1 < argc)
+      dist_top = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--max-dist") && i + 1 < argc) max_dist = atof(argv[++i]);
+    else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc)
+      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
+      sel.depth_floor_frac = (float)atof(argv[++i]);
+    else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
+      sel.depth_floor_cap = (uint32_t)parse_u64(argv[++i], a);
+    else if ((!strcmp(a, "--qfilter") || !strcmp(a, "--qfilter-strict"))
+             && i + 1 < argc) {
+      int strict = a[9] != '\0';
+      const char *v = argv[++i]; char *end = NULL;
+      float lo = strtof(v, &end);
+      if (!end || *end != ',') die("wants LO,HI", a);
+      float hi = strtof(end + 1, NULL);
+      if (!(lo >= 0.0f && hi <= 1.0f && lo < hi)) die("needs 0 <= LO < HI <= 1", a);
+      if (strict) { sel.strict_lo = lo; sel.strict_hi = hi; }
+      else        { sel.qfilter_lo = lo; sel.qfilter_hi = hi; }
+    }
+    else if (!strcmp(a, "--dry-run")) dry_run = 1;
+    else if (!strcmp(a, "--force")) force = 1;
+    else if (a[0] == '-') die("unrecognized or incomplete option", a);
+    else if (npos < 3) pos[npos++] = a;
+    else die("too many arguments", a);
+  }
+  if (npos != 3) die("need STORE.cg GLOBAL.mrmp OUT.mrmp (see -h)", NULL);
+  const char *store = pos[0], *global = pos[1], *out = pos[2];
+  if (!n_partner) die("--n-partner must be at least 1", NULL);
+  if (!force && !dry_run) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
+
+  uint32_t nstore = 0; int64_t *voff = NULL;
+  char **slab = read_store_index(store, &nstore, &voff);
+
+  {  /* the global must be ONE set: its binstring columns define the classes */
+    ms_mrmpset_t *gs = ms_mrmpset_open(global);
+    uint32_t gn = gs->n_sets;
+    ms_mrmpset_free(gs);
+    if (gn != 1) die("GLOBAL must hold exactly one set", global);
+  }
+  mrmp_reader_t gr; mrmp_open(&gr, global);
+  const mrmp_header_t gh = *gr.h;
+  mrmp_close(&gr);
+
+  /* The binstring columns ARE the input: labels, per-pattern calls and CpG
+   * counts all come out of the global, so no store pass and no .msfm. */
+  mrmp_top_t *t = ms_mrmp_top_read(global, dist_top);
+  const uint32_t ngl = t->n_samples;
+  if (ngl < 2) die("global has fewer than two classes; no pair to build", global);
+
+  /* Each global class must be findable in the store, since that is where the
+   * pair is actually built from. */
+  uint32_t *srow = xcalloc(ngl, sizeof(uint32_t), "store rows");
+  for (uint32_t g = 0; g < ngl; ++g) {
+    uint32_t s = 0;
+    for (; s < nstore && strcmp(slab[s], t->labels[g]); ++s) {}
+    if (s == nstore)
+      die("global class is not in the store -- the two were built from "
+          "different references", t->labels[g]);
+    srow[g] = s;
+  }
+
+  /* Closest-N per class, then dedup: a pair is reachable from both ends. */
+  uint32_t cap = ngl * n_partner, npair = 0;
+  uint32_t *pa = xcalloc(cap, sizeof(uint32_t), "pair a");
+  uint32_t *pb = xcalloc(cap, sizeof(uint32_t), "pair b");
+  double   *pd = xcalloc(cap, sizeof(double), "pair distance");
+  cand_t *cand = xcalloc(ngl, sizeof(cand_t), "partner candidates");
+  for (uint32_t a = 0; a < ngl; ++a) {
+    uint32_t nc = 0;
+    for (uint32_t b = 0; b < ngl; ++b) {
+      if (b == a) continue;
+      double d = column_dist(t, a, b);
+      if (max_dist > 0.0 && d > max_dist) continue;
+      cand[nc].d = d; cand[nc].name = t->labels[b]; cand[nc].k = b; ++nc;
+    }
+    qsort(cand, nc, sizeof(cand_t), cand_cmp);
+    uint32_t take = n_partner < nc ? n_partner : nc;
+    if (!take)
+      fprintf(stderr, "[methscope] %s: warning: no partner within --max-dist "
+              "for '%s'\n", g_cmd, t->labels[a]);
+    for (uint32_t j = 0; j < take; ++j) {
+      uint32_t b = cand[j].k, dup = 0;
+      for (uint32_t q = 0; q < npair && !dup; ++q)
+        dup = (pa[q] == a && pb[q] == b) || (pa[q] == b && pb[q] == a);
+      if (dup) continue;
+      pa[npair] = a; pb[npair] = b; pd[npair] = cand[j].d; ++npair;
+    }
+  }
+  free(cand);
+  if (!npair) die("no (class, neighbour) pair survived --max-dist", global);
+
+  fprintf(stderr, "[methscope] %s: %u classes, %u satellites\n",
+          g_cmd, ngl, npair);
+
+  if (dry_run) {
+    printf("#set\tclass_a\tclass_b\tdistance\n");
+    for (uint32_t q = 0; q < npair; ++q) {
+      char *nm = pair_set_name("nb_", t->labels[pa[q]], t->labels[pb[q]]);
+      printf("%s\t%s\t%s\t%.6f\n", nm, t->labels[pa[q]], t->labels[pb[q]], pd[q]);
+      free(nm);
+    }
+    free(pa); free(pb); free(pd);
+    for (uint32_t s = 0; s < nstore; ++s) free(slab[s]);
+    free(slab); free(voff); free(srow);
+    ms_mrmp_top_free(t);
+    return 0;
+  }
+
+  char **name = xcalloc(npair, sizeof(char *), "set names");
+  void **blk  = xcalloc(npair, sizeof(void *), "blocks");
+  uint64_t *len = xcalloc(npair, sizeof(uint64_t), "block sizes");
+  for (uint32_t q = 0; q < npair; ++q) {
+    /* members in STORE order, so a set's digit order is the store's */
+    uint32_t s0 = srow[pa[q]], s1 = srow[pb[q]];
+    uint32_t k0 = s0 < s1 ? s0 : s1, k1 = s0 < s1 ? s1 : s0;
+    char *lab[2] = {slab[k0], slab[k1]};
+    int64_t vo[2] = {voff[k0], voff[k1]};
+    name[q] = pair_set_name("nb_", t->labels[pa[q]], t->labels[pb[q]]);
+    fprintf(stderr, "  [%u/%u] %-24s %s + %s  distance %.5f\n",
+            q + 1, npair, name[q], t->labels[pa[q]], t->labels[pb[q]], pd[q]);
+    subset_block_t sb;
+    build_subset_block(store, 2, lab, vo, &gh, &sel, name[q], &sb);
+    blk[q] = sb.img; len[q] = sb.bytes;
+    fprintf(stderr, "      %" PRIu64 " patterns over %" PRIu64 " CpGs\n",
+            sb.n_pat, sb.n_kept);
+  }
+  ms_mrmp_chain_write(out, npair, (const void *const *)blk, len);
+  fprintf(stderr, "[methscope] %s: %u sets -> %s\n", g_cmd, npair, out);
+
+  for (uint32_t q = 0; q < npair; ++q) { free(blk[q]); free(name[q]); }
+  free(name); free(blk); free(len); free(pa); free(pb); free(pd);
+  for (uint32_t s = 0; s < nstore; ++s) free(slab[s]);
+  free(slab); free(voff); free(srow);
+  ms_mrmp_top_free(t);
+  return 0;
+}
+
+/* ---------------- inspect: the multi-set arm ----------------------------- */
 
 /* Per-set dimensions, then the POOLED view -- which sets would actually
  * contribute at a given rank cut. That second table is the one that matters in
@@ -1924,7 +2407,7 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
 int main_mrmpset_inspect(const char *path) {
   g_cmd = "inspect";
   ms_mrmpset_t *s = ms_mrmpset_open(path);
-  printf("MRMPSET1 container: %s\n", path);
+  printf("MRMP chain: %s\n", path);
   printf("  sets: %u\n\n", s->n_sets);
 
   /* gather every pattern from every set for the pooled table */
