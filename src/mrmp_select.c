@@ -34,15 +34,27 @@ static void *xc(size_t n, size_t sz, const char *what) {
   return p;
 }
 
+/* Seek to class k's record when the caller gave per-class offsets. Fatal on a
+ * bad offset, because reading the wrong record would silently score one class
+ * against another's betas. */
+static void seek_record(cfile_t *cf, const int64_t *rec_off, uint32_t k) {
+  if (!rec_off) return;
+  if (bgzf_seek(cf->fh, rec_off[k], SEEK_SET) != 0) {
+    fprintf(stderr, "[methscope] mrmp_select: cannot seek to record %u\n", k);
+    exit(1);
+  }
+}
+
 /* Per-class genome-wide mean depth, over CpGs the class actually covers.
  * Needed only for the RELATIVE floor: an absolute floor cannot serve both ends
  * of the class range -- 10 deletes a depth-5 class entirely while never binding
  * on a depth-112 one. */
 static double *class_mean_depth(const char *ref, uint32_t ns, uint32_t mincov,
-                                uint64_t n_cpg) {
+                                uint64_t n_cpg, const int64_t *rec_off) {
   double *mean = xc(ns, sizeof(double), "class mean depth");
   cfile_t cf = open_cfile((char *)ref);
   for (uint32_t k = 0; k < ns; ++k) {
+    seek_record(&cf, rec_off, k);
     cdata_t c = read_cdata1(&cf);
     if (!c.n) { free_cdata(&c); break; }
     decompress_in_situ(&c);
@@ -74,14 +86,15 @@ static int by_delta_desc(const void *a, const void *b) {
 uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
                         uint64_t n_cpg, const uint32_t *memb,
                         uint64_t n_cand, const char *const *binstr,
-                        const ms_select_opt_t *o, uint64_t *n_kept) {
+                        const ms_select_opt_t *o, uint64_t *n_kept,
+                        const int64_t *rec_off) {
   const int use_strict = (o->strict_lo >= 0.0f && o->strict_hi >= 0.0f);
   if (!o->delta_mean_top && !use_strict) return NULL;   /* selection disabled */
 
   /* per-class relative-depth targets: min(frac * own mean, cap) */
   double *target = NULL;
   if (o->depth_floor_frac > 0.0f) {
-    double *mean = class_mean_depth(ref, ns, mincov, n_cpg);
+    double *mean = class_mean_depth(ref, ns, mincov, n_cpg, rec_off);
     target = xc(ns, sizeof(double), "depth targets");
     for (uint32_t k = 0; k < ns; ++k) {
       double t = o->depth_floor_frac * mean[k];
@@ -108,6 +121,7 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
    * be accumulated without ever holding all betas. */
   cfile_t cf = open_cfile((char *)ref);
   for (uint32_t k = 0; k < ns; ++k) {
+    seek_record(&cf, rec_off, k);
     cdata_t c = read_cdata1(&cf);
     if (!c.n) { free_cdata(&c); break; }
     decompress_in_situ(&c);

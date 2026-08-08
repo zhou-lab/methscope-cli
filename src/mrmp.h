@@ -108,6 +108,9 @@ static inline uint64_t mrmp_pattern_stride(uint32_t n_samples) {
 }
 
 int main_mrmp_build(int argc, char *argv[]);
+/* One 2-class satellite per (thin class, partner), as one MRMPSET1 container.
+ * Thin == store labels minus the global's, so the split needs no side file. */
+int main_mrmp_build_thin(int argc, char *argv[]);
 int main_mrmp_export(int argc, char *argv[]);
 int main_mrmp_inspect(int argc, char *argv[]);
 int main_mrmp_pack(int argc, char *argv[]);

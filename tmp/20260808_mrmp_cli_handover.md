@@ -107,13 +107,39 @@ documented in `YAME/docs/llms.txt` — read the whole entry, not the first line.
 permissive than the same string was in the shell pipeline. `0.25,0.625` is the
 honest translation of what shipped.
 
-**A residual ~9% difference is still unexplained.** On the DG-po/CA3 satellite
-the shell kept 303,714 CpGs; `--qfilter 0.25,0.625` keeps 330,244. Binning does
-not account for it. Best guess is β = 0.5 tie handling: this implementation
-excludes ties from "measured", while yame counts them present but places them in
-neither quantile group. **Resolve this before trusting the thresholds**, and
-re-tune against held-out margin rather than inheriting numbers fitted to another
-tool's binning.
+**RESOLVED 2026-08-08.** The residual was the low side's edge convention.
+`YAME/src/rowstat.c:147-151` uses OPPOSITE edges on the two sides:
+`q95_0 = (qb+1)/NB` (upper edge of the low group's bin) but
+`q05_1 = qb1/NB` (lower edge of the high group's). So the awk's tests are
+
+    q05_1 >= HI   <=>   min1 >= ceil(16*HI)/16      (0.60 -> 0.625)
+    q95_0 <= LO   <=>   max0 <  floor(16*LO)/16     (0.25 -> STRICT < 0.25)
+
+`--qfilter 0.25` tests `<=`, so it admits CpGs whose expected-0 class sits at
+beta EXACTLY 0.25. That is 26,530 CpGs, 100% of the difference, and the relation
+is one-sided (shell is a strict subset of C, no shell-only CpGs). The beta==0.5
+tie hypothesis contributes exactly zero here: with 2 classes a tie empties one
+quantile group, yame emits NA, and both filters reject. It only bites at >=3
+classes.
+
+Bit-exact equivalent, verified by membership XOR over all 21,867,837 rows:
+
+    methscope mrmp-build --qfilter 0.2499999,0.625 --max-frac-na 0
+
+General rule: `LO_C = nextbelow(floor(16*LO)/16)`, `HI_C = ceil(16*HI)/16`.
+There is no single exact value, since the shell's low test is `<` and
+`--qfilter`'s is `<=`; any LO in [0.2499, 0.25) works.
+
+The C is the more correct statistic: below 20 samples per side yame's q95/q05
+ARE max/min (the skip loop needs n >= 20), so both compute the same thing and
+yame merely snaps it to a 1/16 grid, always in the rejecting direction. The one
+thing --qfilter cannot reproduce is genuine outlier tolerance, which yame gains
+once a group holds >= 20 samples -- irrelevant for satellites, relevant if a
+global binstring puts >= 20 classes on one side.
+
+Still worth re-tuning against held-out margin rather than inheriting numbers
+fitted to another tool's binning; the 26,530 extra CpGs are by construction the
+marginal ones.
 
 **2. An uncovered class is imputed, not skipped.** `resolve_cpg` assigns it the
 majority digit, so its binstring bit is not a measurement and the q-filter must

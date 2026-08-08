@@ -15,6 +15,8 @@
 
 #include "methscope.h"
 #include "mrmp.h"
+#include "mrmp_select.h"
+#include "msfm.h"
 #include "cfile.h"
 #include "cdata.h"
 
@@ -160,7 +162,13 @@ static uint32_t phash_find(const phash_t *h, const uint64_t *key) {
 
 /* ---------------- reference sample names (from <ref>.cg.idx) ------------- */
 
-static char **read_sample_names(const char *ref, uint32_t *n_out) {
+/* Names in FILE order, and optionally each record's BGZF virtual offset (the
+ * .idx second column). Parsed here rather than through YAME's loadIndex()
+ * because that returns a khash whose iteration order is arbitrary, and file
+ * order IS the binstring's digit order -- a permuted walk would silently
+ * relabel every pattern. */
+static char **read_store_index(const char *ref, uint32_t *n_out,
+                               int64_t **off_out) {
   char idx[PATH_MAX];
   if (snprintf(idx, sizeof(idx), "%s.idx", ref) >= (int)sizeof(idx))
     die("reference path too long", ref);
@@ -168,21 +176,33 @@ static char **read_sample_names(const char *ref, uint32_t *n_out) {
   if (!f) die("cannot open reference index (expected <ref>.idx)", idx);
   size_t cap = 64, n = 0;
   char **names = xcalloc(cap, sizeof(char *), "sample names");
+  int64_t *off = xcalloc(cap, sizeof(int64_t), "sample offsets");
   char *line = NULL; size_t lcap = 0; ssize_t len;
   while ((len = getline(&line, &lcap, f)) > 0) {
     char *tab = strpbrk(line, "\t\n");
     size_t nl = tab ? (size_t)(tab - line) : (size_t)len;
     if (!nl) continue;
-    if (n == cap) { cap <<= 1; names = realloc(names, cap * sizeof(char *)); }
+    if (n == cap) {
+      cap <<= 1;
+      names = realloc(names, cap * sizeof(char *));
+      off   = realloc(off, cap * sizeof(int64_t));
+      if (!names || !off) die("out of memory", "sample index grow");
+    }
     names[n] = xcalloc(nl + 1, 1, "sample name");
     memcpy(names[n], line, nl);
+    off[n] = (tab && *tab == '\t') ? (int64_t)strtoll(tab + 1, NULL, 10) : -1;
     ++n;
   }
   free(line); fclose(f);
   if (!n) die("reference index is empty", idx);
   /* No sample cap: the key widens to ceil(n/40) words (see mrmp.h). */
   *n_out = (uint32_t)n;
+  if (off_out) *off_out = off; else free(off);
   return names;
+}
+
+static char **read_sample_names(const char *ref, uint32_t *n_out) {
+  return read_store_index(ref, n_out, NULL);
 }
 
 /* ---------------- binstring per-CpG resolution -------------------------- */
@@ -1201,6 +1221,10 @@ int main_mrmp_pool(int argc, char *argv[]) {
         "A set is a set: the inputs may come from any generator and from\n"
         "DIFFERENT stores, as long as they share a row space. Nothing here\n"
         "distinguishes a global from a satellite.\n\n"
+        "An input may be a bare MRMPIDX1 or a MRMPSET1 container, and a\n"
+        "container EXPANDS into its member sets under their own names -- so a\n"
+        "mrmp-build-thin output competes for slots as the many 2-class sets it\n"
+        "is, not as one blob. NAME then labels only the bare inputs.\n\n"
         "  --pooled-top N   total pattern budget across every input, ranked by\n"
         "                   CpG count (default 1000). Sets COMPETE for these\n"
         "                   slots rather than being reserved any, so a set that\n"
@@ -1215,24 +1239,61 @@ int main_mrmp_pool(int argc, char *argv[]) {
   }
   if (!out || argc - i < 1) die("need -o OUT and at least one NAME:IN.mrmp", NULL);
 
-  uint32_t n = (uint32_t)(argc - i);
-  char **name = xcalloc(n, sizeof(char *), "set names");
-  void **blk  = xcalloc(n, sizeof(void *), "blocks");
-  uint64_t *len = xcalloc(n, sizeof(uint64_t), "block sizes");
-  const char **path = xcalloc(n, sizeof(char *), "paths");
-  for (uint32_t k = 0; k < n; ++k) {
+  /* An input may be a bare MRMPIDX1 or a MRMPSET1 container, and a container
+   * expands into its member sets. That is what makes the four-command workflow
+   * close: mrmp-build-thin emits ONE file holding many 2-class sets, and pooling
+   * has to see them as the separate competitors they are, not as one blob.
+   * Expanded blocks keep the container's own set names -- those came from the
+   * generator that knows what each set is, and are what makes `inspect`'s pooled
+   * table readable. So the input count is not the set count. */
+  uint32_t cap = (uint32_t)(argc - i), n = 0;
+  char **name = xcalloc(cap, sizeof(char *), "set names");
+  void **blk  = xcalloc(cap, sizeof(void *), "blocks");
+  uint64_t *len = xcalloc(cap, sizeof(uint64_t), "block sizes");
+  const char **path = xcalloc(cap, sizeof(char *), "paths");
+  for (uint32_t k = 0; k < (uint32_t)(argc - i); ++k) {
     char *spec = argv[i + k], *colon = strchr(spec, ':');
     if (!colon) die("expected NAME:IN.mrmp", spec);
-    *colon = '\0'; name[k] = spec; path[k] = colon + 1;
-    if (!ms_mrmp_is_artifact(path[k])) die("not a MRMPIDX1 artifact", path[k]);
-    FILE *f = fopen(path[k], "rb");
-    if (!f) die("cannot open", path[k]);
-    if (fseek(f, 0, SEEK_END)) die("cannot size", path[k]);
-    len[k] = (uint64_t)ftell(f); rewind(f);
-    blk[k] = xcalloc(len[k], 1, "block");
-    if (fread(blk[k], 1, len[k], f) != len[k]) die("short read", path[k]);
+    *colon = '\0';
+    char *nm = spec; const char *p = colon + 1;
+    uint32_t take = 1;
+    ms_mrmpset_t *s = NULL;
+    if (ms_mrmpset_is(p)) { s = ms_mrmpset_open(p); take = s->n_sets; }
+    else if (!ms_mrmp_is_artifact(p)) die("not a MRMPIDX1 artifact or MRMPSET1 container", p);
+    if (n + take > cap) {
+      cap = n + take + 8;
+      name = realloc(name, cap * sizeof(char *));
+      blk  = realloc(blk, cap * sizeof(void *));
+      len  = realloc(len, cap * sizeof(uint64_t));
+      path = realloc(path, cap * sizeof(char *));
+      if (!name || !blk || !len || !path) die("out of memory", "pool input grow");
+    }
+    FILE *f = fopen(p, "rb");
+    if (!f) die("cannot open", p);
+    for (uint32_t j = 0; j < take; ++j) {
+      uint64_t at = 0, nb;
+      if (s) { at = s->block_off[j]; nb = s->block_bytes[j]; name[n] = s->name[j]; }
+      else {
+        if (fseek(f, 0, SEEK_END)) die("cannot size", p);
+        nb = (uint64_t)ftell(f); name[n] = nm;
+      }
+      path[n] = p; len[n] = nb;
+      blk[n] = xcalloc(nb, 1, "block");
+      if (fseek(f, (long)at, SEEK_SET) || fread(blk[n], 1, nb, f) != nb)
+        die("short read", p);
+      ++n;
+    }
     fclose(f);
+    /* the container's name STRINGS are now owned by name[], so release its
+     * arrays but not ms_mrmpset_free, which would take the strings with them */
+    if (s) { free(s->block_off); free(s->block_bytes); free(s->name); free(s); }
   }
+
+  /* Expansion can yield nothing even though inputs were given: a container
+   * with n_sets == 0. ms_mrmpset_write refuses to produce one, but a truncated
+   * or hand-made file can be one, and without this the blk[0] below reads
+   * unallocated memory and segfaults instead of saying what is wrong. */
+  if (!n) die("inputs expanded to no sets at all", NULL);
 
   /* Same row space, ENFORCED not assumed. Membership arrays are indexed by CpG
    * row, so mixing references would scramble pattern-to-CpG assignment exactly
@@ -1255,17 +1316,23 @@ int main_mrmp_pool(int argc, char *argv[]) {
      * That is what lets the cut be expressed by shrinking each block's
      * n_selected: no pattern has to be dropped from the middle, and every
      * consumer already takes min(n_selected, its own K). */
-    uint64_t cap = 0;
+    uint64_t n_all = 0;
     for (uint32_t k = 0; k < n; ++k)
-      cap += ((const mrmp_header_t *)blk[k])->n_candidates;
-    ent_t *e = xcalloc(cap ? cap : 1, sizeof(ent_t), "pooled entries");
+      n_all += ((const mrmp_header_t *)blk[k])->n_candidates;
+    ent_t *e = xcalloc(n_all ? n_all : 1, sizeof(ent_t), "pooled entries");
     uint64_t m = 0;
+    /* Counts come straight out of the in-memory block. Re-reading the file
+     * would need the block's base offset too, since an input may be one set
+     * inside a container rather than a whole file. */
     for (uint32_t k = 0; k < n; ++k) {
-      mrmp_top_t *t = ms_mrmp_top_read_at(path[k], 0, UINT32_MAX);
-      for (uint32_t r = 0; r < t->n_patterns; ++r) {
-        e[m].count = t->count[r]; e[m].set = k; ++m;
+      const mrmp_header_t *hk = (const mrmp_header_t *)blk[k];
+      const char *rec = (const char *)blk[k] + hk->patterns_offset;
+      uint64_t st = mrmp_pattern_stride(hk->n_samples);
+      uint64_t koff = (uint64_t)mrmp_key_words(hk->n_samples) * sizeof(uint64_t);
+      for (uint64_t r = 0; r < hk->n_candidates; ++r) {
+        memcpy(&e[m].count, rec + r * st + koff, sizeof(uint64_t));
+        e[m].set = k; ++m;
       }
-      ms_mrmp_top_free(t);
     }
     qsort(e, m, sizeof(ent_t), pooled_cmp);
     uint64_t take = m < pooled_top ? m : pooled_top;
@@ -1286,6 +1353,564 @@ int main_mrmp_pool(int argc, char *argv[]) {
           n, pooled_top, out);
   for (uint32_t k = 0; k < n; ++k) free(blk[k]);
   free(name); free(blk); free(len); free(path);
+  return 0;
+}
+
+/* ---------------- mrmp-build-thin --------------------------------------- */
+
+/* One 2-class satellite per (thin class, partner). A class is thin because it
+ * LACKS THE CELLS to define a pattern, not because it resembles anything, so
+ * the fix is a set small enough that its few cells can still hold an opinion.
+ *
+ * Three pieces, in order: the thin list (store labels minus the global's), the
+ * partner search (projection over reference pattern-average vectors), and one
+ * MRMPIDX1 per surviving pair. They are all here rather than in a new file
+ * because the per-pair build IS mrmp-build's resolution -- resolve_cpg, the
+ * pattern hash, rank_cmp -- over a subset of the store's records. */
+
+/* Read one record of a store by BGZF virtual offset. Random access, not a
+ * sequential scan, so a 2-class set costs two record inflates rather than a
+ * pass over all 41. */
+static cdata_t read_record_at(cfile_t *cf, int64_t voff, const char *what) {
+  if (voff < 0) die("store index carries no offset for sample", what);
+  if (bgzf_seek(cf->fh, voff, SEEK_SET) != 0) die("cannot seek store", what);
+  cdata_t c = read_cdata1(cf);
+  if (!c.n) die("store record is empty", what);
+  decompress_in_situ(&c);
+  if (c.fmt != '3') die("store must be format-3 (M/U) .cg", what);
+  return c;
+}
+
+static void img_put(char *img, uint64_t *at, const void *p, size_t n) {
+  memcpy(img + *at, p, n); *at += n;
+}
+
+typedef struct {
+  void    *img;      /* complete MRMPIDX1 image, malloc'd */
+  uint64_t bytes;
+  uint64_t n_pat;    /* patterns still holding a CpG after selection */
+  uint64_t n_kept;   /* CpGs surviving selection */
+} subset_block_t;
+
+/* Build a complete MRMPIDX1 for `ns` named classes of `store`, in memory.
+ *
+ * The binstring parameters come from the GLOBAL artifact's header rather than
+ * from flags of their own. A satellite that resolved CpGs on a different rule
+ * than the global it supplements would put two incompatible pattern definitions
+ * in one pooled feature vector, and there is no flag combination a user could
+ * pass that makes that a good idea.
+ *
+ * The pass order differs from mrmp-build. There, every cut is a property of the
+ * CpG alone, so a failing CpG is dropped before it is ever interned and the
+ * counts are post-filter by construction. The union rule is not: top-N by
+ * delta_mean is PER BINSTRING, so the binstrings must exist first. Hence
+ * build -> select -> RECOUNT. The recount is not bookkeeping: mrmp-pool ranks
+ * columns by exactly these counts, so a pattern still advertising the CpGs
+ * selection took away would win slots it cannot fill. */
+static void build_subset_block(const char *store, uint32_t ns,
+                               char *const *label, const int64_t *voff,
+                               const mrmp_header_t *gh,
+                               const ms_select_opt_t *sel,
+                               subset_block_t *out) {
+  const uint32_t mincov = gh->mincov;
+  const float beta_thr = gh->beta_threshold, max_ambig = gh->max_ambig_frac,
+              min_fold = gh->min_major_fold;
+  const uint32_t stride = (ns + 7) >> 3, nw = mrmp_key_words(ns);
+
+  /* Pass 1: the meth/ambig bit planes, over the chosen records only. */
+  uint64_t n_cpg = 0;
+  uint8_t *meth = NULL, *ambig = NULL;
+  cfile_t cf = open_cfile((char *)store);
+  for (uint32_t k = 0; k < ns; ++k) {
+    cdata_t c = read_record_at(&cf, voff[k], label[k]);
+    if (!k) {
+      n_cpg = c.n;
+      meth  = xcalloc((size_t)stride * n_cpg, 1, "meth plane");
+      ambig = xcalloc((size_t)stride * n_cpg, 1, "ambig plane");
+    } else if (c.n != n_cpg) {
+      die("store records disagree on CpG count", label[k]);
+    }
+    const uint64_t base = (uint64_t)(k >> 3) * n_cpg;
+    const uint8_t bit = (uint8_t)(1u << (k & 7));
+    for (uint64_t i = 0; i < n_cpg; ++i) {
+      uint64_t mu = f3_get_mu(&c, i);
+      if (!mu || MU2cov(mu) < mincov) { ambig[base + i] |= bit; continue; }
+      double beta = MU2beta(mu);
+      if (beta > beta_thr) meth[base + i] |= bit;
+      else if (beta == beta_thr) ambig[base + i] |= bit;   /* M==U is not a call */
+    }
+    free_cdata(&c);
+  }
+  bgzf_close(cf.fh);
+
+  /* Pass 2: resolve, intern, and remember each CpG's pattern. Kept rather than
+   * re-derived (as mrmp-build does) because selection rewrites it twice and a
+   * third resolve pass would cost more than the 4 bytes per CpG. */
+  uint64_t *pna_key = xcalloc(nw, sizeof(uint64_t), "pna key");
+  for (uint32_t s = 0; s < ns; ++s)
+    pna_key[s / MRMP_TRITS_PER_WORD] = pna_key[s / MRMP_TRITS_PER_WORD] * 3 + 2;
+  phash_t h; phash_init(&h, 1u << 12, nw);
+  uint64_t pat_cap = 1u << 12, n_pat = 0;
+  uint64_t *pkeys = xcalloc(pat_cap * nw, sizeof(uint64_t), "pattern keys");
+  uint64_t *pcount = xcalloc(pat_cap, sizeof(uint64_t), "pattern counts");
+  uint32_t *pidx = xcalloc(n_cpg, sizeof(uint32_t), "cpg -> pattern");
+  uint64_t *key = xcalloc(nw, sizeof(uint64_t), "cpg key");
+  uint64_t checksum = 1469598103934665603ULL;       /* FNV-1a offset */
+  for (uint64_t i = 0; i < n_cpg; ++i) {
+    int is_pna;
+    resolve_cpg(meth, ambig, i, ns, stride, n_cpg,
+                min_fold, max_ambig, pna_key, &is_pna, key);
+    if (is_pna) {
+      pidx[i] = MRMP_PNA_MEMBERSHIP;
+    } else {
+      if (n_pat == pat_cap) {
+        pat_cap <<= 1;
+        pkeys = realloc(pkeys, pat_cap * nw * sizeof(*pkeys));
+        pcount = realloc(pcount, pat_cap * sizeof(*pcount));
+        if (!pkeys || !pcount) die("out of memory", "pattern table grow");
+      }
+      uint32_t p = phash_intern(&h, key, pkeys, pcount, &n_pat);
+      ++pcount[p]; pidx[i] = p;
+    }
+    for (uint32_t w = 0; w < nw; ++w)
+      checksum = (checksum ^ key[w]) * 1099511628211ULL;
+  }
+  free(meth); free(ambig); free(h.keys); free(h.slot); free(key);
+
+  /* Provisional ranking, needed only so ms_mrmp_select can address a binstring
+   * by rank; the ranking that ships is recomputed below on the kept counts. */
+  uint32_t *order = xcalloc(n_pat ? n_pat : 1, sizeof(uint32_t), "rank order");
+  for (uint64_t p = 0; p < n_pat; ++p) order[p] = (uint32_t)p;
+  g_keys = pkeys; g_count = pcount; g_nw = nw;
+  qsort(order, n_pat, sizeof(uint32_t), rank_cmp);
+  uint32_t *rank_of = xcalloc(n_pat ? n_pat : 1, sizeof(uint32_t), "rank_of");
+  for (uint64_t r = 0; r < n_pat; ++r) rank_of[order[r]] = (uint32_t)r;
+
+  uint32_t *memb = xcalloc(n_cpg, sizeof(uint32_t), "membership");
+  for (uint64_t i = 0; i < n_cpg; ++i)
+    memb[i] = pidx[i] == MRMP_PNA_MEMBERSHIP ? MRMP_PNA_MEMBERSHIP
+                                             : rank_of[pidx[i]];
+  char **binstr = xcalloc(n_pat ? n_pat : 1, sizeof(char *), "binstrings");
+  for (uint64_t r = 0; r < n_pat; ++r) {
+    binstr[r] = xcalloc((size_t)ns + 1, 1, "binstring");
+    key_to_string(pkeys + (uint64_t)order[r] * nw, ns, binstr[r]);
+  }
+
+  /* n_kept is not taken here: the count that matters is the one AFTER empty
+   * patterns are dropped, which the recount below produces anyway. */
+  uint8_t *keep = ms_mrmp_select(store, ns, mincov, n_cpg, memb, n_pat,
+                                 (const char *const *)binstr, sel, NULL, voff);
+  for (uint64_t r = 0; r < n_pat; ++r) free(binstr[r]);
+  free(binstr); free(memb); free(order);
+
+  /* Recount over the survivors. A homogeneous binstring passes NEITHER leg --
+   * one of its two groups is empty, so there is no contrast to threshold -- so
+   * in a 2-class set all-0 and all-1, which between them carry nearly the whole
+   * genome, come out with zero CpGs. Dropping empty patterns is what keeps the
+   * artifact's pattern list the patterns it can actually score. */
+  uint64_t *ncount = xcalloc(n_pat ? n_pat : 1, sizeof(uint64_t), "kept counts");
+  for (uint64_t i = 0; i < n_cpg; ++i) {
+    if (pidx[i] == MRMP_PNA_MEMBERSHIP) continue;
+    if (keep && !keep[i]) { pidx[i] = MRMP_PNA_MEMBERSHIP; continue; }
+    ++ncount[pidx[i]];
+  }
+  free(keep);
+
+  uint64_t n_cand = 0;
+  uint32_t *ord2 = xcalloc(n_pat ? n_pat : 1, sizeof(uint32_t), "rank order");
+  for (uint64_t p = 0; p < n_pat; ++p)
+    if (ncount[p]) ord2[n_cand++] = (uint32_t)p;
+  if (!n_cand) die("no CpG survived selection for this set", label[0]);
+  g_keys = pkeys; g_count = ncount; g_nw = nw;
+  qsort(ord2, n_cand, sizeof(uint32_t), rank_cmp);
+  for (uint64_t p = 0; p < n_pat; ++p) rank_of[p] = MRMP_PNA_MEMBERSHIP;
+  for (uint64_t r = 0; r < n_cand; ++r) rank_of[ord2[r]] = (uint32_t)r;
+
+  uint32_t *memb2 = xcalloc(n_cpg, sizeof(uint32_t), "membership");
+  uint64_t pna_cpg = 0;
+  for (uint64_t i = 0; i < n_cpg; ++i) {
+    memb2[i] = pidx[i] == MRMP_PNA_MEMBERSHIP ? MRMP_PNA_MEMBERSHIP
+                                              : rank_of[pidx[i]];
+    if (memb2[i] == MRMP_PNA_MEMBERSHIP) ++pna_cpg;
+  }
+  free(pidx); free(rank_of); free(pcount);
+
+  /* Per-pattern binarisation midpoints (MRMP_FLAG_THRESH in mrmp.h). This is
+   * where a satellite most needs them: two close relatives can put a whole
+   * pattern above 0.5, where the fixed cut carries no information at all. */
+  double *sum = xcalloc(n_cand * ns, sizeof(double), "threshold sums");
+  uint64_t *cnt = xcalloc(n_cand * ns, sizeof(uint64_t), "threshold counts");
+  cf = open_cfile((char *)store);
+  for (uint32_t k = 0; k < ns; ++k) {
+    cdata_t c = read_record_at(&cf, voff[k], label[k]);
+    for (uint64_t i = 0; i < n_cpg; ++i) {
+      uint32_t r = memb2[i];
+      if (r == MRMP_PNA_MEMBERSHIP) continue;
+      uint64_t mu = f3_get_mu(&c, i);
+      if (!mu || MU2cov(mu) < mincov) continue;
+      sum[(uint64_t)r * ns + k] += MU2beta(mu);
+      cnt[(uint64_t)r * ns + k] += 1;
+    }
+    free_cdata(&c);
+  }
+  bgzf_close(cf.fh);
+
+  float *thr = xcalloc(n_cand, sizeof(float), "thresholds");
+  char *bs = xcalloc((size_t)ns + 1, 1, "binstring");
+  for (uint64_t r = 0; r < n_cand; ++r) {
+    key_to_string(pkeys + (uint64_t)ord2[r] * nw, ns, bs);
+    double s1 = 0, s0 = 0; uint32_t n1 = 0, n0 = 0;
+    for (uint32_t k = 0; k < ns; ++k) {
+      uint64_t c2 = cnt[(uint64_t)r * ns + k];
+      if (!c2) continue;
+      double m = sum[(uint64_t)r * ns + k] / (double)c2;
+      if (bs[k] == '1') { s1 += m; ++n1; }
+      else if (bs[k] == '0') { s0 += m; ++n0; }
+    }
+    if (!n1 || !n0) { thr[r] = (float)(0.0 / 0.0); continue; }
+    double hi = s1 / n1, lo = s0 / n0;
+    thr[r] = (hi > lo) ? (float)(0.5 * (hi + lo)) : (float)(0.0 / 0.0);
+  }
+  free(sum); free(cnt); free(bs);
+
+  /* Serialize into memory, in header order, exactly as mrmp-build lays a file
+   * out -- a block in a MRMPSET1 container is a byte-identical MRMPIDX1. */
+  mrmp_header_t hd; memset(&hd, 0, sizeof(hd));
+  memcpy(hd.magic, MRMPIDX_MAGIC, 8);
+  hd.version = MRMPIDX_VERSION; hd.n_samples = ns;
+  hd.n_selected = (uint32_t)n_cand;
+  /* the candidate policy is mrmp-build's, homogeneous included; those patterns
+   * simply end with no CpGs and are dropped by the empty-pattern rule above */
+  hd.flags = MRMP_FLAG_INCLUDE_HOMOGENEOUS | MRMP_FLAG_THRESH;
+  hd.n_cpg = n_cpg; hd.n_candidates = n_cand;
+  hd.pna_key = pna_key[0]; hd.pna_cpg = pna_cpg;
+  hd.mincov = mincov; hd.beta_threshold = beta_thr;
+  hd.max_ambig_frac = max_ambig; hd.min_major_fold = min_fold;
+  hd.content_checksum = checksum;
+
+  uint64_t off = sizeof(hd);
+  hd.refname_offset = off;    off += strlen(store) + 1;
+  hd.names_offset = off;      for (uint32_t s = 0; s < ns; ++s) off += strlen(label[s]) + 1;
+  hd.patterns_offset = off;   off += n_cand * mrmp_pattern_stride(ns);
+  hd.membership_offset = off; off += n_cpg * sizeof(uint32_t);
+  hd.thresh_offset = off;     off += n_cand * sizeof(float);
+
+  char *img = xcalloc(off, 1, "mrmp block");
+  uint64_t at = 0;
+  img_put(img, &at, &hd, sizeof(hd));
+  img_put(img, &at, store, strlen(store) + 1);
+  for (uint32_t s = 0; s < ns; ++s)
+    img_put(img, &at, label[s], strlen(label[s]) + 1);
+  for (uint64_t r = 0; r < n_cand; ++r) {
+    img_put(img, &at, pkeys + (uint64_t)ord2[r] * nw, nw * sizeof(uint64_t));
+    img_put(img, &at, &ncount[ord2[r]], sizeof(uint64_t));
+  }
+  img_put(img, &at, memb2, (size_t)n_cpg * sizeof(uint32_t));
+  img_put(img, &at, thr, (size_t)n_cand * sizeof(float));
+
+  free(pkeys); free(ncount); free(ord2); free(memb2); free(thr); free(pna_key);
+  out->img = img; out->bytes = at;
+  out->n_pat = n_cand; out->n_kept = n_cpg - pna_cpg;
+}
+
+/* Length of a record name minus the `-R<digits>` replicate suffix the sampled
+ * featurizer appends (`ASC-R1`). Matching on that key rather than on record
+ * POSITION is the one place this differs from the Python driver, which indexed
+ * the matrix by the class's line number in classes.txt -- correct only while
+ * the .msfm rows and the store records happen to be in the same order. */
+static size_t class_key_len(const char *name) {
+  size_t n = strlen(name), i = n;
+  while (i > 0 && name[i - 1] >= '0' && name[i - 1] <= '9') --i;
+  if (i < n && i >= 2 && name[i - 1] == 'R' && name[i - 2] == '-') return i - 2;
+  return n;
+}
+
+static uint32_t msfm_row_of(const ms_msfm_t *f, const char *cls) {
+  size_t n = strlen(cls);
+  for (uint32_t r = 0; r < f->header->n_records; ++r) {
+    const char *nm = f->record_names[r];
+    size_t k = class_key_len(nm);
+    if (k == n && !memcmp(nm, cls, n)) return r;   /* first replicate wins */
+  }
+  return UINT32_MAX;
+}
+
+/* Projection distance: mean |v - w| over the pattern-average vectors, on the
+ * columns both classes actually have. The u16 codes are differenced directly
+ * and scaled once at the end, which is the same number as differencing betas. */
+static double proj_dist(const ms_msfm_t *f, uint32_t ra, uint32_t rb,
+                        uint32_t K, uint32_t *n_shared) {
+  const uint32_t np = f->header->n_patterns;
+  const uint16_t *va = f->beta + (uint64_t)ra * np;
+  const uint16_t *vb = f->beta + (uint64_t)rb * np;
+  double s = 0; uint32_t m = 0;
+  for (uint32_t j = 0; j < K; ++j) {
+    if (va[j] == MSFM_NA || vb[j] == MSFM_NA) continue;
+    s += fabs((double)va[j] - (double)vb[j]);
+    ++m;
+  }
+  *n_shared = m;
+  return m ? s / (double)m / 65534.0 : 1.0 / 0.0;
+}
+
+typedef struct { double d; const char *name; uint32_t k; } cand_t;
+static int cand_cmp(const void *a, const void *b) {
+  const cand_t *x = a, *y = b;
+  if (x->d < y->d) return -1;
+  if (x->d > y->d) return 1;
+  return strcmp(x->name, y->name);          /* ties resolve by name, not by luck */
+}
+
+/* `th_<thin>_<partner>`, lowercased with '-' removed -- the names the Python
+ * driver wrote, so a rebuilt satellite is recognisable against the runs that
+ * measured these settings. */
+static char *thin_set_name(const char *t, const char *p) {
+  size_t n = strlen(t) + strlen(p) + 5;
+  char *s = xcalloc(n, 1, "set name");
+  size_t j = 0;
+  const char *src[2] = {t, p};
+  memcpy(s, "th_", 3); j = 3;
+  for (int u = 0; u < 2; ++u) {
+    if (u) s[j++] = '_';
+    for (const char *c = src[u]; *c; ++c) {
+      if (*c == '-') continue;
+      s[j++] = (*c >= 'A' && *c <= 'Z') ? (char)(*c - 'A' + 'a') : *c;
+    }
+  }
+  s[j] = '\0';
+  return s;
+}
+
+int main_mrmp_build_thin(int argc, char *argv[]) {
+  g_cmd = "mrmp-build-thin";
+  const char *pos[3] = {NULL, NULL, NULL}, *ref_msfm = NULL;
+  int npos = 0, force = 0;
+  uint32_t n_partner = 3, proj_top = 6000;
+  ms_select_opt_t sel; ms_select_defaults(&sel);
+  sel.depth_floor_frac = 1.0f;   /* satellites turn the RELATIVE floor on */
+  for (int i = 1; i < argc; ++i) {
+    const char *a = argv[i];
+    if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
+      ms_help(stderr,
+        "Usage: methscope mrmp-build-thin [options] STORE.cg GLOBAL.mrmp OUT.mrmp\n\n"
+        "  One 2-class satellite per (thin class, partner) pair, written as one\n"
+        "  MRMPSET1 container. Thin classes are derived as (store labels -\n"
+        "  GLOBAL.mrmp labels). A class is thin because it LACKS THE CELLS to\n"
+        "  define a pattern, not because it resembles anything -- no distance\n"
+        "  metric finds ANP/ASC (196th of 820 by weighted Hamming, correctly,\n"
+        "  since their confident evidence really does separate), yet 52% of\n"
+        "  held-out ANP cells were called ASC. This generator and\n"
+        "  mrmp-build-neighbor therefore find different things and neither\n"
+        "  subsumes the other.\n\n"
+        "  Binstring resolution (mincov, beta threshold, ambiguity, majority\n"
+        "  fold) is read from GLOBAL.mrmp's header rather than re-declared here:\n"
+        "  a satellite resolved on a different rule than the global it\n"
+        "  supplements would put two incompatible pattern definitions in one\n"
+        "  pooled feature vector.\n\n"
+        "  --ref-msfm FILE           (required)\n"
+        "        The reference featurized against GLOBAL.mrmp -- what\n"
+        "        `classify-featurize` writes -- supplying the pattern-average\n"
+        "        vector the partner search projects on. Required as an ARGUMENT\n"
+        "        rather than featurized internally: featurizing is a command in\n"
+        "        its own right with its own sampling, threading and pattern\n"
+        "        budget, and the partner choice must be made in the same feature\n"
+        "        space the classifier will see. Passing it keeps that visible\n"
+        "        and lets one featurization serve both. It must carry a record\n"
+        "        for EVERY class in the store, thin ones included.\n\n"
+        "  --n-partner N             (default 3)\n"
+        "        Nearest classes each thin class is given a satellite against,\n"
+        "        found by projection of reference pattern-average vectors. Each\n"
+        "        partner gets its OWN 2-class satellite; they are NOT combined\n"
+        "        into one N-class set. A joint binstring forces the thin class\n"
+        "        to oppose every neighbour at once, and that joint requirement\n"
+        "        is where its noise concentrates: held-out separation 0.228 for\n"
+        "        a 3-class set against 0.317 and 0.487 for the two pairs it\n"
+        "        replaced. Partner candidates include other THIN classes, not\n"
+        "        only deep ones -- PC loses more held-out cells to VLMC-Pia\n"
+        "        (17.1%) than to its deep partner VLMC (15.9%). A thin-thin pair\n"
+        "        is reachable from both ends and is emitted once.\n\n"
+        "  --projection-top N        (default 6000)\n"
+        "        Pattern columns of --ref-msfm the distance is taken over. The\n"
+        "        featurizer's trailing PNA column is always excluded: it is the\n"
+        "        unpatterned background, so it carries no contrast between two\n"
+        "        classes and only dilutes the mean.\n\n"
+        "  --qfilter LO,HI           (default 0.25,0.6)\n"
+        "        As mrmp-build. Forms the FLOOR leg of the selection rule.\n\n"
+        "  --qfilter-strict LO,HI    (default 0.1,0.8)\n"
+        "        Tighter gate forming the SELF-SIZING leg: every CpG passing it\n"
+        "        is kept regardless of budget, so a pair with genuinely clean\n"
+        "        positions contributes all of them. Its yield is steeply\n"
+        "        depth-dependent by design -- the same pair gave 6,453 CpGs at\n"
+        "        reference depth 7.9 and 204 at 4.54 -- which is exactly why it\n"
+        "        cannot be used alone.\n\n"
+        "  --delta-mean-top N        (default 1000)\n"
+        "        PER BINSTRING, keep the N highest by delta_mean among --qfilter\n"
+        "        passers. The floor leg: it guarantees a pattern is never\n"
+        "        starved when --qfilter-strict returns almost nothing.\n"
+        "        delta_mean (mean gap between the expected-1 and expected-0\n"
+        "        groups) rather than delta_beta (worst-case margin) because\n"
+        "        --qfilter already bounds the worst case; the two scored within\n"
+        "        0.007 of each other on held-out margin. Identical for 2\n"
+        "        classes, diverging only at 3+.\n\n"
+        "  --depth-floor-frac F      (default 1.0)\n"
+        "        Per class, require coverage of at least F times THAT CLASS'S\n"
+        "        OWN genome-wide mean depth. Relative, so one number serves\n"
+        "        classes spanning depth 5 to 112. Purely relative is too harsh\n"
+        "        when many classes must agree at once, hence the cap below.\n\n"
+        "  --depth-floor-cap N       (default 20)\n"
+        "        Cap the above at N cells: \"enough to be reliable, never more\n"
+        "        than the class can give\". At depth 20 a beta carries SE ~ 0.11,\n"
+        "        and a class at 112 gains nothing from being asked for 112.\n\n"
+        "  --force                   overwrite an existing output\n\n"
+        "  Output is a MRMPSET1 container of 2-class sets, which mrmp-pool takes\n"
+        "  directly (it expands a container into its sets). Sets are sets: a\n"
+        "  satellite here is the same object mrmp-build writes, and nothing\n"
+        "  downstream distinguishes them.\n");
+      return 0;
+    }
+    else if (!strcmp(a, "--ref-msfm") && i + 1 < argc) ref_msfm = argv[++i];
+    else if (!strcmp(a, "--n-partner") && i + 1 < argc)
+      n_partner = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--projection-top") && i + 1 < argc)
+      proj_top = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc)
+      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
+      sel.depth_floor_frac = (float)atof(argv[++i]);
+    else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
+      sel.depth_floor_cap = (uint32_t)parse_u64(argv[++i], a);
+    else if ((!strcmp(a, "--qfilter") || !strcmp(a, "--qfilter-strict"))
+             && i + 1 < argc) {
+      int strict = a[9] != '\0';
+      const char *v = argv[++i]; char *end = NULL;
+      float lo = strtof(v, &end);
+      if (!end || *end != ',') die("wants LO,HI", a);
+      float hi = strtof(end + 1, NULL);
+      if (!(lo >= 0.0f && hi <= 1.0f && lo < hi)) die("needs 0 <= LO < HI <= 1", a);
+      if (strict) { sel.strict_lo = lo; sel.strict_hi = hi; }
+      else        { sel.qfilter_lo = lo; sel.qfilter_hi = hi; }
+    }
+    else if (!strcmp(a, "--force")) force = 1;
+    else if (a[0] == '-') die("unrecognized or incomplete option", a);
+    else if (npos < 3) pos[npos++] = a;
+    else die("too many arguments", a);
+  }
+  if (npos != 3) die("need STORE.cg GLOBAL.mrmp OUT.mrmp (see -h)", NULL);
+  const char *store = pos[0], *global = pos[1], *out = pos[2];
+  if (!ref_msfm) die("--ref-msfm is required (see -h for why)", NULL);
+  if (!n_partner) die("--n-partner must be at least 1", NULL);
+  if (!force) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
+
+  uint32_t nstore = 0; int64_t *voff = NULL;
+  char **slab = read_store_index(store, &nstore, &voff);
+
+  if (ms_mrmpset_is(global))
+    die("GLOBAL must be a bare MRMPIDX1, not a MRMPSET1 container", global);
+  mrmp_reader_t gr; mrmp_open(&gr, global);
+  const mrmp_header_t gh = *gr.h;
+  const uint32_t ngl = gr.h->n_samples;
+  char **glab = xcalloc(ngl, sizeof(char *), "global labels");
+  for (uint32_t s = 0; s < ngl; ++s) {
+    size_t n = strlen(gr.names[s]) + 1;
+    glab[s] = xcalloc(n, 1, "global label");
+    memcpy(glab[s], gr.names[s], n);
+  }
+  mrmp_close(&gr);
+
+  /* Thin == in the store but not in the global. The artifact carries its own
+   * sample names, so the thin/deep split is recoverable from it and needs no
+   * side file and no depth threshold repeated here. */
+  uint8_t *is_thin = xcalloc(nstore, 1, "thin flags");
+  uint32_t n_thin = 0;
+  for (uint32_t s = 0; s < nstore; ++s) {
+    int in_g = 0;
+    for (uint32_t g = 0; g < ngl && !in_g; ++g) in_g = !strcmp(slab[s], glab[g]);
+    if (!in_g) { is_thin[s] = 1; ++n_thin; }
+  }
+  for (uint32_t g = 0; g < ngl; ++g) {
+    int in_s = 0;
+    for (uint32_t s = 0; s < nstore && !in_s; ++s) in_s = !strcmp(slab[s], glab[g]);
+    if (!in_s)
+      fprintf(stderr, "[methscope] %s: warning: global class '%s' is not in the "
+              "store -- the two were built from different references\n",
+              g_cmd, glab[g]);
+  }
+  if (!n_thin)
+    die("every store class is already in the global; no thin class to cover", global);
+
+  ms_msfm_t f; char err[256];
+  if (!ms_msfm_open(&f, ref_msfm, err, sizeof err)) die("--ref-msfm", err);
+  uint32_t np = f.header->n_patterns;
+  if (np && !strcmp(f.pattern_names[np - 1], "Pna")) --np;   /* background column */
+  const uint32_t K = proj_top < np ? proj_top : np;
+  uint32_t *row = xcalloc(nstore, sizeof(uint32_t), "msfm rows");
+  for (uint32_t s = 0; s < nstore; ++s) {
+    row[s] = msfm_row_of(&f, slab[s]);
+    if (row[s] == UINT32_MAX)
+      die("--ref-msfm has no record for store class", slab[s]);
+  }
+
+  /* Partner search, then dedup: a thin-thin pair is reachable from both ends. */
+  uint32_t cap = n_thin * n_partner, npair = 0;
+  uint32_t *pa = xcalloc(cap, sizeof(uint32_t), "pair a");
+  uint32_t *pb = xcalloc(cap, sizeof(uint32_t), "pair b");
+  double   *pd = xcalloc(cap, sizeof(double), "pair distance");
+  cand_t *cand = xcalloc(nstore, sizeof(cand_t), "partner candidates");
+  for (uint32_t s = 0; s < nstore; ++s) {
+    if (!is_thin[s]) continue;
+    uint32_t nc = 0;
+    for (uint32_t c = 0; c < nstore; ++c) {
+      if (c == s) continue;
+      uint32_t m; double d = proj_dist(&f, row[s], row[c], K, &m);
+      if (m <= 50) continue;    /* too few shared columns for a mean to mean much */
+      cand[nc].d = d; cand[nc].name = slab[c]; cand[nc].k = c; ++nc;
+    }
+    qsort(cand, nc, sizeof(cand_t), cand_cmp);
+    uint32_t take = n_partner < nc ? n_partner : nc;
+    if (!take)
+      fprintf(stderr, "[methscope] %s: warning: no partner for thin class '%s'\n",
+              g_cmd, slab[s]);
+    for (uint32_t j = 0; j < take; ++j) {
+      uint32_t b = cand[j].k, dup = 0;
+      for (uint32_t q = 0; q < npair && !dup; ++q)
+        dup = (pa[q] == s && pb[q] == b) || (pa[q] == b && pb[q] == s);
+      if (dup) continue;
+      pa[npair] = s; pb[npair] = b; pd[npair] = cand[j].d; ++npair;
+    }
+  }
+  free(cand); free(row); ms_msfm_close(&f);
+  if (!npair) die("no (thin, partner) pair survived the projection", ref_msfm);
+
+  fprintf(stderr, "[methscope] %s: %u thin of %u store classes, %u satellites\n",
+          g_cmd, n_thin, nstore, npair);
+
+  char **name = xcalloc(npair, sizeof(char *), "set names");
+  void **blk  = xcalloc(npair, sizeof(void *), "blocks");
+  uint64_t *len = xcalloc(npair, sizeof(uint64_t), "block sizes");
+  for (uint32_t q = 0; q < npair; ++q) {
+    /* members in STORE order, so a set's digit order is the store's */
+    uint32_t k0 = pa[q] < pb[q] ? pa[q] : pb[q];
+    uint32_t k1 = pa[q] < pb[q] ? pb[q] : pa[q];
+    char *lab[2] = {slab[k0], slab[k1]};
+    int64_t vo[2] = {voff[k0], voff[k1]};
+    name[q] = thin_set_name(slab[pa[q]], slab[pb[q]]);
+    fprintf(stderr, "  [%u/%u] %-24s %s + %s  projection %.5f\n",
+            q + 1, npair, name[q], slab[pa[q]], slab[pb[q]], pd[q]);
+    subset_block_t sb;
+    build_subset_block(store, 2, lab, vo, &gh, &sel, &sb);
+    blk[q] = sb.img; len[q] = sb.bytes;
+    fprintf(stderr, "      %" PRIu64 " patterns over %" PRIu64 " CpGs\n",
+            sb.n_pat, sb.n_kept);
+  }
+  ms_mrmpset_write(out, npair, (const char *const *)name,
+                   (const void *const *)blk, len);
+  fprintf(stderr, "[methscope] %s: %u sets -> %s\n", g_cmd, npair, out);
+
+  for (uint32_t q = 0; q < npair; ++q) { free(blk[q]); free(name[q]); }
+  free(name); free(blk); free(len); free(pa); free(pb); free(pd);
+  for (uint32_t s = 0; s < nstore; ++s) free(slab[s]);
+  for (uint32_t g = 0; g < ngl; ++g) free(glab[g]);
+  free(slab); free(glab); free(voff); free(is_thin);
   return 0;
 }
 

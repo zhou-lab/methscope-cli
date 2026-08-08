@@ -51,11 +51,19 @@ typedef struct {
  * `binstr[r]` is the length-ns binstring of rank r, `memb[i]` the rank of CpG i
  * (MRMP_PNA_MEMBERSHIP for PNA, which is never selected). Streams `ref` twice:
  * once for per-class mean depth (only when depth_floor_frac > 0), once for the
- * per-CpG statistics. */
+ * per-CpG statistics.
+ *
+ * `rec_off`, when non-NULL, is the BGZF virtual offset of each class's record
+ * (the second column of `<ref>.idx`), so a set over a SUBSET of a store reads
+ * only its own classes rather than the first ns records. NULL reads records
+ * 0..ns-1 in file order, which is what a whole-store set wants. The satellite
+ * builders need the subset form: writing each 2-class set out as its own .cg
+ * first would cost a full recompress per pair for data already in the store. */
 uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
                         uint64_t n_cpg, const uint32_t *memb,
                         uint64_t n_cand, const char *const *binstr,
-                        const ms_select_opt_t *opt, uint64_t *n_kept);
+                        const ms_select_opt_t *opt, uint64_t *n_kept,
+                        const int64_t *rec_off);
 
 /* Fill `opt` with the defaults the pipeline was measured at. */
 void ms_select_defaults(ms_select_opt_t *opt);

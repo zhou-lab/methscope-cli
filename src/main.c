@@ -40,6 +40,7 @@ static int usage(void) {
 
   fprintf(stderr, "\n%sMRMP construction%s %s— the feature foundation%s\n", B, R, D, R);
   CMD("mrmp-build",   "Construct the MRMP artifact from a discretized reference .cg");
+  CMD("mrmp-build-thin","One 2-class satellite per (thin class, nearest partner)");
   CMD("mrmp-export",  "Emit the runtime .cm mask (and pattern / count tables)");
   CMD("mrmp-pack",    "Combine MRMP artifacts into one multi-set container");
   CMD("mrmp-pool",    "Combine MRMP sets and cut them to a shared column budget");
@@ -116,6 +117,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   if (strcmp(argv[1], "mrmp-build")   == 0) return main_mrmp_build(argc - 1, argv + 1);
+  if (strcmp(argv[1], "mrmp-build-thin") == 0) return main_mrmp_build_thin(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-export")  == 0) return main_mrmp_export(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-pack")    == 0) return main_mrmp_pack(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-pool")    == 0) return main_mrmp_pool(argc - 1, argv + 1);
