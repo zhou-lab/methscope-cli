@@ -296,11 +296,11 @@ int main_train(int argc, char *argv[]) {
   if (data_path && !labels_path && !data_lab)
     tdie("the artifact carries no labels; pass -l", data_path);
 
-  /* "Pna" is the NA-background state (matrix sorts it last). Count it so we can
-   * exclude it from features by default. */
+  /* NA-background states -- "Pna", or "Pna.<set>" once several sets are fused,
+   * one per set. Counted so they can be excluded from features by default. */
   int n_pna = 0;
   for (int c = 0; c < m->n_patterns; ++c)
-    if (strcmp(m->pattern_names[c], "Pna") == 0) n_pna++;
+    if (ms_is_pna_name(m->pattern_names[c])) n_pna++;
   int n_nonpna = m->n_patterns - n_pna;
 
   /* Default npattern = all feature states: every non-"Pna" state, or all states

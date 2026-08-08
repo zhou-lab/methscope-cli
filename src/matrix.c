@@ -32,6 +32,10 @@ static void mdie(const char *msg, const char *arg) {
  * order(as.numeric(str_extract(name, "\\d+"))): the first run of digits as a
  * number; names without digits (e.g. "Pna") sort last. */
 static long pattern_numeric_key(const char *s) {
+  /* Checked BEFORE the digit scan: a fused background is "Pna.<set>" and a set
+   * name may carry digits ("Pna.bio_itl23"), which would otherwise be read as
+   * pattern number 23 and sorted among the real patterns. */
+  if (ms_is_pna_name(s)) return LONG_MAX;
   for (const char *p = s; *p; ++p)
     if (*p >= '0' && *p <= '9') return atol(p);
   /* Non-numeric names have no recurrence rank. The NA background "Pna" always

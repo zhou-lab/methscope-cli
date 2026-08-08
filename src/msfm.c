@@ -299,7 +299,9 @@ static void write_msfm(const char *out, const ms_matrix_t *m, char **lab) {
 static void write_msfm_raw(const char *out, const uint16_t *beta,
                            const uint32_t *levels, char *const *cell_names,
                            uint32_t n_cells, uint32_t n_reps, uint32_t ncol,
-                           char *const *lab, const uint32_t *rep_sample) {
+                           char *const *lab, const uint32_t *rep_sample,
+                           uint32_t n_sets, const uint32_t *col0,
+                           char *const *set_names) {
   uint64_t nr = (uint64_t)n_reps * n_cells;
   if (nr > UINT32_MAX) fdie("too many records", NULL);
 
@@ -325,10 +327,34 @@ static void write_msfm_raw(const char *out, const uint16_t *beta,
     }
   }
 
-  /* pattern names: P1..P(ncol-1) then Pna, the canonical column order */
-  char (*pn)[16] = xmal((size_t)ncol * 16, "pattern names");
-  for (uint32_t g = 0; g + 1 < ncol; ++g) snprintf(pn[g], 16, "P%u", g + 1);
-  snprintf(pn[ncol - 1], 16, "Pna");
+  /* Pattern names. Column layout is set-major and the LAST column of each set is
+   * that set's NA background, so each one is named "Pna.<set>" and the real
+   * patterns get a single running P1..PN across all sets.
+   *
+   * The running number is what makes the feature count equal the pooled budget:
+   * mrmp-pool's --pooled-top N buys N patterns, each set adds one background on
+   * top, and naming the backgrounds is what lets a consumer drop exactly those.
+   * Before this only the final column was called "Pna", so a 100-set fusion put
+   * 99 backgrounds into the classifier as ordinary patterns. */
+  const size_t PN = 64;
+  char (*pn)[64] = xmal((size_t)ncol * PN, "pattern names");
+  if (n_sets > 1 && col0) {
+    uint32_t p = 0;
+    for (uint32_t sIdx = 0; sIdx < n_sets; ++sIdx) {
+      uint32_t lo = col0[sIdx];
+      uint32_t hi = (sIdx + 1 < n_sets) ? col0[sIdx + 1] : ncol;
+      for (uint32_t g = lo; g + 1 < hi; ++g) snprintf(pn[g], PN, "P%u", ++p);
+      if (hi > lo) {
+        if (set_names && set_names[sIdx])
+          snprintf(pn[hi - 1], PN, "Pna.%s", set_names[sIdx]);
+        else
+          snprintf(pn[hi - 1], PN, "Pna.%u", sIdx + 1);
+      }
+    }
+  } else {
+    for (uint32_t g = 0; g + 1 < ncol; ++g) snprintf(pn[g], PN, "P%u", g + 1);
+    snprintf(pn[ncol - 1], PN, "Pna");
+  }
 
   uint64_t names_b = 0, rows_b = 0, class_b = 0;
   for (uint32_t g = 0; g < ncol; ++g) names_b += strlen(pn[g]) + 1;
@@ -621,6 +647,7 @@ int main_classify_featurize(int argc, char *argv[]) {
     else { rep_sample = xmal(4, "rep sample"); rep_sample[0] = 0; n_reps = 1; }
 
     uint16_t *beta; uint32_t *levels; char **names; uint32_t n_cells, ncol;
+    uint32_t n_sets_out = 0, *col0_out = NULL; char **set_names = NULL;
     if (n_sets == 1) {
       ms_msfm_build_sampled(query, ref, patterns, rep_sample, n_reps, binarize,
                             min_cpgs, seed, threads,
@@ -655,10 +682,26 @@ int main_classify_featurize(int argc, char *argv[]) {
       for (uint32_t s = 0; s < n_sets; ++s) fprintf(stderr, " %u", col0[s]);
       fputc('\n', stderr);
       for (uint32_t s = 1; s < n_sets; ++s) ms_mrmp_cleanup(tmps[s]);
-      free(refs); free(tmps); free(np); free(col0);
+      /* A set's name is its mask's basename, which mrmp-export writes as
+       * <set>.cm -- so the background column says WHICH set it belongs to. */
+      set_names = xmal(n_sets * sizeof(char *), "set names");
+      for (uint32_t s = 0; s < n_sets; ++s) {
+        const char *p = argv[i + 1 + s], *b = strrchr(p, '/');
+        b = b ? b + 1 : p;
+        size_t ln = strlen(b);
+        const char *dot = strrchr(b, '.');
+        if (dot && dot != b) ln = (size_t)(dot - b);
+        set_names[s] = xmal(ln + 1, "set name");
+        memcpy(set_names[s], b, ln); set_names[s][ln] = '\0';
+      }
+      n_sets_out = n_sets; col0_out = col0;
+      free(refs); free(tmps); free(np);
     }
     char **lab = labels ? read_labels(labels, (int)n_cells) : NULL;
-    write_msfm_raw(out, beta, levels, names, n_cells, n_reps, ncol, lab, rep_sample);
+    write_msfm_raw(out, beta, levels, names, n_cells, n_reps, ncol, lab,
+                   rep_sample, n_sets_out, col0_out, set_names);
+    if (set_names) { for (uint32_t s = 0; s < n_sets_out; ++s) free(set_names[s]); free(set_names); }
+    free(col0_out);
     if (lab) { for (uint32_t r = 0; r < n_cells; ++r) free(lab[r]); free(lab); }
     for (uint32_t r = 0; r < n_cells; ++r) free(names[r]);
     free(names); free(beta); free(levels); free(rep_sample);

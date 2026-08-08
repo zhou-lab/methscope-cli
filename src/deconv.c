@@ -301,7 +301,7 @@ int main_deconv(int argc, char *argv[]) {
   int    n_used  = 0;
   for (int rc = 0; rc < ref.ncol; ++rc) {
     const char *pname = ref.col_names[rc];
-    if (strcmp(pname, "Pna") == 0) continue;      /* NA background, never a signature feature */
+    if (ms_is_pna_name(pname)) continue;          /* NA background, never a signature feature */
     int mc = col_index(&mix, pname, mix.ncol);
     if (mc < 0) continue;                         /* pattern not present in the mixture */
     mix_col[n_used] = mc; ref_col[n_used] = rc; n_used++;

@@ -10,6 +10,7 @@
 #ifndef METHSCOPE_H
 #define METHSCOPE_H
 
+#include <string.h>
 #include <stdio.h>
 #include <stdint.h>
 
@@ -150,5 +151,23 @@ int main_bundle(int argc, char *argv[]);
 int main_unbundle(int argc, char *argv[]);
 
 #define METHSCOPE_VERSION "0.5"
+
+
+/* True for a per-set NA-BACKGROUND column: the CpGs a set has no pattern for.
+ *
+ * "Pna" alone is the single-set name kept for compatibility; "Pna.<set>" is what
+ * a FUSED matrix writes, one per set. Fusing used to number every column
+ * P1..P(n-1) and name only the very last one "Pna", so 99 of 100 background
+ * columns were indistinguishable from real patterns and reached the classifier
+ * as features -- --include-pna could not exclude what it could not name.
+ *
+ * A background column carries no class contrast by construction, which is the
+ * same reason homogeneous binstrings never survive the q-filter. Test with this
+ * rather than strcmp so all three consumers (train, deconv, the matrix column
+ * sort) agree, and so the digit-run sort key never mistakes "Pna.bio_itl23" for
+ * pattern number 23. */
+static inline int ms_is_pna_name(const char *n) {
+  return n && (strcmp(n, "Pna") == 0 || strncmp(n, "Pna.", 4) == 0);
+}
 
 #endif /* METHSCOPE_H */
