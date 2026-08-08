@@ -111,6 +111,9 @@ int main_mrmp_build(int argc, char *argv[]);
 int main_mrmp_export(int argc, char *argv[]);
 int main_mrmp_inspect(int argc, char *argv[]);
 int main_mrmp_pack(int argc, char *argv[]);
+/* Pool sets into one container AND cut to a shared column budget. Distinct
+ * from mrmp-pack, which concatenates without selecting. */
+int main_mrmp_pool(int argc, char *argv[]);
 int main_mrmpset_inspect(const char *path);   /* the MRMPIDX1 arm of `inspect` */
 
 /* The artifact is the build pipeline's currency: `upscale-featurize`,

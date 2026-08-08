@@ -248,6 +248,16 @@ int main_mrmp_build(int argc, char *argv[]) {
   float beta_thr = MRMP_DEF_BETA_THRESH, max_ambig = MRMP_DEF_MAX_AMBIG,
         min_fold = MRMP_DEF_MIN_FOLD;
   int force = 0;
+  /* Per-CpG selection, evaluated inline as each CpG is resolved. Every one of
+   * these is a property of the CpG alone, so none needs the binstring to be
+   * known first -- which is why they can run in the same pass and a CpG that
+   * fails never enters the pattern hash at all. Counts, and therefore ranks,
+   * are then post-filter by construction. (A per-BINSTRING rank such as
+   * --delta-mean-top cannot work this way; that lives in the satellite
+   * builders, which group by pattern first.) */
+  float qf_lo = -1.0f, qf_hi = -1.0f;   /* <0 == q-filter off */
+  float max_frac_na = 0.0f;
+  uint32_t min_cg_depth = 0;
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
@@ -263,13 +273,57 @@ int main_mrmp_build(int argc, char *argv[]) {
         "  --beta-threshold X binstring -b (default 0.5)\n"
         "  --max-ambig-frac X binstring -m (default 1.0 = off)\n"
         "  --min-major-fold X binstring -M (default 10)\n"
-        "  --force            overwrite an existing output\n");
+        "  --force            overwrite an existing output\n"
+        "\n"
+        " Per-CpG selection (off unless given). Applied as each CpG is\n"
+        " resolved, so a CpG that fails never enters the pattern table and\n"
+        " the pattern counts -- hence the ranking, hence --top downstream --\n"
+        " describe the CpGs that actually survived.\n"
+        "  --qfilter LO,HI    keep a CpG only if every MEASURED class calling\n"
+        "                     0 has beta <= LO and every one calling 1 has\n"
+        "                     beta >= HI. Both sides are required: bounding\n"
+        "                     only the low side leaves the expected-1 classes\n"
+        "                     free to sit near 0.5, where a cell of such a\n"
+        "                     class reads ambiguously and falls to the wrong\n"
+        "                     side.\n"
+        "                     EXACT betas, not quantiles. The shell pipeline\n"
+        "                     this replaces read yame `rowop -o stat`, whose\n"
+        "                     q95_0/q05_1 come off a 16-BIN histogram -- only\n"
+        "                     8 distinct values on a k/16 grid. Its tuned\n"
+        "                     0.25,0.6 therefore enforced beta >= 0.625 on the\n"
+        "                     expected-1 side, not 0.60. So 0.25,0.625 is the\n"
+        "                     honest translation of what shipped; 0.25,0.6\n"
+        "                     here is genuinely more permissive than it was\n"
+        "                     there. Re-tune against held-out margin rather\n"
+        "                     than inheriting a number fitted to a binning\n"
+        "                     artifact of another tool.\n"
+        "  --max-frac-na F    fraction of classes allowed to be UNCOVERED at a\n"
+        "                     CpG (default 0 = none). An uncovered class is\n"
+        "                     imputed the majority digit by the binstring\n"
+        "                     rule, so it is not a measurement and the\n"
+        "                     q-filter never tests it; this bounds how much\n"
+        "                     imputation is tolerated. Note --min-major-fold\n"
+        "                     already discards most such CpGs as PNA.\n"
+        "  --min-cg-depth N   minimum coverage required of EVERY measured\n"
+        "                     class. Absolute, which is safe only when thin\n"
+        "                     classes are excluded from this set; satellites\n"
+        "                     need a floor relative to each class's own mean\n");
       return 0;
     }
     else if (!strcmp(a, "--mincov") && i + 1 < argc) mincov = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--beta-threshold") && i + 1 < argc) beta_thr = (float)atof(argv[++i]);
     else if (!strcmp(a, "--max-ambig-frac") && i + 1 < argc) max_ambig = (float)atof(argv[++i]);
     else if (!strcmp(a, "--min-major-fold") && i + 1 < argc) min_fold = (float)atof(argv[++i]);
+    else if (!strcmp(a, "--qfilter") && i + 1 < argc) {
+      const char *v = argv[++i]; char *end = NULL;
+      qf_lo = strtof(v, &end);
+      if (!end || *end != ',') die("--qfilter wants LO,HI", v);
+      qf_hi = strtof(end + 1, NULL);
+      if (!(qf_lo >= 0.0f && qf_hi <= 1.0f && qf_lo < qf_hi))
+        die("--qfilter needs 0 <= LO < HI <= 1", v);
+    }
+    else if (!strcmp(a, "--max-frac-na") && i + 1 < argc) max_frac_na = (float)atof(argv[++i]);
+    else if (!strcmp(a, "--min-cg-depth") && i + 1 < argc) min_cg_depth = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--force")) force = 1;
     else if (a[0] == '-') die("unrecognized or incomplete option", a);
     else if (npos < 2) pos[npos++] = a;
@@ -290,6 +344,13 @@ int main_mrmp_build(int argc, char *argv[]) {
    * byte index (g*n_cpg + i), bit (k & 7) for sample k, group g = k>>3. */
   uint64_t n_cpg = 0;
   uint8_t *meth = NULL, *ambig = NULL;
+  /* Selection state, accumulated from MEASURED classes only. A class with no
+   * coverage is imputed the majority digit by resolve_cpg, so its binstring
+   * bit is not a measurement and must not be tested. */
+  const int sel_on = (qf_lo >= 0.0f) || min_cg_depth || (max_frac_na > 0.0f);
+  float *sel_max0 = NULL, *sel_min1 = NULL;
+  uint16_t *sel_cov = NULL;
+  uint8_t *sel_pres = NULL;
   cfile_t cf = open_cfile((char *)ref);
   uint32_t k = 0;
   for (;; ++k) {
@@ -301,6 +362,15 @@ int main_mrmp_build(int argc, char *argv[]) {
       n_cpg = c.n;
       meth  = xcalloc((size_t)stride * n_cpg, 1, "meth plane");
       ambig = xcalloc((size_t)stride * n_cpg, 1, "ambig plane");
+      if (sel_on) {
+        sel_max0 = xcalloc(n_cpg, sizeof(float), "sel max0");
+        sel_min1 = xcalloc(n_cpg, sizeof(float), "sel min1");
+        sel_cov  = xcalloc(n_cpg, sizeof(uint16_t), "sel min coverage");
+        sel_pres = xcalloc(n_cpg, 1, "sel n present");
+        for (uint64_t i = 0; i < n_cpg; ++i) {
+          sel_max0[i] = -1.0f; sel_min1[i] = 2.0f; sel_cov[i] = 0xFFFF;
+        }
+      }
     } else if (c.n != n_cpg) {
       die("reference samples disagree on CpG count", ref);
     }
@@ -315,6 +385,13 @@ int main_mrmp_build(int argc, char *argv[]) {
         if (beta > beta_thr) meth[base + i] |= bit;
         else if (beta == beta_thr) ambig[base + i] |= bit;
         /* else confident unmethylated: leave both clear */
+        if (sel_on && beta != beta_thr) {          /* a tie is not a call */
+          uint64_t cov = MU2cov(mu);
+          ++sel_pres[i];
+          if (cov < sel_cov[i]) sel_cov[i] = (uint16_t)(cov > 0xFFFF ? 0xFFFF : cov);
+          if (beta > beta_thr) { if ((float)beta < sel_min1[i]) sel_min1[i] = (float)beta; }
+          else                 { if ((float)beta > sel_max0[i]) sel_max0[i] = (float)beta; }
+        }
       }
     }
     free_cdata(&c);
@@ -340,10 +417,29 @@ int main_mrmp_build(int argc, char *argv[]) {
   uint64_t pna_cpg = 0, checksum = 1469598103934665603ULL;  /* FNV-1a offset */
   uint64_t *key = xcalloc(nw, sizeof(uint64_t), "cpg key");
 
+  /* keep[i]: this CpG survived selection and was interned. Recorded rather
+   * than recomputed, so the membership pass below cannot disagree with what
+   * was actually counted -- a mismatch there would look up a pattern that was
+   * never interned. */
+  uint8_t *keep = sel_on ? xcalloc(n_cpg, 1, "selection keep") : NULL;
+  const uint32_t na_allow = (uint32_t)(max_frac_na * (float)ns);
+  uint64_t n_filtered = 0;
   for (uint64_t i = 0; i < n_cpg; ++i) {
     int is_pna;
     resolve_cpg(meth, ambig, i, ns, stride, n_cpg,
                 min_fold, max_ambig, pna_key, &is_pna, key);
+    if (!is_pna && sel_on) {
+      uint32_t nmeas = sel_pres[i];
+      int ok = ((uint32_t)(ns - nmeas) <= na_allow)
+            && (!min_cg_depth || (nmeas && sel_cov[i] >= min_cg_depth));
+      /* both sides must be populated: a CpG with no expected-0 or no
+       * expected-1 measured class carries no contrast to threshold */
+      if (ok && qf_lo >= 0.0f)
+        ok = (sel_max0[i] >= 0.0f) && (sel_min1[i] <= 1.0f)
+          && (sel_max0[i] <= qf_lo) && (sel_min1[i] >= qf_hi);
+      if (!ok) { is_pna = 1; ++n_filtered; }
+      else keep[i] = 1;
+    }
     if (is_pna) {
       ++pna_cpg;
     } else {
@@ -411,6 +507,7 @@ int main_mrmp_build(int argc, char *argv[]) {
    * twice would double the resolve_cpg work. */
   uint32_t *memb = xcalloc(n_cpg, sizeof(uint32_t), "membership");
   for (uint64_t i = 0; i < n_cpg; ++i) {
+    if (keep && !keep[i]) { memb[i] = MRMP_PNA_MEMBERSHIP; continue; }
     int is_pna;
     resolve_cpg(meth, ambig, i, ns, stride, n_cpg,
                 min_fold, max_ambig, pna_key, &is_pna, key);
@@ -480,6 +577,12 @@ int main_mrmp_build(int argc, char *argv[]) {
   }
   free(memb);
   free(meth); free(ambig);
+  free(keep); free(sel_max0); free(sel_min1); free(sel_cov); free(sel_pres);
+  if (sel_on)
+    fprintf(stderr, "  select: %" PRIu64 " CpGs dropped by --qfilter/"
+            "--min-cg-depth/--max-frac-na (%.2f%% of non-PNA candidates)\n",
+            n_filtered, 100.0 * (double)n_filtered /
+            (double)(n_filtered + n_cpg - pna_cpg ? n_filtered + n_cpg - pna_cpg : 1));
   if (fclose(fp)) die("error closing output", out);
 
   fprintf(stderr,
@@ -1064,6 +1167,125 @@ int main_mrmp_pack(int argc, char *argv[]) {
   fprintf(stderr, "[methscope] mrmp-pack: %u sets -> %s\n", n, out);
   for (uint32_t k = 0; k < n; ++k) free(blk[k]);
   free(name); free(blk); free(len);
+  return 0;
+}
+
+/* One pooled candidate: which set it came from and how many CpGs carry it.
+ * File scope, with a plain comparator -- a nested function would be a GCC
+ * extension and would force an executable stack for the trampoline. */
+typedef struct { uint64_t count; uint32_t set; } ent_t;
+static int pooled_cmp(const void *a, const void *b) {
+  const ent_t *x = a, *y = b;
+  if (x->count > y->count) return -1;
+  if (x->count < y->count) return 1;
+  return (x->set < y->set) ? -1 : (x->set > y->set);
+}
+
+int main_mrmp_pool(int argc, char *argv[]) {
+  g_cmd = "mrmp-pool";
+  const char *out = NULL;
+  uint32_t pooled_top = 1000;
+  int i = 1;
+  for (; i < argc; ++i) {
+    if (!strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
+    else if (!strcmp(argv[i], "--pooled-top") && i + 1 < argc)
+      pooled_top = (uint32_t)parse_u64(argv[++i], "--pooled-top");
+    else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+      ms_help(stderr,
+        "Usage: methscope mrmp-pool [options] -o OUT.mrmpset NAME:IN.mrmp ...\n\n"
+        "Pool several MRMP sets into one MRMPSET1 container and cut them to a\n"
+        "shared column budget. Needs no store and no reference -- pattern CpG\n"
+        "counts are already in each artifact -- so re-pooling at a different\n"
+        "budget costs seconds. Distinct from mrmp-pack, which concatenates\n"
+        "without selecting.\n\n"
+        "A set is a set: the inputs may come from any generator and from\n"
+        "DIFFERENT stores, as long as they share a row space. Nothing here\n"
+        "distinguishes a global from a satellite.\n\n"
+        "  --pooled-top N   total pattern budget across every input, ranked by\n"
+        "                   CpG count (default 1000). Sets COMPETE for these\n"
+        "                   slots rather than being reserved any, so a set that\n"
+        "                   cannot field well-covered patterns loses -- the right\n"
+        "                   verdict, since a pattern too thin to rank is too thin\n"
+        "                   to trust. 0 disables the cut (same as mrmp-pack).\n"
+        "  -o OUT           output container\n");
+      return 0;
+    }
+    else if (argv[i][0] == '-') die("unrecognized option", argv[i]);
+    else break;
+  }
+  if (!out || argc - i < 1) die("need -o OUT and at least one NAME:IN.mrmp", NULL);
+
+  uint32_t n = (uint32_t)(argc - i);
+  char **name = xcalloc(n, sizeof(char *), "set names");
+  void **blk  = xcalloc(n, sizeof(void *), "blocks");
+  uint64_t *len = xcalloc(n, sizeof(uint64_t), "block sizes");
+  const char **path = xcalloc(n, sizeof(char *), "paths");
+  for (uint32_t k = 0; k < n; ++k) {
+    char *spec = argv[i + k], *colon = strchr(spec, ':');
+    if (!colon) die("expected NAME:IN.mrmp", spec);
+    *colon = '\0'; name[k] = spec; path[k] = colon + 1;
+    if (!ms_mrmp_is_artifact(path[k])) die("not a MRMPIDX1 artifact", path[k]);
+    FILE *f = fopen(path[k], "rb");
+    if (!f) die("cannot open", path[k]);
+    if (fseek(f, 0, SEEK_END)) die("cannot size", path[k]);
+    len[k] = (uint64_t)ftell(f); rewind(f);
+    blk[k] = xcalloc(len[k], 1, "block");
+    if (fread(blk[k], 1, len[k], f) != len[k]) die("short read", path[k]);
+    fclose(f);
+  }
+
+  /* Same row space, ENFORCED not assumed. Membership arrays are indexed by CpG
+   * row, so mixing references would scramble pattern-to-CpG assignment exactly
+   * the way a hand-concatenated .cg scrambles sample-to-data. n_cpg is in the
+   * header, so the check is free. */
+  const mrmp_header_t *h0 = (const mrmp_header_t *)blk[0];
+  for (uint32_t k = 1; k < n; ++k) {
+    const mrmp_header_t *hk = (const mrmp_header_t *)blk[k];
+    if (hk->n_cpg != h0->n_cpg) {
+      fprintf(stderr, "[methscope] mrmp-pool: %s has %" PRIu64 " CpGs but %s "
+              "has %" PRIu64 " -- different row spaces cannot be pooled\n",
+              path[k], hk->n_cpg, path[0], h0->n_cpg);
+      exit(1);
+    }
+  }
+
+  if (pooled_top) {
+    /* Both the within-set ranking and the pooled ranking are by CpG count
+     * descending, so a set's pooled winners are a PREFIX of its own ranking.
+     * That is what lets the cut be expressed by shrinking each block's
+     * n_selected: no pattern has to be dropped from the middle, and every
+     * consumer already takes min(n_selected, its own K). */
+    uint64_t cap = 0;
+    for (uint32_t k = 0; k < n; ++k)
+      cap += ((const mrmp_header_t *)blk[k])->n_candidates;
+    ent_t *e = xcalloc(cap ? cap : 1, sizeof(ent_t), "pooled entries");
+    uint64_t m = 0;
+    for (uint32_t k = 0; k < n; ++k) {
+      mrmp_top_t *t = ms_mrmp_top_read_at(path[k], 0, UINT32_MAX);
+      for (uint32_t r = 0; r < t->n_patterns; ++r) {
+        e[m].count = t->count[r]; e[m].set = k; ++m;
+      }
+      ms_mrmp_top_free(t);
+    }
+    qsort(e, m, sizeof(ent_t), pooled_cmp);
+    uint64_t take = m < pooled_top ? m : pooled_top;
+    uint32_t *won = xcalloc(n, sizeof(uint32_t), "per-set winners");
+    for (uint64_t j = 0; j < take; ++j) ++won[e[j].set];
+    for (uint32_t k = 0; k < n; ++k) {
+      mrmp_header_t *hk = (mrmp_header_t *)blk[k];
+      fprintf(stderr, "  %-22s %6u of %" PRIu64 " patterns keep a column\n",
+              name[k], won[k], hk->n_candidates);
+      hk->n_selected = won[k];
+    }
+    free(e); free(won);
+  }
+
+  ms_mrmpset_write(out, n, (const char *const *)name,
+                   (const void *const *)blk, len);
+  fprintf(stderr, "[methscope] mrmp-pool: %u sets, budget %u -> %s\n",
+          n, pooled_top, out);
+  for (uint32_t k = 0; k < n; ++k) free(blk[k]);
+  free(name); free(blk); free(len); free(path);
   return 0;
 }
 
