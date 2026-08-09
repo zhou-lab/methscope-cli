@@ -130,7 +130,7 @@ void ms_msfm_report(const char *path);
 void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t patterns,
                            const uint32_t *rep_sample, uint32_t n_reps,
                            int binarize, uint32_t min_cpgs,
-                           uint64_t seed, unsigned threads,
+                           uint64_t seed, unsigned threads, int binarize_feat,
                            uint16_t **beta_out, uint32_t **levels_out,
                            char ***names_out, uint32_t *n_cells_out,
                            uint32_t *ncol_out);
@@ -152,7 +152,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
                            const uint32_t *patterns, uint32_t n_sets,
                            const uint32_t *rep_sample, uint32_t n_reps,
                            int binarize, uint32_t min_cpgs,
-                           uint64_t seed, unsigned threads,
+                           uint64_t seed, unsigned threads, int binarize_feat,
                            uint16_t **beta_out, uint32_t **levels_out,
                            char ***names_out, uint32_t *n_cells_out,
                            uint32_t *ncol_out, uint32_t *set_col0_out);

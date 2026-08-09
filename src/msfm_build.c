@@ -110,6 +110,23 @@ typedef struct {
   const uint32_t *cpg_off;     /* n_cpg + 1 */
   const uint16_t *cpg_col;     /* global output column per membership */
   const uint32_t *pna_col;     /* n_sets: each set's background column */
+  /* Per-column binarisation cut, or NULL to leave betas continuous.
+   *
+   * A pattern's beta is thresholded against ITS OWN midpoint -- the point
+   * halfway between the mean reference beta of the classes the pattern calls 1
+   * and of those it calls 0 -- not against a flat 0.5. Inside a satellite the
+   * two member classes are close relatives and a pattern can sit entirely above
+   * 0.5, where 0.5 separates nothing. Binarising here is what makes a feature
+   * mean "this cell is on the methylated side of this contrast" rather than
+   * "this cell reads 0.918", which is the form that survives a global shift in
+   * methylation -- mitotic hypomethylation moves every beta, and a cut defined
+   * relative to the pattern's own two groups moves with it.
+   *
+   * COL_CONTINUOUS leaves a column alone (the per-set PNA background, which is
+   * not a contrast); NaN marks a pattern whose groups are not both populated,
+   * and those become MSFM_NA. */
+  const float *col_thresh;
+#define COL_CONTINUOUS (-1.0f)     /* leave this column as a fraction */
   const uint32_t *set_col0;    /* n_sets: first pattern column of each set */
   uint32_t        n_sets;
   uint64_t        n_cpg;
@@ -226,8 +243,16 @@ static void *worker(void *arg) {
        * i.e. rest on one or two measurements. Dropping them needs no format
        * change: every reader already treats MSFM_NA as unobserved. */
       TICK();
-      for (uint32_t g = 0; g < J->ncol; ++g)
-        out[g] = cnt[g] >= J->min_cpgs ? msfm_encode(sum[g] / cnt[g]) : MSFM_NA;
+      for (uint32_t g = 0; g < J->ncol; ++g) {
+        if (cnt[g] < J->min_cpgs) { out[g] = MSFM_NA; continue; }
+        double b = sum[g] / (double)cnt[g];
+        if (J->col_thresh) {
+          float t = J->col_thresh[g];
+          if (t != t) { out[g] = MSFM_NA; continue; }   /* unusable pattern */
+          if (t >= 0.0f) b = (b > (double)t) ? 1.0 : 0.0;
+        }
+        out[g] = msfm_encode(b);
+      }
       J->levels[row] = want;
       TOCK(t_emit);
     }
@@ -276,7 +301,9 @@ ms_matrix_t *ms_matrix_build_threaded(const char *query, const char *mrmp,
                                       uint32_t **levels_out) {
   uint32_t one = 0;                       /* one replicate, native coverage */
   uint16_t *beta; uint32_t *levels; char **names; uint32_t n_cells, ncol;
-  ms_msfm_build_sampled(query, mrmp, patterns, &one, 1, 0, 1, 1, threads,
+  /* deconv's reference matrix wants fractions, not calls: NNLS solves for
+   * proportions against continuous signatures. */
+  ms_msfm_build_sampled(query, mrmp, patterns, &one, 1, 0, 1, 1, threads, 0,
                         &beta, &levels, &names, &n_cells, &ncol);
 
   ms_matrix_t *m = bmal(sizeof(*m), "matrix");
@@ -305,14 +332,15 @@ ms_matrix_t *ms_matrix_build_threaded(const char *query, const char *mrmp,
 void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t patterns,
                            const uint32_t *rep_sample, uint32_t n_reps,
                            int binarize, uint32_t min_cpgs,
-                           uint64_t seed, unsigned threads,
+                           uint64_t seed, unsigned threads, int binarize_feat,
                            uint16_t **beta_out, uint32_t **levels_out,
                            char ***names_out, uint32_t *n_cells_out,
                            uint32_t *ncol_out) {
   const char *one[1] = {mrmp};
   uint32_t np[1] = {patterns};
   ms_msfm_build_sampled_multi(query, one, NULL, NULL, np, 1, rep_sample, n_reps, binarize,
-                              min_cpgs, seed, threads, beta_out, levels_out,
+                              min_cpgs, seed, threads, binarize_feat,
+                              beta_out, levels_out,
                               names_out, n_cells_out, ncol_out, NULL);
 }
 
@@ -325,7 +353,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
                            const uint32_t *patterns_in, uint32_t n_sets,
                            const uint32_t *rep_sample, uint32_t n_reps,
                            int binarize, uint32_t min_cpgs,
-                           uint64_t seed, unsigned threads,
+                           uint64_t seed, unsigned threads, int binarize_feat,
                            uint16_t **beta_out, uint32_t **levels_out,
                            char ***names_out, uint32_t *n_cells_out,
                            uint32_t *ncol_out, uint32_t *set_col0_out) {
@@ -508,12 +536,39 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
           "over %" PRIu64 " CpGs (%.2f%% carry any)\n", acc, n_cpg,
           100.0 * (double)acc / (double)n_cpg);
 
+  /* Per-column cut. 0.5 by default: it is an ABSOLUTE call ("this cell is
+   * methylated here"), so it means the same thing on a cohort this reference
+   * never saw. The per-pattern midpoint (--thresh-pattern) is fitted to THIS
+   * reference's two groups, which separates a close pair better but travels
+   * worse -- and travelling is the point when a global shift in methylation,
+   * mitotic or otherwise, moves every beta at once. Background columns stay
+   * continuous; they are not a contrast. */
+  float *col_thresh = NULL;
+  if (binarize_feat) {
+    col_thresh = bmal((size_t)ncol * sizeof(float), "column cuts");
+    for (uint32_t g = 0; g < ncol; ++g) col_thresh[g] = 0.5f;
+    for (uint32_t si = 0; si < n_sets; ++si) col_thresh[pna_col[si]] = COL_CONTINUOUS;
+    if (binarize_feat == 2) {                 /* --thresh-pattern */
+      uint32_t got = 0;
+      for (uint32_t si = 0; si < n_sets; ++si) {
+        uint32_t np_s = pna_col[si] - set_col0[si];
+        if (ms_mrmp_is_artifact(mrmps[si]))
+          got += ms_mrmp_thresholds_at(mrmps[si], mrmp_base ? mrmp_base[si] : 0,
+                                       mrmp_len ? mrmp_len[si] : 0, np_s,
+                                       col_thresh + set_col0[si]);
+      }
+      if (!got) fprintf(stderr, "[methscope] classify-featurize: no per-pattern "
+                        "thresholds in the input; falling back to 0.5\n");
+    }
+  }
+
   uint64_t n_rows = (uint64_t)n_reps * n_cells;
   uint16_t *beta = bmal(n_rows * ncol * sizeof(uint16_t), "beta matrix");
   uint32_t *levels = bmal(n_rows * sizeof(uint32_t), "levels");
 
   job_t J = {0};
   J.query = query; J.n_cells = n_cells; J.n_cpg = n_cpg;
+  J.col_thresh = col_thresh;
   J.cpg_off = cpg_off; J.cpg_col = cpg_col;
   J.pna_col = pna_col; J.set_col0 = set_col0;
   J.n_sets = n_sets;
@@ -543,7 +598,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   pthread_mutex_destroy(&J.lock);
 
   free((void *)J.offset); free(tid);
-  free(cpg_off); free(cpg_col); free(pna_col);
+  free(cpg_off); free(cpg_col); free(pna_col); free(col_thresh);
   if (set_col0_out) memcpy(set_col0_out, set_col0, n_sets * sizeof(uint32_t));
   free(set_col0);
   *beta_out = beta; *levels_out = levels; *names_out = names;

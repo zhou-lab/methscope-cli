@@ -1539,6 +1539,18 @@ void ms_mrmp_group_map_at(const char *artifact, uint64_t base, uint16_t *group,
   mrmp_close(&r);
 }
 
+uint32_t ms_mrmp_thresholds_at(const char *path, uint64_t base, uint64_t blk_bytes,
+                               uint32_t n_want, float *out) {
+  mrmp_reader_t r; mrmp_open_at(&r, path, base, blk_bytes);
+  uint32_t n = 0;
+  if (r.h->flags & MRMP_FLAG_THRESH) {
+    n = r.h->n_candidates < n_want ? (uint32_t)r.h->n_candidates : n_want;
+    memcpy(out, r.blk + r.h->thresh_offset, (size_t)n * sizeof(float));
+  }
+  mrmp_close(&r);
+  return n;
+}
+
 void ms_mrmp_membership_runs(const char *path, uint64_t base, uint64_t blk_bytes,
                              ms_mrmp_run_cb cb, void *ctx) {
   mrmp_reader_t r; mrmp_open_at(&r, path, base, blk_bytes);

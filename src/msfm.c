@@ -544,6 +544,20 @@ static int usage(void) {
     "  --patterns N   Feature patterns P1..PN. Default: every non-Pna mask state.\n"
     "  -b, --binarize Draw one read per sampled CpG, so the call is 0/1 not a\n"
     "                 fraction -- what a real sparse methylome delivers.\n"
+    "  --continuous-features\n"
+    "                 Emit each pattern's mean beta instead of a call. By DEFAULT\n"
+    "                 a pattern beta is cut at 0.5, so a feature says \"this cell\n"
+    "                 is methylated across this pattern\" rather than \"this cell\n"
+    "                 reads 0.918\". The call is absolute, so it means the same\n"
+    "                 thing on a cohort this reference never saw -- which a raw\n"
+    "                 beta does not once a global shift, mitotic or otherwise,\n"
+    "                 moves every value at once. Background columns stay\n"
+    "                 continuous either way; they are not a contrast.\n"
+    "  --thresh-pattern\n"
+    "                 Cut at each pattern's OWN midpoint (stored in the .mrmp)\n"
+    "                 rather than 0.5. Separates a close pair better, since\n"
+    "                 inside a satellite both classes can sit above 0.5 -- but it\n"
+    "                 is fitted to this reference and travels worse.\n"
     "  --seed S       Sampling seed (default 1). The draw is a pure function of it\n"
     "                 and is NOT affected by --threads.\n"
     "  --threads T    Worker threads (default 1). Cells are partitioned across\n"
@@ -671,6 +685,8 @@ int main_classify_featurize(int argc, char *argv[]) {
   uint64_t seed = 1;
   unsigned threads = 1;
   int binarize = 0, legacy = 0;
+  /* 1 = cut at 0.5 (default), 2 = per-pattern midpoints, 0 = leave continuous */
+  int binarize_feat = 1;
   int merge = 0, i = 1;
   uint32_t min_cpgs = 0;   /* --counts N: below N measured CpGs -> NA */
   for (; i < argc; ++i) {
@@ -684,6 +700,8 @@ int main_classify_featurize(int argc, char *argv[]) {
     else if (!strcmp(argv[i], "-b") || !strcmp(argv[i], "--binarize")) binarize = 1;
     else if (!strcmp(argv[i], "--counts") && i + 1 < argc)
       min_cpgs = (uint32_t)strtoul(argv[++i], NULL, 10);
+    else if (!strcmp(argv[i], "--continuous-features")) binarize_feat = 0;
+    else if (!strcmp(argv[i], "--thresh-pattern")) binarize_feat = 2;
     else if (!strcmp(argv[i], "--legacy-summarize")) legacy = 1;
     else if (!strcmp(argv[i], "--merge")) merge = 1;
     else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(); return 0; }
@@ -731,7 +749,7 @@ int main_classify_featurize(int argc, char *argv[]) {
     uint32_t n_sets_out = 0, *col0_out = NULL; char **set_names = NULL;
     if (n_sets == 1) {
       ms_msfm_build_sampled(query, ref, patterns, rep_sample, n_reps, binarize,
-                            min_cpgs, seed, threads,
+                            min_cpgs, seed, threads, binarize_feat,
                             &beta, &levels, &names, &n_cells, &ncol);
     } else {
       /* Several MRMP sets in ONE pass over the query. Each cell is inflated
@@ -752,7 +770,7 @@ int main_classify_featurize(int argc, char *argv[]) {
       else { np[0] = patterns; for (uint32_t s = 1; s < n_sets; ++s) np[s] = 0; }
       uint32_t *col0 = xmal(n_sets * sizeof(uint32_t), "set offsets");
       ms_msfm_build_sampled_multi(query, refs, mbase, mlen, np, n_sets, rep_sample, n_reps,
-                                  binarize, min_cpgs, seed, threads,
+                                  binarize, min_cpgs, seed, threads, binarize_feat,
                                   &beta, &levels, &names, &n_cells, &ncol, col0);
       fprintf(stderr, "[methscope] classify-featurize: %u sets fused, "
               "%u columns; set starts:", n_sets, ncol);

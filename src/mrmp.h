@@ -37,18 +37,19 @@
 
 /* Per-pattern binarisation midpoints are present at thresh_offset.
  *
- * The threshold belongs with the patterns, not with the featurizer. It is the
- * midpoint between the mean reference beta of the classes a pattern calls 1 and
- * of those it calls 0, so only mrmp-build -- which has the reference open -- can
- * compute it, and any later recomputation risks disagreeing with the patterns it
- * is applied to. Storing it here lets it travel .mrmp -> .msfm -> .clfx, so a
- * shipped model binarises a new query exactly as training did.
- *
- * It must not be 0.5: inside a satellite the member classes are close
- * relatives, and a pattern can sit entirely above 0.5 where that cut carries no
- * information at all. NaN marks a pattern whose two groups are not both
+ * Each is the midpoint between the mean reference beta of the classes a pattern
+ * calls 1 and of those it calls 0, so only mrmp-build -- which has the reference
+ * open -- can compute it. NaN marks a pattern whose two groups are not both
  * populated, or whose reference puts the expected-0 group above the expected-1
- * group; such a pattern is unusable and consumers drop it. */
+ * group; such a pattern is unusable and consumers drop it.
+ *
+ * NOT the default cut. classify-featurize binarises pattern betas at a flat 0.5
+ * unless asked for these with --thresh-pattern. 0.5 is an absolute call, so it
+ * means the same thing on a cohort this reference never saw; a midpoint fitted
+ * to this reference's two groups separates a close pair better but travels
+ * worse, and travelling is the point once a global shift in methylation moves
+ * every beta at once. Kept stored so the comparison can be made, and because
+ * the violation framework scores against them directly. */
 #define MRMP_FLAG_THRESH 2u
 
 /* The membership section is RLE-compressed (a YAME format-2 payload) and is
@@ -188,6 +189,13 @@ void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
 void ms_mrmp_write_mask_at(const char *artifact, uint64_t base,
                            uint64_t blk_bytes, const char *out_cm,
                            const char *pna_label, uint32_t top_k);
+
+/* Per-pattern binarisation midpoints for a block, in rank order. Fills up to
+ * n_want and returns how many were written; 0 if the artifact predates
+ * MRMP_FLAG_THRESH. A NaN entry marks a pattern whose two groups are not both
+ * populated -- unusable, and consumers drop it rather than guess. */
+uint32_t ms_mrmp_thresholds_at(const char *path, uint64_t base, uint64_t blk_bytes,
+                               uint32_t n_want, float *out);
 
 /* Walk the membership as RUNS rather than expanding it.
  *
