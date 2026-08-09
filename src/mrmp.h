@@ -189,6 +189,22 @@ void ms_mrmp_write_mask_at(const char *artifact, uint64_t base,
                            uint64_t blk_bytes, const char *out_cm,
                            const char *pna_label, uint32_t top_k);
 
+/* Walk the membership as RUNS rather than expanding it.
+ *
+ * The section is run-length coded and overwhelmingly PNA -- a 34-class global is
+ * 20,015 runs over 21.8M CpGs, and a satellite fewer still -- so a consumer that
+ * only cares where patterns ARE can skip the background in a few dozen steps
+ * instead of touching every genomic position. That is the difference between
+ * setup costing O(n_sets * n_cpg) and O(total memberships): 2.18 billion visits
+ * against 865 thousand on a 100-set artifact.
+ *
+ * `cb` is called once per run, in position order, including PNA runs (rank ==
+ * MRMP_PNA_MEMBERSHIP) so a caller can track position without arithmetic. */
+typedef void (*ms_mrmp_run_cb)(void *ctx, uint64_t start, uint64_t len,
+                               uint32_t rank);
+void ms_mrmp_membership_runs(const char *path, uint64_t base, uint64_t blk_bytes,
+                             ms_mrmp_run_cb cb, void *ctx);
+
 /* Fill group[0..n_cpg-1] with each CpG's 1-based selected-pattern index, or 0
  * for PNA and ranks at or beyond `patterns`. Fatal on error or size mismatch. */
 void ms_mrmp_group_map(const char *artifact, uint16_t *group, uint64_t n_cpg,

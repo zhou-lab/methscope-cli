@@ -801,6 +801,22 @@ static uint8_t *memb_compress(const uint32_t *memb, uint64_t n_cpg,
   return sec;                                        /* caller owns */
 }
 
+/* The RLE payload of a membership section, inflated but NOT expanded: the fmt2
+ * key table, then a value-width byte, then (value, uint16 run length) records.
+ * Caller frees. */
+static uint8_t *memb_rle_payload(const uint8_t *buf, uint64_t nbytes, int bgzf,
+                                 uint64_t *out_n, const char *what) {
+  if (!bgzf) { uint8_t *p = xcalloc(nbytes ? nbytes : 1, 1, "rle"); 
+               memcpy(p, buf, nbytes); *out_n = nbytes; return p; }
+  if (nbytes < 8) die("membership section is truncated", what);
+  uint64_t rle_n = 0;
+  memcpy(&rle_n, buf, 8);
+  uint8_t *p = xcalloc(rle_n ? rle_n : 1, 1, "rle");
+  bgzf_inflate_buf(buf + 8, nbytes - 8, p, rle_n, what);
+  *out_n = rle_n;
+  return p;
+}
+
 static uint32_t *memb_decompress(const uint8_t *buf, uint64_t nbytes,
                                  uint64_t n_cpg, uint64_t n_cand, int bgzf,
                                  const char *what) {
@@ -1520,6 +1536,50 @@ void ms_mrmp_group_map_at(const char *artifact, uint64_t base, uint16_t *group,
     group[i] = (rank != MRMP_PNA_MEMBERSHIP && rank < K)
              ? (uint16_t)(rank + 1) : 0;
   }
+  mrmp_close(&r);
+}
+
+void ms_mrmp_membership_runs(const char *path, uint64_t base, uint64_t blk_bytes,
+                             ms_mrmp_run_cb cb, void *ctx) {
+  mrmp_reader_t r; mrmp_open_at(&r, path, base, blk_bytes);
+  const mrmp_header_t *h = r.h;
+  if (!(h->flags & MRMP_FLAG_MEMB_RLE)) {
+    /* Pre-RLE artifact: synthesize runs so callers need only one path. */
+    const uint32_t *m = (const uint32_t *)(const void *)(r.blk + h->membership_offset);
+    uint64_t i = 0;
+    while (i < h->n_cpg) {
+      uint64_t j = i + 1;
+      while (j < h->n_cpg && m[j] == m[i]) ++j;
+      cb(ctx, i, j - i, m[i]);
+      i = j;
+    }
+    mrmp_close(&r);
+    return;
+  }
+  uint64_t n = 0;
+  uint8_t *p = memb_rle_payload((const uint8_t *)(r.blk + h->membership_offset),
+                                h->membership_bytes,
+                                (h->flags & MRMP_FLAG_MEMB_BGZF) != 0, &n, path);
+  /* Keys are NUL-separated and closed by an extra NUL, so the first double-NUL
+   * ends the table; no key is ever empty (they are P1..PN and Pna). */
+  uint64_t d = 0;
+  while (d + 1 < n && !(p[d] == 0 && p[d + 1] == 0)) ++d;
+  if (d + 2 >= n) die("membership RLE has no data section", path);
+  d += 2;
+  uint8_t vb = p[d++];
+  if (!vb || vb > 8) die("membership RLE has a bad value width", path);
+  uint64_t pos = 0;
+  while (d + vb + 2 <= n) {
+    uint64_t v = 0;
+    for (uint8_t k = 0; k < vb; ++k) v |= (uint64_t)p[d + k] << (8 * k);
+    d += vb;
+    uint64_t len = (uint64_t)p[d] | ((uint64_t)p[d + 1] << 8);
+    d += 2;
+    if (len) cb(ctx, pos, len, v >= h->n_candidates ? MRMP_PNA_MEMBERSHIP : (uint32_t)v);
+    pos += len;
+  }
+  if (pos != h->n_cpg) die("membership runs do not cover the CpG count", path);
+  free(p);
   mrmp_close(&r);
 }
 

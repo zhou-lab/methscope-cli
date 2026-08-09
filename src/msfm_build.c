@@ -98,8 +98,19 @@ typedef struct {
    * CpGs are precisely the shared ones. With N maps every set keeps every CpG
    * it selected, and the cell is still inflated only once. The cost is N
    * scatter-adds per sampled CpG against a decompress that dominates. */
-  const uint16_t *const *groups;
+  /* INVERTED INDEX over CpGs, not N dense maps.
+   *
+   * 96.5% of genomic CpGs carry no pattern in ANY set, so scoring a CpG against
+   * every set meant ~99 of 100 lookups landing on a background column. Here
+   * cpg_off[pos]..cpg_off[pos+1] lists only the columns that CpG really belongs
+   * to -- on a 100-set artifact that is 0 entries for almost every CpG.
+   *
+   * It is also far smaller: 100 dense uint16 maps over 21.8M CpGs is 4.4 GB,
+   * where the offsets plus the ~774k real memberships are under 100 MB. */
+  const uint32_t *cpg_off;     /* n_cpg + 1 */
+  const uint16_t *cpg_col;     /* global output column per membership */
   const uint32_t *pna_col;     /* n_sets: each set's background column */
+  const uint32_t *set_col0;    /* n_sets: first pattern column of each set */
   uint32_t        n_sets;
   uint64_t        n_cpg;
   uint32_t        ncol;        /* total output columns across every set */
@@ -124,21 +135,32 @@ static void *worker(void *arg) {
   double   *sum  = bmal((size_t)J->ncol * sizeof(double), "beta sums");
   uint32_t *cnt  = bmal((size_t)J->ncol * 4, "beta counts");
 
+  /* Phase timers. Four clock reads per cell is noise against a multi-second
+   * cell, and guessing which phase dominates has already been wrong twice. */
+  double t_io=0, t_elig=0, t_draw=0, t_scatter=0, t_emit=0;
+  struct timespec ta, tb;
+  #define TICK() clock_gettime(CLOCK_MONOTONIC, &ta)
+  #define TOCK(acc) do { clock_gettime(CLOCK_MONOTONIC, &tb); \
+    (acc) += (tb.tv_sec-ta.tv_sec) + 1e-9*(tb.tv_nsec-ta.tv_nsec); } while (0)
+
   for (;;) {
     pthread_mutex_lock(&J->lock);
     uint32_t cell = J->cursor < J->n_cells ? J->cursor++ : UINT32_MAX;
     pthread_mutex_unlock(&J->lock);
     if (cell == UINT32_MAX) break;
 
+    TICK();
     if (bgzf_seek(cf.fh, J->offset[cell], SEEK_SET) != 0)
       bdie("cannot seek to record", J->query);
     cdata_t c = read_cdata1(&cf);
     if (!c.n) bdie("short read on query record", J->query);
     decompress_in_situ(&c);
+    TOCK(t_io);
     if (c.fmt != '3' || c.n != J->n_cpg)
       bdie("query record is not format 3 over the reference CpG set", J->query);
 
     /* Covered CpGs, once per cell: every replicate samples from this list. */
+    TICK();
     uint32_t ne = 0;
     for (uint64_t i = 0; i < J->n_cpg; ++i) {
       if (!f3_get_mu(&c, i)) continue;
@@ -149,6 +171,7 @@ static void *worker(void *arg) {
       }
       elig[ne++] = (uint32_t)i;
     }
+    TOCK(t_elig);
 
     for (uint32_t rep = 0; rep < J->n_reps; ++rep) {
       rng_t rng; rng_seed(&rng, J->seed, cell, rep);
@@ -161,21 +184,37 @@ static void *worker(void *arg) {
        * permute the summation order, and float addition is not associative, so
        * the native level would stop being bit-comparable with the summarize1
        * path for no gain. Ascending order also matches how YAME accumulates. */
+      TICK();
       if (want < ne) partial_shuffle(elig, ne, want, &rng);
+      TOCK(t_draw);
 
+      TICK();
       memset(sum, 0, (size_t)J->ncol * sizeof(double));
       memset(cnt, 0, (size_t)J->ncol * 4);
+      double tot_sum = 0;
       for (uint32_t k = 0; k < want; ++k) {
         uint64_t pos = elig[k];
         double b = MU2beta(f3_get_mu(&c, pos));
         /* One read at this CpG: the call is 0 or 1, never a fraction. */
         if (J->binarize) b = rng_01(&rng) < b ? 1.0 : 0.0;
-        for (uint32_t s = 0; s < J->n_sets; ++s) {
-          uint16_t g = J->groups[s][pos];
-          uint32_t col = g ? (uint32_t)g - 1 : J->pna_col[s];
+        tot_sum += b;
+        for (uint32_t e = J->cpg_off[pos]; e < J->cpg_off[pos + 1]; ++e) {
+          uint32_t col = J->cpg_col[e];
           sum[col] += b; ++cnt[col];
         }
       }
+      /* Each set's background is what its patterns did NOT take. Deriving it
+       * costs O(columns) once instead of one increment per CpG per set, and is
+       * exact: every sampled CpG lands in exactly one column of every set. */
+      for (uint32_t si2 = 0; si2 < J->n_sets; ++si2) {
+        double ss = 0; uint32_t cc = 0;
+        for (uint32_t col = J->set_col0[si2]; col < J->pna_col[si2]; ++col) {
+          ss += sum[col]; cc += cnt[col];
+        }
+        sum[J->pna_col[si2]] = tot_sum - ss;
+        cnt[J->pna_col[si2]] = want - cc;
+      }
+      TOCK(t_scatter);
 
       uint64_t row = (uint64_t)rep * J->n_cells + cell;
       uint16_t *out = J->beta + row * J->ncol;
@@ -186,16 +225,23 @@ static void *worker(void *arg) {
        * single cells 46.5% of observed pattern-betas are exactly 0, 0.5 or 1,
        * i.e. rest on one or two measurements. Dropping them needs no format
        * change: every reader already treats MSFM_NA as unobserved. */
+      TICK();
       for (uint32_t g = 0; g < J->ncol; ++g)
         out[g] = cnt[g] >= J->min_cpgs ? msfm_encode(sum[g] / cnt[g]) : MSFM_NA;
       J->levels[row] = want;
+      TOCK(t_emit);
     }
     free_cdata(&c);
     if (J->progress && (cell % 500) == 0)
       fprintf(stderr, "[methscope] classify-featurize: cell %u/%u\n", cell, J->n_cells);
   }
   bgzf_close(cf.fh);
+  if (getenv("METHSCOPE_PROFILE"))
+    fprintf(stderr, "[profile] io %.2fs  eligible-scan %.2fs  downsample %.2fs  "
+            "scatter %.2fs  emit %.2fs\n", t_io, t_elig, t_draw, t_scatter, t_emit);
   free(elig); free(sum); free(cnt);
+  #undef TICK
+  #undef TOCK
   return NULL;
 }
 
@@ -288,7 +334,15 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
    * shared read-only across workers, against an output matrix that is already
    * larger. Chunking, if it is ever needed, belongs on the CELL axis: that
    * keeps the single decompress, which is the whole point. */
-  uint16_t **groups = bmal((size_t)n_sets * sizeof(uint16_t *), "group maps");
+  /* Built by walking each set's membership RUNS, never expanding it. A run of
+   * background is skipped by advancing a position, so setup costs one visit per
+   * real membership (~865k on a 100-set artifact) instead of one per CpG per set
+   * (2.18 billion). The dense .cm path below is unchanged -- an exported mask has
+   * no runs to walk. */
+  uint32_t *cpg_cnt = bmal((size_t)(n_cpg + 1) * sizeof(uint32_t), "cpg membership counts");
+  memset(cpg_cnt, 0, (size_t)(n_cpg + 1) * sizeof(uint32_t));
+  uint16_t **stage = bmal((size_t)n_sets * sizeof(uint16_t *), "staged maps");
+  for (uint32_t si = 0; si < n_sets; ++si) stage[si] = NULL;
   uint32_t *pna_col = bmal((size_t)n_sets * sizeof(uint32_t), "pna cols");
   uint32_t *set_col0 = bmal((size_t)n_sets * sizeof(uint32_t), "set offsets");
   uint32_t ncol = 0;
@@ -304,6 +358,54 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
     cdata_t cm = read_cdata1(&cmf);
     bgzf_close(cmf.fh);
     if (!cm.n) bdie("MRMP mask is empty", mrmp);
+    /* Walk the mask's RUNS rather than expanding it.
+     *
+     * A fmt2 .cm is [keys][NUL][value-width][(key-id, uint16 run) ...], and a
+     * satellite mask is overwhelmingly one enormous background run: a 34-class
+     * global is ~20k runs over 21.8M CpGs. Expanding to a dense array cost one
+     * visit per CpG per set -- 2.18 billion on a 100-set artifact -- where the
+     * runs carry the same information in a few tens of thousands of steps, and
+     * background runs are skipped by advancing a counter.
+     *
+     * The value in a run is a KEY ID, not a pattern number, so the key table is
+     * decoded first and each id mapped through it to P<n>. */
+    if (cm.compressed) {
+      const uint8_t *p = cm.s; uint64_t n = cm.n;
+      uint64_t d = 0;
+      while (d + 1 < n && !(p[d] == 0 && p[d + 1] == 0)) ++d;
+      if (d + 2 >= n) bdie("mask has no data section", mrmp);
+      /* key id -> pattern number, via the table that precedes the runs */
+      uint32_t nk = 0;
+      for (uint64_t i = 0; i < d; ++i) if (!p[i]) ++nk;
+      if (p[d - 1]) ++nk;
+      uint32_t *kp = bmal((size_t)(nk ? nk : 1) * 4, "key->pattern");
+      { uint32_t k = 0; uint64_t i = 0;
+        while (i < d && k < nk) {
+          const char *ks = (const char *)p + i;
+          kp[k++] = (ks[0] == 'P' && ks[1] >= '0' && ks[1] <= '9')
+                  ? (uint32_t)atoi(ks + 1) : 0;
+          while (i < d && p[i]) ++i;
+          ++i;
+        } }
+      if (!patterns) { for (uint32_t k = 0; k < nk; ++k) if (kp[k] > patterns) patterns = kp[k]; }
+      if (!patterns) bdie("mask has no P<n> states", mrmp);
+      memset(group, 0, (size_t)n_cpg * sizeof(uint16_t));
+      uint64_t q = d + 2; uint8_t vb = p[q++]; uint64_t pos = 0;
+      if (!vb || vb > 8) bdie("mask has a bad value width", mrmp);
+      while (q + vb + 2 <= n) {
+        uint64_t v = 0;
+        for (uint8_t k = 0; k < vb; ++k) v |= (uint64_t)p[q + k] << (8 * k);
+        q += vb;
+        uint64_t len = (uint64_t)p[q] | ((uint64_t)p[q + 1] << 8); q += 2;
+        uint32_t pat = (v < nk) ? kp[v] : 0;
+        if (pat && pat <= patterns && pos + len <= n_cpg)
+          for (uint64_t i = pos; i < pos + len; ++i) group[i] = (uint16_t)pat;
+        pos += len;
+      }
+      if (pos != n_cpg) bdie("MRMP and query CpG counts differ", mrmp);
+      free(kp); free_cdata(&cm);
+      goto have_group;
+    }
     decompress_in_situ(&cm);
     if (cm.fmt != '2') bdie("MRMP mask must be categorical format 2", mrmp);
     fmt2_set_aux(&cm);
@@ -327,17 +429,38 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
     }
     free_cdata(&cm);
   }
+  have_group:
   /* set s occupies [set_col0[s], set_col0[s]+patterns], PNA last within it, and
    * the map is rewritten to address the GLOBAL column so the worker needs no
    * per-set offset arithmetic in its inner loop */
   set_col0[si] = ncol;
   for (uint64_t i = 0; i < n_cpg; ++i)
     if (group[i]) group[i] = (uint16_t)(set_col0[si] + group[i]);
-  groups[si] = group;
+  stage[si] = group;
+  for (uint64_t i = 0; i < n_cpg; ++i) if (group[i]) ++cpg_cnt[i];
   pna_col[si] = ncol + patterns;
   ncol += patterns + 1;
   if (ncol > UINT16_MAX) bdie("fused column count exceeds uint16", mrmp);
   }
+
+  /* prefix-sum the per-CpG counts into offsets, then fill */
+  uint32_t *cpg_off = bmal((size_t)(n_cpg + 1) * sizeof(uint32_t), "cpg offsets");
+  uint64_t acc = 0;
+  for (uint64_t i = 0; i < n_cpg; ++i) { cpg_off[i] = (uint32_t)acc; acc += cpg_cnt[i]; }
+  cpg_off[n_cpg] = (uint32_t)acc;
+  if (acc > UINT32_MAX) bdie("too many pattern memberships to index", mrmps[0]);
+  uint16_t *cpg_col = bmal((acc ? acc : 1) * sizeof(uint16_t), "cpg columns");
+  memset(cpg_cnt, 0, (size_t)(n_cpg + 1) * sizeof(uint32_t));   /* reuse as cursor */
+  for (uint32_t si = 0; si < n_sets; ++si) {
+    const uint16_t *g = stage[si];
+    for (uint64_t i = 0; i < n_cpg; ++i)
+      if (g[i]) cpg_col[cpg_off[i] + cpg_cnt[i]++] = (uint16_t)(g[i] - 1);
+    free(stage[si]);
+  }
+  free(stage); free(cpg_cnt);
+  fprintf(stderr, "[methscope] classify-featurize: %" PRIu64 " pattern membership(s) "
+          "over %" PRIu64 " CpGs (%.2f%% carry any)\n", acc, n_cpg,
+          100.0 * (double)acc / (double)n_cpg);
 
   uint64_t n_rows = (uint64_t)n_reps * n_cells;
   uint16_t *beta = bmal(n_rows * ncol * sizeof(uint16_t), "beta matrix");
@@ -345,7 +468,8 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
 
   job_t J = {0};
   J.query = query; J.n_cells = n_cells; J.n_cpg = n_cpg;
-  J.groups = (const uint16_t *const *)groups; J.pna_col = pna_col;
+  J.cpg_off = cpg_off; J.cpg_col = cpg_col;
+  J.pna_col = pna_col; J.set_col0 = set_col0;
   J.n_sets = n_sets;
   J.ncol = ncol; J.rep_sample = rep_sample;
   J.n_reps = n_reps; J.binarize = binarize; J.seed = seed;
@@ -373,8 +497,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   pthread_mutex_destroy(&J.lock);
 
   free((void *)J.offset); free(tid);
-  for (uint32_t si = 0; si < n_sets; ++si) free(groups[si]);
-  free(groups); free(pna_col);
+  free(cpg_off); free(cpg_col); free(pna_col);
   if (set_col0_out) memcpy(set_col0_out, set_col0, n_sets * sizeof(uint32_t));
   free(set_col0);
   *beta_out = beta; *levels_out = levels; *names_out = names;
