@@ -34,6 +34,14 @@ typedef struct ms_matrix_t {
  * YAME summary core. Missing overlap -> NAN. Columns are ordered by numeric
  * pattern id ("Pna" last). Caller frees with ms_matrix_free().
  */
+/* Keep only columns idx[0..n-1], in that order, compacting M/N/pattern_names in
+ * place and setting n_patterns = n. Every consumer indexes columns positionally,
+ * so selecting a subset means REBUILDING the matrix around it rather than
+ * carrying an index alongside -- otherwise each consumer has to remember, and
+ * ms_msfm_to_matrix's set-major layout (Pna interleaved, not trailing) means
+ * the one that forgets silently trains on background columns. */
+void         ms_matrix_select(ms_matrix_t *m, const int *idx, int n);
+
 ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm);
 void         ms_matrix_free(ms_matrix_t *m);
 void         ms_matrix_write_tsv(const ms_matrix_t *m, FILE *out, int header);

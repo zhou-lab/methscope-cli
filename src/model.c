@@ -61,6 +61,50 @@ char *ms_booster_get_hier(BoosterHandle b) {
   return out;
 }
 
+void ms_booster_set_features(BoosterHandle b, char *const *names, int n_feat) {
+  size_t n = 1;
+  for (int i = 0; i < n_feat; ++i) n += strlen(names[i]) + 1;
+  char *buf = malloc(n);
+  if (!buf) die("out of memory (feature names)", NULL);
+  char *w = buf;
+  for (int i = 0; i < n_feat; ++i) {
+    if (i) *w++ = '\n';
+    size_t L = strlen(names[i]);
+    memcpy(w, names[i], L); w += L;
+  }
+  *w = '\0';
+  XGCHK(XGBoosterSetAttr(b, MS_ATTR_FEATURES, buf));
+  free(buf);
+}
+
+char **ms_booster_get_features(BoosterHandle b, int *n_feat) {
+  const char *val = NULL;
+  int success = 0;
+  *n_feat = 0;
+  if (XGBoosterGetAttr(b, MS_ATTR_FEATURES, &val, &success) != 0 || !success || !val)
+    return NULL;
+  char *buf = strdup(val);
+  if (!buf) die("out of memory (feature names)", NULL);
+  int cap = 64, k = 0;
+  char **out = malloc(sizeof(char *) * cap);
+  if (!out) die("out of memory", NULL);
+  char *save = NULL;
+  for (char *t = strtok_r(buf, "\n", &save); t; t = strtok_r(NULL, "\n", &save)) {
+    if (k == cap) {
+      cap *= 2;
+      char **g = realloc(out, sizeof(char *) * cap);
+      if (!g) die("out of memory", NULL);
+      out = g;
+    }
+    out[k] = strdup(t);
+    if (!out[k]) die("out of memory", NULL);
+    ++k;
+  }
+  free(buf);
+  *n_feat = k;
+  return out;
+}
+
 void ms_booster_set_scalar_cov(BoosterHandle b) {
   XGCHK(XGBoosterSetAttr(b, MS_ATTR_SCALARCOV, "log1p"));
 }

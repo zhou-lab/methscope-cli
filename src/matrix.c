@@ -62,6 +62,31 @@ static int cmp_colkey(const void *a, const void *b) {
  * numeric pattern id exactly as the R GenerateInput() did, so the first
  * npattern columns are the model's features and "Pna" lands last.
  */
+void ms_matrix_select(ms_matrix_t *m, const int *idx, int n) {
+  if (n <= 0 || n > m->n_patterns) mdie("bad column selection", NULL);
+  /* Forward pass is safe in place: the destination index r*n + c never exceeds
+   * the source r*n_patterns + idx[c], because n <= n_patterns and idx is
+   * ascending, so the write cursor always trails the read cursor. */
+  const int old = m->n_patterns;
+  for (int r = 0; r < m->n_cells; ++r) {
+    const size_t src = (size_t)r * old, dst = (size_t)r * n;
+    for (int c = 0; c < n; ++c) {
+      m->M[dst + c] = m->M[src + idx[c]];
+      m->N[dst + c] = m->N[src + idx[c]];
+    }
+  }
+  char **kept = malloc((size_t)n * sizeof(char *));
+  if (!kept) mdie("out of memory (column selection)", NULL);
+  char *taken = calloc((size_t)old, 1);
+  if (!taken) mdie("out of memory (column selection)", NULL);
+  for (int c = 0; c < n; ++c) { kept[c] = m->pattern_names[idx[c]]; taken[idx[c]] = 1; }
+  for (int c = 0; c < old; ++c) if (!taken[c]) free(m->pattern_names[c]);
+  free(taken);
+  free(m->pattern_names);
+  m->pattern_names = kept;
+  m->n_patterns = n;
+}
+
 ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm) {
   config_t config = {0};
   config.fname_mask = (char *)ref_cm;

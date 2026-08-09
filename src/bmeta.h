@@ -21,6 +21,18 @@
  * rather than relying on the caller to remember. Value is the transform name. */
 #define MS_ATTR_SCALARCOV "methscope_scalar_cov"
 
+/* The feature columns the booster was trained on, newline-separated, in model
+ * column order (the --scalar-coverage column, if any, is NOT listed -- it is
+ * appended after these and marked by MS_ATTR_SCALARCOV).
+ *
+ * Needed because a fused multi-set .msfm is laid out SET-MAJOR: each set's Pna
+ * background sits immediately after that set's own patterns, so the background
+ * columns are interleaved rather than trailing. Selecting "the first N columns"
+ * therefore takes some backgrounds as features and drops an equal number of
+ * real patterns off the end. Recording the names lets `classify` gather exactly
+ * the columns `classify-train` used, whatever order the query artifact has. */
+#define MS_ATTR_FEATURES "methscope_features"
+
 /* The label hierarchy, so a prediction is self-describing: one row per class,
  * "label\tcompartment\tlineage\tgroup\tsubtype", rows newline-separated.
  * Lets `classify --levels` report the taxonomy path without a side table, and
@@ -37,6 +49,13 @@ void ms_booster_set_meta(BoosterHandle b, char *const *labels, int num_class);
  * returns the raw TSV block or NULL; caller frees. */
 void  ms_booster_set_hier(BoosterHandle b, const char *tsv);
 char *ms_booster_get_hier(BoosterHandle b);
+
+/* Embed / read the feature column names (see MS_ATTR_FEATURES). The getter
+ * returns a malloc'd array of malloc'd strings and sets *n_feat, or NULL when
+ * the attribute is absent -- which is how a pre-2026-08 model is recognised.
+ * Caller frees each string and the array. */
+void   ms_booster_set_features(BoosterHandle b, char *const *names, int n_feat);
+char **ms_booster_get_features(BoosterHandle b, int *n_feat);
 
 /* Mark / test the scalar coverage feature (see MS_ATTR_SCALARCOV). */
 void ms_booster_set_scalar_cov(BoosterHandle b);

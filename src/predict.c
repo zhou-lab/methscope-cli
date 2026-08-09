@@ -315,6 +315,43 @@ int main_predict(int argc, char *argv[]) {
   } else {
     m = ms_matrix_build(query_cg, ref_mrmp);
   }
+  /* Resolve the model's feature columns BY NAME.
+   *
+   * Taking the first n_pat columns positionally is wrong whenever the query
+   * artifact is a fused multi-set .msfm: that layout is set-major, so each
+   * set's Pna background sits between pattern blocks rather than after them,
+   * and a positional cut both admits backgrounds and drops the tail sets. The
+   * booster records the names it was trained on, so gather exactly those. */
+  {
+    int n_stored = 0;
+    char **fn = ms_booster_get_features(booster, &n_stored);
+    if (fn) {
+      if (n_stored != n_pat)
+        pdie("model feature list disagrees with its own feature count", model_name);
+      int *idx = malloc((size_t)n_stored * sizeof(int));
+      if (!idx) pdie("out of memory", NULL);
+      for (int c = 0; c < n_stored; ++c) {
+        idx[c] = -1;
+        for (int q = 0; q < m->n_patterns; ++q)
+          if (!strcmp(fn[c], m->pattern_names[q])) { idx[c] = q; break; }
+        if (idx[c] < 0)
+          pdie("query is missing a feature the model needs", fn[c]);
+      }
+      ms_matrix_select(m, idx, n_stored);
+      free(idx);
+      for (int c = 0; c < n_stored; ++c) free(fn[c]);
+      free(fn);
+    } else if (m->n_patterns != n_pat) {
+      /* Pre-2026-08 model: no name list, so the columns can only be taken
+       * positionally, which is exactly the case that used to go wrong quietly.
+       * Say so rather than scoring on a guess. */
+      fprintf(stderr, "[methscope] classify: model predates feature-name "
+              "recording and the query has %d columns for %d model features; "
+              "taking the first %d BY POSITION, which is only correct if the "
+              "artifact is single-set. Retrain to remove this ambiguity.\n",
+              m->n_patterns, n_pat, n_pat);
+    }
+  }
   if (m->n_patterns < n_pat)
     pdie("reference .mrmp has fewer patterns than the booster expects", ref_mrmp);
 

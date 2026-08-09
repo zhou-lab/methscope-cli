@@ -326,13 +326,37 @@ int main_train(int argc, char *argv[]) {
     if (ms_is_pna_name(m->pattern_names[c])) n_pna++;
   int n_nonpna = m->n_patterns - n_pna;
 
-  /* Default npattern = all feature states: every non-"Pna" state, or all states
-   * with --include-pna. A user -p N selects the first N columns by recurrence
-   * rank (P1,P2,...); for curated named markers the default is what you want. */
-  if (npattern <= 0)
-    npattern = include_pna ? m->n_patterns : n_nonpna;
-  if (npattern <= 0 || npattern > m->n_patterns)
-    tdie("invalid npattern", NULL);
+  /* Which COLUMNS become features, resolved BY NAME.
+   *
+   * This used to take the first npattern columns by position, on the reasoning
+   * that npattern = n_nonpna means "the non-Pna ones". That is false for a
+   * fused multi-set artifact: the layout is SET-MAJOR, so each set's Pna sits
+   * right after that set's own patterns and the backgrounds are interleaved,
+   * not trailing. On a 100-set / 1,100-column artifact the positional rule fed
+   * 66 background columns in as features and dropped 66 real patterns -- the
+   * whole tail of the satellite block -- off the end. Gather through an
+   * explicit index instead, and record the names in the booster so `classify`
+   * reproduces the choice rather than re-deriving it. */
+  int *feat_idx = malloc((size_t)m->n_patterns * sizeof(int));
+  if (!feat_idx) tdie("out of memory", NULL);
+  int n_feat = 0;
+  for (int c = 0; c < m->n_patterns; ++c)
+    if (include_pna || !ms_is_pna_name(m->pattern_names[c]))
+      feat_idx[n_feat++] = c;
+  /* -p N keeps the first N of that selection, so it can no longer truncate a
+   * satellite by landing mid-set the way a positional cut did. */
+  if (npattern > 0) {
+    if (npattern > n_feat)
+      tdie("-p exceeds the number of feature columns", NULL);
+    n_feat = npattern;
+  }
+  if (n_feat <= 0) tdie("no feature columns after excluding Pna", NULL);
+  /* Rebuild the matrix around the selection so every consumer below -- xgboost,
+   * the linear frameworks, the violation model, and the trim path that reads
+   * pattern_names -- indexes features correctly without knowing any of this. */
+  ms_matrix_select(m, feat_idx, n_feat);
+  free(feat_idx);
+  npattern = n_feat;
 
   /* ---- labels ----
    * Embedded in the artifact by default: a .msfm cannot be paired with the
@@ -465,6 +489,13 @@ int main_train(int argc, char *argv[]) {
 
     /* embed labels; save as loose .ubj or a (trimmed-mrmp) .ubjx bundle */
     ms_booster_set_meta(booster, uniq, K);
+    {   /* the exact columns, by name, so `classify` gathers the same ones */
+      char **fn = malloc((size_t)npattern * sizeof(char *));
+      if (!fn) tdie("out of memory", NULL);
+      for (int c = 0; c < npattern; ++c) fn[c] = m->pattern_names[c];
+      ms_booster_set_features(booster, fn, npattern);
+      free(fn);
+    }
     if (scalar_cov) ms_booster_set_scalar_cov(booster);
     if (hier_path) {                    /* travel with the model, not beside it */
       FILE *hf = fopen(hier_path, "r");
