@@ -255,7 +255,11 @@ void ms_mrmp_top_free(mrmp_top_t *t);
  * Sections sit in header order, so the end is the furthest section end; taking
  * the max rather than assuming which is last keeps this correct if the layout
  * ever gains a section. */
-static inline uint64_t ms_mrmp_block_bytes(const mrmp_header_t *h) {
+/* Where the block's last section ends, WITHOUT the alignment pad. A block
+ * written before padding existed stops exactly here, so this is what a bounds
+ * check must compare against -- rounding first makes the final block of an old
+ * file look one byte past EOF and rejects a perfectly good artifact. */
+static inline uint64_t ms_mrmp_block_end(const mrmp_header_t *h) {
   uint64_t end = sizeof(mrmp_header_t);
   uint64_t memb = (h->flags & MRMP_FLAG_MEMB_RLE)
                 ? h->membership_bytes : h->n_cpg * sizeof(uint32_t);
@@ -265,7 +269,13 @@ static inline uint64_t ms_mrmp_block_bytes(const mrmp_header_t *h) {
   if ((h->flags & MRMP_FLAG_THRESH) &&
       h->thresh_offset + (uint64_t)h->n_candidates * sizeof(float) > end)
     end = h->thresh_offset + (uint64_t)h->n_candidates * sizeof(float);
-  return (end + 7u) & ~7ull;
+  return end;
+}
+
+/* The same, rounded up to the 8-byte boundary the NEXT block starts on. Every
+ * writer pads to this, so it is the stride through a chain. */
+static inline uint64_t ms_mrmp_block_bytes(const mrmp_header_t *h) {
+  return (ms_mrmp_block_end(h) + 7u) & ~7ull;
 }
 
 /* A walked chain: one entry per block, in file order. Same shape the old

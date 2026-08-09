@@ -1046,11 +1046,14 @@ ms_mrmpset_t *ms_mrmpset_open(const char *path) {
       die("cannot read MRMP block header", path);
     if (memcmp(h.magic, MRMPIDX_MAGIC, 8) || h.version != MRMPIDX_VERSION)
       die("bad MRMPIDX1 magic or version in chain", path);
-    uint64_t nb = ms_mrmp_block_bytes(&h);
-    /* The truncation check the dropped container table used to give for free:
-     * a block claiming more bytes than remain means the file was cut short. */
-    if (nb < sizeof(mrmp_header_t) || nb > fsz - at)
+    /* Bound on the UNPADDED end: an artifact written before blocks were padded
+     * stops exactly at its last section, so testing the padded stride would
+     * reject its final block as one byte past EOF. Advance by the padded
+     * stride, clamped, so a chain of new blocks still steps correctly. */
+    uint64_t end = ms_mrmp_block_end(&h), nb = ms_mrmp_block_bytes(&h);
+    if (end < sizeof(mrmp_header_t) || end > fsz - at)
       die("MRMP block extends past the end of the file", path);
+    if (nb > fsz - at) nb = fsz - at;
 
     if (s->n_sets == cap) {
       cap <<= 1;
@@ -2121,10 +2124,11 @@ static size_t class_key_len(const char *name) {
   return n;
 }
 
-static uint32_t msfm_row_of(const ms_msfm_t *f, const char *cls) {
+static uint32_t msfm_row_of(char *const *rec_names, uint32_t n_rec,
+                            const char *cls) {
   size_t n = strlen(cls);
-  for (uint32_t r = 0; r < f->header->n_records; ++r) {
-    const char *nm = f->record_names[r];
+  for (uint32_t r = 0; r < n_rec; ++r) {
+    const char *nm = rec_names[r];
     size_t k = class_key_len(nm);
     if (k == n && !memcmp(nm, cls, n)) return r;   /* first replicate wins */
   }
@@ -2134,11 +2138,11 @@ static uint32_t msfm_row_of(const ms_msfm_t *f, const char *cls) {
 /* Projection distance: mean |v - w| over the pattern-average vectors, on the
  * columns both classes actually have. The u16 codes are differenced directly
  * and scaled once at the end, which is the same number as differencing betas. */
-static double proj_dist(const ms_msfm_t *f, uint32_t ra, uint32_t rb,
+static double proj_dist(const uint16_t *beta, uint32_t stride,
+                        uint32_t ra, uint32_t rb,
                         uint32_t K, uint32_t *n_shared) {
-  const uint32_t np = f->header->n_patterns;
-  const uint16_t *va = f->beta + (uint64_t)ra * np;
-  const uint16_t *vb = f->beta + (uint64_t)rb * np;
+  const uint16_t *va = beta + (uint64_t)ra * stride;
+  const uint16_t *vb = beta + (uint64_t)rb * stride;
   double s = 0; uint32_t m = 0;
   for (uint32_t j = 0; j < K; ++j) {
     if (va[j] == MSFM_NA || vb[j] == MSFM_NA) continue;
@@ -2179,7 +2183,7 @@ static char *pair_set_name(const char *prefix, const char *a, const char *b) {
 
 int main_mrmp_build_thin(int argc, char *argv[]) {
   g_cmd = "mrmp-build-thin";
-  const char *pos[3] = {NULL, NULL, NULL}, *ref_msfm = NULL;
+  const char *pos[3] = {NULL, NULL, NULL};
   int npos = 0, force = 0;
   uint32_t n_partner = 3, proj_top = 6000;
   ms_select_opt_t sel; ms_select_defaults(&sel);
@@ -2203,16 +2207,14 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
         "  a satellite resolved on a different rule than the global it\n"
         "  supplements would put two incompatible pattern definitions in one\n"
         "  pooled feature vector.\n\n"
-        "  --ref-msfm FILE           (required)\n"
-        "        The reference featurized against GLOBAL.mrmp -- what\n"
-        "        `classify-featurize` writes -- supplying the pattern-average\n"
-        "        vector the partner search projects on. Required as an ARGUMENT\n"
-        "        rather than featurized internally: featurizing is a command in\n"
-        "        its own right with its own sampling, threading and pattern\n"
-        "        budget, and the partner choice must be made in the same feature\n"
-        "        space the classifier will see. Passing it keeps that visible\n"
-        "        and lets one featurization serve both. It must carry a record\n"
-        "        for EVERY class in the store, thin ones included.\n\n"
+        "  The partner search needs the reference featurized against\n"
+        "  GLOBAL.mrmp, and does that itself. It used to be a required\n"
+        "  --ref-msfm argument; nothing checked that the matrix given had been\n"
+        "  built against the global given beside it, and a mismatched pair chose\n"
+        "  partners in the wrong feature space silently. None of the\n"
+        "  featurizer's options were free choices here either -- it must be this\n"
+        "  reference, this global, every pattern, native coverage -- so there was\n"
+        "  nothing for a caller to decide.\n\n"
         "  --n-partner N             (default 3)\n"
         "        Nearest classes each thin class is given a satellite against,\n"
         "        found by projection of reference pattern-average vectors. Each\n"
@@ -2264,7 +2266,6 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
         "  downstream distinguishes them.\n");
       return 0;
     }
-    else if (!strcmp(a, "--ref-msfm") && i + 1 < argc) ref_msfm = argv[++i];
     else if (!strcmp(a, "--n-partner") && i + 1 < argc)
       n_partner = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--projection-top") && i + 1 < argc)
@@ -2293,7 +2294,6 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
   }
   if (npos != 3) die("need STORE.cg GLOBAL.mrmp OUT.mrmp (see -h)", NULL);
   const char *store = pos[0], *global = pos[1], *out = pos[2];
-  if (!ref_msfm) die("--ref-msfm is required (see -h for why)", NULL);
   if (!n_partner) die("--n-partner must be at least 1", NULL);
   if (!force) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
 
@@ -2338,16 +2338,39 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
   if (!n_thin)
     die("every store class is already in the global; no thin class to cover", global);
 
-  ms_msfm_t f; char err[256];
-  if (!ms_msfm_open(&f, ref_msfm, err, sizeof err)) die("--ref-msfm", err);
-  uint32_t np = f.header->n_patterns;
-  if (np && ms_is_pna_name(f.pattern_names[np - 1])) --np;  /* background column */
+  /* Featurize the reference against THIS global, here, rather than taking a
+   * .msfm as an argument.
+   *
+   * It used to be required, on the grounds that featurizing is a command in its
+   * own right and one matrix could serve several callers. There are no several
+   * callers -- mrmp-build-thin was the only consumer -- and nothing verified
+   * that the matrix passed had been built against the global passed beside it.
+   * A mismatched pair computed the projection in the wrong feature space and
+   * chose the wrong partners, silently. Building it here makes that
+   * unrepresentable rather than merely documented.
+   *
+   * None of the featurizer's knobs are free choices either: it must be this
+   * reference against this global, every pattern, native coverage, unbinarised.
+   * So there was nothing for a caller to decide. */
+  char tpl[] = "/tmp/methscope_thinref_XXXXXX.cm";
+  int tfd = mkstemps(tpl, 3);
+  if (tfd < 0) die("cannot create a temporary mask", tpl);
+  close(tfd);
+  ms_mrmp_write_mask(global, tpl, "Pna", UINT32_MAX);
+  uint16_t *beta = NULL; uint32_t *levels = NULL; char **rec = NULL;
+  uint32_t n_rec = 0, ncol = 0, native = 0;
+  ms_msfm_build_sampled(store, tpl, 0, &native, 1, 0, 0, 1, 1,
+                        &beta, &levels, &rec, &n_rec, &ncol);
+  unlink(tpl);
+  free(levels);
+  /* last column is the PNA background: no contrast, so it only dilutes a mean */
+  uint32_t np = ncol ? ncol - 1 : 0;
   const uint32_t K = proj_top < np ? proj_top : np;
   uint32_t *row = xcalloc(nstore, sizeof(uint32_t), "msfm rows");
   for (uint32_t s = 0; s < nstore; ++s) {
-    row[s] = msfm_row_of(&f, slab[s]);
+    row[s] = msfm_row_of(rec, n_rec, slab[s]);
     if (row[s] == UINT32_MAX)
-      die("--ref-msfm has no record for store class", slab[s]);
+      die("the reference has no record for store class", slab[s]);
   }
 
   /* Partner search, then dedup: a thin-thin pair is reachable from both ends. */
@@ -2361,7 +2384,7 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
     uint32_t nc = 0;
     for (uint32_t c = 0; c < nstore; ++c) {
       if (c == s) continue;
-      uint32_t m; double d = proj_dist(&f, row[s], row[c], K, &m);
+      uint32_t m; double d = proj_dist(beta, ncol, row[s], row[c], K, &m);
       if (m <= 50) continue;    /* too few shared columns for a mean to mean much */
       cand[nc].d = d; cand[nc].name = slab[c]; cand[nc].k = c; ++nc;
     }
@@ -2378,8 +2401,10 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
       pa[npair] = s; pb[npair] = b; pd[npair] = cand[j].d; ++npair;
     }
   }
-  free(cand); free(row); ms_msfm_close(&f);
-  if (!npair) die("no (thin, partner) pair survived the projection", ref_msfm);
+  free(cand); free(row); free(beta);
+  for (uint32_t r = 0; r < n_rec; ++r) free(rec[r]);
+  free(rec);
+  if (!npair) die("no (thin, partner) pair survived the projection", global);
 
   fprintf(stderr, "[methscope] %s: %u thin of %u store classes, %u satellites\n",
           g_cmd, n_thin, nstore, npair);
