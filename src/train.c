@@ -9,10 +9,12 @@
  * Defaults mirror Input_training(): objective multi:softprob, eval_metric
  * mlogloss, gbtree, nrounds = round(sqrt(n_cells)).
  */
+#define _GNU_SOURCE
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <unistd.h>
+#include <sched.h>
 #include "methscope.h"
 #include "bmeta.h"
 #include "bundle.h"    /* ms_mrmp_resolve / ms_bundle_pack / ms_path_is_bundle_ext */
@@ -162,6 +164,12 @@ static int train_usage(void) {
     "                   the expected-1 and expected-0 sides before a call (default 20);\n"
     "                   below it the record is reported NA rather than guessed.\n"
     "  -n <nrounds>     Boosting rounds, xgboost only (default: round(sqrt(n_cells))).\n"
+    "  --threads <N>    xgboost nthread (default: the CPUs this process may\n"
+    "                   actually use). Left to xgboost it sizes its pool from\n"
+    "                   the machine, which on a shared batch node is not what\n"
+    "                   the job was allocated -- so the same matrix and the\n"
+    "                   same rounds have timed 76 s on one node and 46 min on\n"
+    "                   another. Pinning it makes runs comparable.\n"
     "  --max-depth <d>  Cap tree depth (xgboost default 6). Lower it when the\n"
     "                   training set is redundant -- e.g. one pseudobulk repeated\n"
     "                   across a coverage ladder -- since the repeats inflate\n"
@@ -192,6 +200,7 @@ int main_train(int argc, char *argv[]) {
   const char *labels_path = NULL, *out_path = NULL, *framework = "xgboost";
   const char *data_path = NULL, *hier_path = NULL;
   int npattern = 0, nrounds = 0, include_pna = 0, scalar_cov = 0;
+  int nthread = 0;                    /* 0 = derive; see ms_train_threads() */
   /* xgboost tree-shape knobs. Default max_depth stays xgboost's 6; the point of
    * exposing it is that a redundant training set -- one pseudobulk replicated
    * across a coverage ladder -- makes every split look far more confident than
@@ -208,6 +217,8 @@ int main_train(int argc, char *argv[]) {
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-l") == 0 && i+1 < argc) labels_path = argv[++i];
     else if (strcmp(argv[i], "--data") == 0 && i+1 < argc) data_path = argv[++i];
+    else if (strcmp(argv[i], "--threads") == 0 && i+1 < argc)
+      nthread = parse_nonneg_int(argv[++i], "--threads expects a non-negative integer");
     else if (strcmp(argv[i], "--scalar-coverage") == 0) scalar_cov = 1;
     else if (strcmp(argv[i], "--hierarchy") == 0 && i+1 < argc) hier_path = argv[++i];
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out_path    = argv[++i];
@@ -417,6 +428,25 @@ int main_train(int argc, char *argv[]) {
     XGCHK(XGBoosterSetParam(booster, "objective", "multi:softprob"));
     XGCHK(XGBoosterSetParam(booster, "eval_metric", "mlogloss"));
     XGCHK(XGBoosterSetParam(booster, "num_class", kbuf));
+    /* Thread pool. Prefer what the batch system granted, then what the kernel
+     * will actually schedule us on, and only then the machine's core count --
+     * an unpinned pool sized from a 94-core node while holding 24 of them is a
+     * confound in every timing taken from a shared queue. */
+    int nt = nthread;
+    if (nt <= 0) {
+      const char *e = getenv("SLURM_CPUS_PER_TASK");
+      if (e && *e) nt = atoi(e);
+    }
+    if (nt <= 0) {
+      cpu_set_t set;
+      if (sched_getaffinity(0, sizeof(set), &set) == 0) nt = CPU_COUNT(&set);
+    }
+    if (nt <= 0) nt = (int)sysconf(_SC_NPROCESSORS_ONLN);
+    if (nt > 0) {
+      char tbuf[16]; snprintf(tbuf, sizeof(tbuf), "%d", nt);
+      XGCHK(XGBoosterSetParam(booster, "nthread", tbuf));
+      fprintf(stderr, "[methscope] classify-train: xgboost nthread=%d\n", nt);
+    }
     char pbuf[32];
     if (max_depth > 0) {
       snprintf(pbuf, sizeof(pbuf), "%d", max_depth);
