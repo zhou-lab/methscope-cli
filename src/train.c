@@ -83,7 +83,19 @@ static int bundle_model(const char *out, const char *kind, const char *inner_tmp
   char *trim_tmp = NULL;
   const char *bundle_mrmp = ref_mrmp;
   int trimmed = 0;
-  if (npattern < n_nonpna) {                   /* real patterns dropped -> trim */
+  /* A .mrmp goes into the bundle verbatim -- it is already exactly its patterns,
+   * because mrmp-pool --pooled-top prunes. Trimming is a .cm-era operation for
+   * an artifact that carried more than it used; asking for it here means the cut
+   * was made at the wrong step. */
+  int ref_is_mrmp = 0;
+  { FILE *f = fopen(ref_mrmp, "rb");
+    if (f) { char mg[8];
+      ref_is_mrmp = fread(mg, 1, 8, f) == 8 && !memcmp(mg, "MRMPIDX1", 8);
+      fclose(f); } }
+  if (ref_is_mrmp && npattern < n_nonpna)
+    tdie("cannot trim a .mrmp at train time; re-run mrmp-pool --pooled-top "
+         "to cut it, or pass an exported .cm", ref_mrmp);
+  if (!ref_is_mrmp && npattern < n_nonpna) {    /* real patterns dropped -> trim */
     char tmpl[] = "/tmp/methscope_trim_XXXXXX.cm";
     int fd = mkstemps(tmpl, 3);                /* keep the .cm suffix */
     if (fd < 0) tdie("cannot create temp trimmed mrmp", NULL);

@@ -26,6 +26,7 @@
 
 #include "methscope.h"
 #include "msfm.h"
+#include "mrmp.h"   /* a .mrmp chain is a valid mask argument */
 #include "bundle.h"
 #include "index.h"   /* get_fname_index -- the fast path needs the .cg index */
 
@@ -509,6 +510,7 @@ static int usage(void) {
   ms_help(stderr,
     "\n"
     "Usage:\n"
+    "  methscope classify-featurize [options] -o <out.msfm> <query.cg> <ref.mrmp>\n"
     "  methscope classify-featurize [options] -o <out.msfm> <query.cg> <ref.cm> [ref2.cm ...]\n"
     "  methscope classify-featurize --merge  -o <out.msfm> <in1.msfm> [in2.msfm ...]\n"
     "\n"
@@ -522,7 +524,12 @@ static int usage(void) {
     "\n"
     "Arguments:\n"
     "  <query.cg>   Query methylome(s), one record per sample or cell.\n"
-    "  <ref.cm>     MRMP pattern definition (a YAME .cm); a bundle also works.\n"
+    "  <ref.mrmp>   A pooled MRMP. A .mrmp is a chain, so ONE argument carries\n"
+    "               every set, and set names come from the blocks -- no loose\n"
+    "               .cm files and no order.txt to keep in step with it. This is\n"
+    "               the normal input.\n"
+    "  <ref.cm>     Exported masks, one per set; a bundle also works. Equivalent,\n"
+    "               but the caller owns keeping them together and in order.\n"
     "\n"
     "Options:\n"
     "  -o <out>       Output .msfm (required).\n"
@@ -559,6 +566,69 @@ static int usage(void) {
     "  65535 = NA), the same encoding the upscale msur uses for truth.\n"
     "\n");
   return 1;
+}
+
+/* Expand the mask arguments into one .cm per set.
+ *
+ * A single .mrmp argument is a CHAIN and expands into all its sets, each written
+ * to a temp .cm. That is the point of pruning at mrmp-pool: the pooled artifact
+ * holds exactly the patterns it claims, so it can be handed here directly and
+ * the caller never has to keep 100 loose .cm files (or an order.txt) in step
+ * with it. Set names then come from the BLOCKS rather than from mask basenames,
+ * which makes the Pna.<set> columns exact rather than filename-derived.
+ *
+ * N .cm arguments still work unchanged -- that is what mrmp-export produces and
+ * what YAME tooling reads. */
+static void expand_mask_args(int n_arg, char *const *arg, uint32_t *n_out,
+                             const char ***refs_out, char ***tmps_out,
+                             char ***names_out) {
+  int is_chain = 0;
+  if (n_arg == 1) {
+    FILE *f = fopen(arg[0], "rb");
+    if (f) {
+      char magic[8];
+      is_chain = fread(magic, 1, 8, f) == 8 && !memcmp(magic, "MRMPIDX1", 8);
+      fclose(f);
+    }
+  }
+  if (!is_chain) {
+    uint32_t n = (uint32_t)n_arg;
+    const char **refs = xmal(n * sizeof(char *), "mask list");
+    char **tmps = xmal(n * sizeof(char *), "mask temps");
+    char **nms = xmal(n * sizeof(char *), "set names");
+    for (uint32_t s = 0; s < n; ++s) {
+      tmps[s] = NULL;
+      refs[s] = ms_mrmp_resolve(arg[s], &tmps[s]);
+      const char *b = strrchr(arg[s], '/'); b = b ? b + 1 : arg[s];
+      size_t ln = strlen(b);
+      const char *dot = strrchr(b, '.');
+      if (dot && dot != b) ln = (size_t)(dot - b);
+      nms[s] = xmal(ln + 1, "set name");
+      memcpy(nms[s], b, ln); nms[s][ln] = '\0';
+    }
+    *n_out = n; *refs_out = refs; *tmps_out = tmps; *names_out = nms;
+    return;
+  }
+
+  ms_mrmpset_t *ch = ms_mrmpset_open(arg[0]);
+  uint32_t n = ch->n_sets;
+  const char **refs = xmal(n * sizeof(char *), "mask list");
+  char **tmps = xmal(n * sizeof(char *), "mask temps");
+  char **nms = xmal(n * sizeof(char *), "set names");
+  for (uint32_t s = 0; s < n; ++s) {
+    char tpl[] = "/tmp/methscope_mrmpXXXXXX";
+    int fd = mkstemp(tpl);
+    if (fd < 0) fdie("cannot create a temporary mask", tpl);
+    close(fd);
+    ms_mrmp_write_mask_at(arg[0], ch->block_off[s], ch->block_bytes[s], tpl,
+                          "Pna", UINT32_MAX);
+    tmps[s] = strdup(tpl); refs[s] = tmps[s];
+    nms[s] = strdup(ch->name[s]);
+  }
+  fprintf(stderr, "[methscope] classify-featurize: %s holds %u set(s)\n",
+          arg[0], n);
+  ms_mrmpset_free(ch);
+  *n_out = n; *refs_out = refs; *tmps_out = tmps; *names_out = nms;
 }
 
 /* Parse a comma list of coverage targets into rep_sample, repeated `reps` times
@@ -620,9 +690,9 @@ int main_classify_featurize(int argc, char *argv[]) {
 
   if (argc - i < 2) return usage();
   const char *query = argv[i];
-  uint32_t n_sets = (uint32_t)(argc - i - 1);
-  char *tmp_mrmp = NULL;
-  const char *ref = ms_mrmp_resolve(argv[i + 1], &tmp_mrmp);
+  uint32_t n_sets; const char **refs; char **tmps; char **snames;
+  expand_mask_args(argc - i - 1, argv + i + 1, &n_sets, &refs, &tmps, &snames);
+  const char *ref = refs[0];
 
   /* The sampled builder is the DEFAULT: it reproduces the summarize1 path
    * bit-for-bit (verified on the full pattern set) and is the only one that can
@@ -660,19 +730,13 @@ int main_classify_featurize(int argc, char *argv[]) {
        * is not an option: a .cm gives each CpG exactly one pattern, so
        * overlapping sets would fight over the CpGs they share, which are
        * precisely the informative ones. */
-      const char **refs = xmal(n_sets * sizeof(char *), "mask list");
-      char **tmps = xmal(n_sets * sizeof(char *), "mask temps");
       uint32_t *np = xmal(n_sets * sizeof(uint32_t), "pattern counts");
       /* --patterns caps the FIRST set only. The others auto-detect from their
        * own mask (np = 0), because a satellite holds 2-30 patterns and giving
        * it the global's cap would pad it with thousands of empty columns --
        * 15 satellites x 6001 would be 90k columns of which ~90 are real. */
-      refs[0] = ref; tmps[0] = tmp_mrmp; np[0] = patterns;
-      for (uint32_t s = 1; s < n_sets; ++s) {
-        tmps[s] = NULL;
-        refs[s] = ms_mrmp_resolve(argv[i + 1 + s], &tmps[s]);
-        np[s] = 0;
-      }
+      np[0] = patterns;
+      for (uint32_t s = 1; s < n_sets; ++s) np[s] = 0;
       uint32_t *col0 = xmal(n_sets * sizeof(uint32_t), "set offsets");
       ms_msfm_build_sampled_multi(query, refs, np, n_sets, rep_sample, n_reps,
                                   binarize, min_cpgs, seed, threads,
@@ -681,31 +745,21 @@ int main_classify_featurize(int argc, char *argv[]) {
               "%u columns; set starts:", n_sets, ncol);
       for (uint32_t s = 0; s < n_sets; ++s) fprintf(stderr, " %u", col0[s]);
       fputc('\n', stderr);
-      for (uint32_t s = 1; s < n_sets; ++s) ms_mrmp_cleanup(tmps[s]);
-      /* A set's name is its mask's basename, which mrmp-export writes as
-       * <set>.cm -- so the background column says WHICH set it belongs to. */
-      set_names = xmal(n_sets * sizeof(char *), "set names");
-      for (uint32_t s = 0; s < n_sets; ++s) {
-        const char *p = argv[i + 1 + s], *b = strrchr(p, '/');
-        b = b ? b + 1 : p;
-        size_t ln = strlen(b);
-        const char *dot = strrchr(b, '.');
-        if (dot && dot != b) ln = (size_t)(dot - b);
-        set_names[s] = xmal(ln + 1, "set name");
-        memcpy(set_names[s], b, ln); set_names[s][ln] = '\0';
-      }
+      set_names = snames; snames = NULL;       /* ownership moves to the writer */
       n_sets_out = n_sets; col0_out = col0;
-      free(refs); free(tmps); free(np);
+      free(np);
     }
     char **lab = labels ? read_labels(labels, (int)n_cells) : NULL;
     write_msfm_raw(out, beta, levels, names, n_cells, n_reps, ncol, lab,
                    rep_sample, n_sets_out, col0_out, set_names);
     if (set_names) { for (uint32_t s = 0; s < n_sets_out; ++s) free(set_names[s]); free(set_names); }
     free(col0_out);
+    if (snames) { for (uint32_t s = 0; s < n_sets; ++s) free(snames[s]); free(snames); }
+    for (uint32_t s = 0; s < n_sets; ++s) ms_mrmp_cleanup(tmps[s]);
+    free(refs); free(tmps);
     if (lab) { for (uint32_t r = 0; r < n_cells; ++r) free(lab[r]); free(lab); }
     for (uint32_t r = 0; r < n_cells; ++r) free(names[r]);
     free(names); free(beta); free(levels); free(rep_sample);
-    ms_mrmp_cleanup(tmp_mrmp);
     return 0;
   }
 
@@ -714,6 +768,9 @@ int main_classify_featurize(int argc, char *argv[]) {
   write_msfm(out, m, lab);
   if (lab) { for (int r = 0; r < m->n_cells; ++r) free(lab[r]); free(lab); }
   ms_matrix_free(m);
-  ms_mrmp_cleanup(tmp_mrmp);
+  /* the legacy scan path uses only the first mask; release the rest */
+  for (uint32_t s = 0; s < n_sets; ++s) ms_mrmp_cleanup(tmps[s]);
+  for (uint32_t s = 0; s < n_sets; ++s) free(snames[s]);
+  free(refs); free(tmps); free(snames);
   return 0;
 }

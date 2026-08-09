@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include "bundle.h"
+#include "mrmp.h"
 #include "methscope.h"    /* ms_annotate_booster (for bundle -l) */
 
 #define NAMELEN 16
@@ -158,10 +159,29 @@ int ms_bundle_find(const char *path, const char *name, ms_bundle_entry_t *out) {
 
 const char *ms_mrmp_resolve(const char *path, char **tmp_out) {
   *tmp_out = NULL;
-  /* bundles begin with the raw MRMP .cm bytes (a valid YAME file whose BGZF EOF
-     makes yame stop before the MSBNDL1 trailer), and a loose .cm is already what we
-     want — so in both cases the path can be handed straight to open_cfile. */
-  return path;
+  /* A loose .cm is already what open_cfile wants, and a .cm-bearing bundle is
+     too: its .cm is the file prefix and yame stops at that .cm's BGZF EOF,
+     ignoring the MSBNDL1 trailer. Either way the path goes straight through.
+
+     A .mrmp does not: it is the artifact, not the runtime mask. Callers that
+     want EVERY set of a chain expand it themselves (classify-featurize does).
+     This is the single-set path -- deconv, build-reference -- so it materializes
+     the FIRST block as a temp .cm and hands that back, which is what the
+     (path, tmp_out) contract and ms_mrmp_cleanup() were always for. */
+  FILE *f = fopen(path, "rb");
+  if (!f) return path;
+  char magic[8];
+  int is_mrmp = fread(magic, 1, 8, f) == 8 && !memcmp(magic, MRMPIDX_MAGIC, 8);
+  fclose(f);
+  if (!is_mrmp) return path;
+
+  char tpl[] = "/tmp/methscope_resolve_XXXXXX.cm";
+  int fd = mkstemps(tpl, 3);
+  if (fd < 0) bdie("cannot create a temporary mask", tpl);
+  close(fd);
+  ms_mrmp_write_mask(path, tpl, "Pna", UINT32_MAX);
+  *tmp_out = strdup(tpl);
+  return *tmp_out;
 }
 
 void ms_mrmp_cleanup(char *tmp) {

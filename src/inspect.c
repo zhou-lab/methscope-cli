@@ -126,6 +126,11 @@ int main_inspect(int argc, char *argv[]) {
   ssize_t got = pread(mfd, magic, sizeof(magic), 0);
   close(mfd);
   if (got < 8) idie("file is too short to identify", path);
+  /* Bundle first: a bundle now leads with the .mrmp bytes, so its first magic
+   * IS MRMPIDX1 and the chain branch below would claim it. ms_bundle_is() looks
+   * at the footer, which only a bundle has. */
+  if (ms_bundle_is(path)) goto bundle_report;
+
   /* One magic for both arities: a .mrmp is a chain of MRMPIDX1 blocks, so the
    * SET COUNT picks the report rather than a second magic. */
   if (!memcmp(magic, "MRMPIDX1", 8)) {
@@ -141,6 +146,7 @@ int main_inspect(int argc, char *argv[]) {
   if (argc != 2) return inspect_usage();
   if (!ms_bundle_is(path))
     idie("not a methscope bundle, .mrmp, .msui, or .msur", path);
+bundle_report:;
 
   char  *kind = ms_bundle_kind(path);               /* NULL if unmarked */
   ms_bundle_entry_t me;
