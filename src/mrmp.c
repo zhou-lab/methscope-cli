@@ -1232,6 +1232,8 @@ static void chain_write_streamed(const char *out, uint32_t n_sets,
 
 /* ---------------- inspect ----------------------------------------------- */
 
+static const char *commafmt_local(uint64_t v, char *buf);
+
 int main_mrmp_inspect(int argc, char *argv[]) {
   g_cmd = "inspect";
   const char *path = NULL; int show_patterns = 0; uint32_t top_k = 20;
@@ -1252,33 +1254,66 @@ int main_mrmp_inspect(int argc, char *argv[]) {
   if (!path) die("need a FILE.mrmp", NULL);
   mrmp_reader_t r; mrmp_open(&r, path);
   const mrmp_header_t *h = r.h;
-  printf("format\tMRMPIDX1 v%u\n", h->version);
-  printf("reference\t%s\n", r.refname);
-  printf("samples\t%u\n", h->n_samples);
-  printf("pattern_length\t%u\n", h->n_samples);
-  printf("cpgs\t%" PRIu64 "\n", h->n_cpg);
-  printf("distinct_candidates\t%" PRIu64 "\n", h->n_candidates);
-  printf("selectable_patterns\t%u\n", h->n_selected);
-  printf("include_homogeneous\t%s\n",
-         (h->flags & MRMP_FLAG_INCLUDE_HOMOGENEOUS) ? "yes" : "no");
-  printf("pna_cpgs\t%" PRIu64 "\t%.4f%%\n", h->pna_cpg,
-         100.0 * (double)h->pna_cpg / (double)h->n_cpg);
-  printf("binstring\tmincov=%u beta=%.3f max_ambig_frac=%.3f min_major_fold=%.3f\n",
-         h->mincov, h->beta_threshold, h->max_ambig_frac, h->min_major_fold);
-  printf("content_checksum\t%016" PRIx64 "\n", h->content_checksum);
-  char *buf = xcalloc(h->n_samples + 1, 1, "string buffer");
+  char cb[32], cb2[32];
+  const char *nm = h->name_offset ? r.blk + h->name_offset : NULL;
+  uint64_t covered = h->n_cpg - h->pna_cpg;
+  uint64_t memb_b = (h->flags & MRMP_FLAG_MEMB_RLE)
+                  ? h->membership_bytes : h->n_cpg * sizeof(uint32_t);
+  uint64_t blk_b = ms_mrmp_block_bytes(h);
+
+  printf("\nMRMP  %s\n", path);
+  printf("  %-14s MRMPIDX1 v%u, one set\n", "format", h->version);
+  if (nm) printf("  %-14s %s\n", "name", nm);
+  printf("  %-14s %s\n", "reference", r.refname);
+  printf("\n");
+  printf("  %-14s %u\n", "classes", h->n_samples);
+  printf("  %-14s %s\n", "patterns", commafmt_local(h->n_candidates, cb));
+  printf("  %-14s %s of %s CpGs (%.2f%%)\n", "covered",
+         commafmt_local(covered, cb), commafmt_local(h->n_cpg, cb2),
+         h->n_cpg ? 100.0 * covered / (double)h->n_cpg : 0.0);
+  printf("  %-14s %s CpGs (%.2f%%) match no pattern\n", "PNA",
+         commafmt_local(h->pna_cpg, cb),
+         h->n_cpg ? 100.0 * h->pna_cpg / (double)h->n_cpg : 0.0);
+  printf("\n");
+
+  /* Storage, because it is the thing that changed most and the thing a reader
+   * most often wants to check: membership dominates a block, so its encoding
+   * and its ratio explain the file size on their own. */
+  printf("  %-14s %s bytes\n", "block", commafmt_local(blk_b, cb));
+  printf("  %-14s %s bytes, %s (%.0fx vs dense)\n", "membership",
+         commafmt_local(memb_b, cb),
+         (h->flags & MRMP_FLAG_MEMB_BGZF) ? "RLE + BGZF"
+           : (h->flags & MRMP_FLAG_MEMB_RLE) ? "RLE" : "dense uint32",
+         memb_b ? (double)(h->n_cpg * 4) / (double)memb_b : 1.0);
+  printf("  %-14s %s\n", "thresholds",
+         (h->flags & MRMP_FLAG_THRESH) ? "present (per-pattern midpoints)"
+                                       : "absent (consumers assume 0.5)");
+  printf("\n");
+  printf("  %-14s mincov=%u beta=%.3f max_ambig=%.3f min_major_fold=%.3f\n",
+         "resolution", h->mincov, h->beta_threshold, h->max_ambig_frac,
+         h->min_major_fold);
+  printf("  %-14s %016" PRIx64 "  (over the per-CpG key stream)\n",
+         "checksum", h->content_checksum);
+  if (h->n_selected != h->n_candidates)
+    printf("  %-14s only the first %u pattern(s) are live -- this file predates\n"
+           "  %-14s mrmp-pool's prune and carries more than it uses\n",
+           "NOTE", h->n_selected, "");
+  printf("\n");
+
   /* The header stores only word 0 of the sentinel, so rebuild the full key --
    * it is all-'2' and therefore fully determined by n_samples -- and check the
    * stored word agrees, which catches a header/sample-count mismatch. */
+  char *buf = xcalloc(h->n_samples + 1, 1, "string buffer");
   uint32_t pna_nw = mrmp_key_words(h->n_samples);
   uint64_t *pna = xcalloc(pna_nw, sizeof(uint64_t), "pna key");
-  for (uint32_t s = 0; s < h->n_samples; ++s)
-    pna[s / MRMP_TRITS_PER_WORD] = pna[s / MRMP_TRITS_PER_WORD] * 3 + 2;
+  for (uint32_t sIdx = 0; sIdx < h->n_samples; ++sIdx)
+    pna[sIdx / MRMP_TRITS_PER_WORD] = pna[sIdx / MRMP_TRITS_PER_WORD] * 3 + 2;
   if (pna[0] != h->pna_key) die("PNA key disagrees with n_samples", path);
   key_to_string(pna, h->n_samples, buf);
   free(pna);
-  printf("pna_pattern\t%s\n", buf);
+
   if (show_patterns) {
+    printf("  PNA sentinel  %s\n\n", buf);
     uint64_t lim = top_k < h->n_candidates ? top_k : h->n_candidates;
     printf("#pattern\tlabel\tcount\t(top %" PRIu64 " of %" PRIu64 ")\n",
            lim, h->n_candidates);
@@ -2122,26 +2157,23 @@ static int cand_cmp(const void *a, const void *b) {
   return strcmp(x->name, y->name);          /* ties resolve by name, not by luck */
 }
 
-/* `<prefix><a>_<b>`, lowercased with '-' removed -- `th_` for the thin
- * generator, matching the names the Python driver wrote so a rebuilt satellite
- * is recognisable against the runs that measured these settings, and `nb_` for
- * the neighbor one. The prefix is what tells a pooled `inspect` table which
- * generator proposed a set, since nothing else downstream distinguishes them. */
-static char *pair_set_name(const char *prefix, const char *t, const char *p) {
-  size_t np = strlen(prefix);
-  size_t n = np + strlen(t) + strlen(p) + 2;   /* '_' separator, then NUL */
+/* `<generator>_<a>_<b>` -- e.g. thin_ANP_ASC, neighbor_IT-L5_IT-L6.
+ *
+ * The generator is spelled out because the name is the only place it survives:
+ * a set is a set, and nothing downstream distinguishes them, so "which
+ * generator proposed this" is readable in a pooled `inspect` table or nowhere.
+ * It was `th_`/`nb_` to match the Python driver's names; that mattered only
+ * while runs were being compared across the two implementations.
+ *
+ * Class labels go in VERBATIM rather than lowercased with '-' stripped. `IT-L5`
+ * is what the label actually is, and `itl5` was a second decoding step for a
+ * reader. None of the vocabulary contains '_', so the separator stays
+ * unambiguous. The name also becomes a .cm record name and the `Pna.<set>`
+ * column name, so it avoids '.' (already the Pna separator) and ':'. */
+static char *pair_set_name(const char *prefix, const char *a, const char *b) {
+  size_t n = strlen(prefix) + strlen(a) + strlen(b) + 2;
   char *s = xcalloc(n, 1, "set name");
-  size_t j = np;
-  const char *src[2] = {t, p};
-  memcpy(s, prefix, np);
-  for (int u = 0; u < 2; ++u) {
-    if (u) s[j++] = '_';
-    for (const char *c = src[u]; *c; ++c) {
-      if (*c == '-') continue;
-      s[j++] = (*c >= 'A' && *c <= 'Z') ? (char)(*c - 'A' + 'a') : *c;
-    }
-  }
-  s[j] = '\0';
+  snprintf(s, n, "%s%s_%s", prefix, a, b);
   return s;
 }
 
@@ -2361,7 +2393,7 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
     uint32_t k1 = pa[q] < pb[q] ? pb[q] : pa[q];
     char *lab[2] = {slab[k0], slab[k1]};
     int64_t vo[2] = {voff[k0], voff[k1]};
-    name[q] = pair_set_name("th_", slab[pa[q]], slab[pb[q]]);
+    name[q] = pair_set_name("thin_", slab[pa[q]], slab[pb[q]]);
     fprintf(stderr, "  [%u/%u] %-24s %s + %s  projection %.5f\n",
             q + 1, npair, name[q], slab[pa[q]], slab[pb[q]], pd[q]);
     subset_block_t sb;
@@ -2621,7 +2653,7 @@ int main_mrmp_build_neighbor(int argc, char *argv[]) {
   if (dry_run) {
     printf("#set\tclass_a\tclass_b\tdistance\n");
     for (uint32_t q = 0; q < npair; ++q) {
-      char *nm = pair_set_name("nb_", t->labels[pa[q]], t->labels[pb[q]]);
+      char *nm = pair_set_name("neighbor_", t->labels[pa[q]], t->labels[pb[q]]);
       printf("%s\t%s\t%s\t%.6f\n", nm, t->labels[pa[q]], t->labels[pb[q]], pd[q]);
       free(nm);
     }
@@ -2641,7 +2673,7 @@ int main_mrmp_build_neighbor(int argc, char *argv[]) {
     uint32_t k0 = s0 < s1 ? s0 : s1, k1 = s0 < s1 ? s1 : s0;
     char *lab[2] = {slab[k0], slab[k1]};
     int64_t vo[2] = {voff[k0], voff[k1]};
-    name[q] = pair_set_name("nb_", t->labels[pa[q]], t->labels[pb[q]]);
+    name[q] = pair_set_name("neighbor_", t->labels[pa[q]], t->labels[pb[q]]);
     fprintf(stderr, "  [%u/%u] %-24s %s + %s  distance %.5f\n",
             q + 1, npair, name[q], t->labels[pa[q]], t->labels[pb[q]], pd[q]);
     subset_block_t sb;
@@ -2661,6 +2693,17 @@ int main_mrmp_build_neighbor(int argc, char *argv[]) {
   return 0;
 }
 
+/* Thousands separators. inspect.c has its own; this one keeps mrmp.c's reports
+ * self-contained rather than exporting that one for two call sites. */
+static const char *commafmt_local(uint64_t v, char *buf) {
+  char tmp[24]; int n = snprintf(tmp, sizeof tmp, "%" PRIu64, v);
+  int commas = (n - 1) / 3, len = n + commas;
+  buf[len] = '\0';
+  int bi = len - 1, oi = n - 1, cnt = 0;
+  while (oi >= 0) { buf[bi--] = tmp[oi--]; if (++cnt % 3 == 0 && oi >= 0) buf[bi--] = ','; }
+  return buf;
+}
+
 /* ---------------- inspect: the multi-set arm ----------------------------- */
 
 /* Per-set dimensions, then the POOLED view -- which sets would actually
@@ -2671,27 +2714,52 @@ int main_mrmp_build_neighbor(int argc, char *argv[]) {
 int main_mrmpset_inspect(const char *path) {
   g_cmd = "inspect";
   ms_mrmpset_t *s = ms_mrmpset_open(path);
-  printf("MRMP chain: %s\n", path);
-  printf("  sets: %u\n\n", s->n_sets);
 
-  /* gather every pattern from every set for the pooled table */
-  uint64_t total = 0;
   mrmp_top_t **top = xcalloc(s->n_sets, sizeof(*top), "per-set tops");
+  uint64_t total_pat = 0, total_cpg = 0, n_cpg_rows = 0, file_bytes = 0;
+  uint32_t wname = 3;
   for (uint32_t i = 0; i < s->n_sets; ++i) {
     top[i] = ms_mrmp_top_read_at(path, s->block_off[i], UINT32_MAX);
-    total += top[i]->n_patterns;
+    total_pat += top[i]->n_patterns;
+    file_bytes += s->block_bytes[i];
+    size_t ln = strlen(s->name[i]);
+    if (ln > wname) wname = (uint32_t)ln;          /* names decide the width */
   }
+  { mrmp_reader_t r; mrmp_open_at(&r, path, s->block_off[0], s->block_bytes[0]);
+    n_cpg_rows = r.h->n_cpg; mrmp_close(&r); }
 
-  printf("  %-12s %7s %9s %12s  %s\n", "set", "classes", "patterns", "CpGs", "members");
+  char cb[32], cb2[32];
+  /* Per-set CpG totals first: the summary is the headline, so it has to be
+   * computed before anything is printed rather than tallied under the table. */
+  uint64_t *set_cpg = xcalloc(s->n_sets, sizeof(uint64_t), "per-set CpGs");
+  for (uint32_t i = 0; i < s->n_sets; ++i) {
+    for (uint32_t p = 0; p < top[i]->n_patterns; ++p) set_cpg[i] += top[i]->count[p];
+    total_cpg += set_cpg[i];
+  }
+  const double pct = n_cpg_rows ? 100.0 * total_cpg / (double)n_cpg_rows : 0.0;
+
+  printf("\nMRMP  %s\n", path);
+  printf("  %-14s %u\n", "sets", s->n_sets);
+  printf("  %-14s %s over %s CpGs (%.2f%% of the row space)\n", "patterns",
+         commafmt_local(total_pat, cb), commafmt_local(total_cpg, cb2), pct);
+  printf("  %-14s the remaining %.2f%% -- no set has a pattern there\n",
+         "PNA", 100.0 - pct);
+  printf("  %-14s %s CpG rows\n", "row space", commafmt_local(n_cpg_rows, cb));
+  printf("  %-14s %s bytes\n", "on disk", commafmt_local(file_bytes, cb));
+  printf("\n");
+
+  /* Width follows the longest name, so a 24-char satellite cannot shove the
+   * numeric columns out of line the way a fixed %-12s did. */
+  printf("  %-*s  %7s  %8s  %12s  %6s  %s\n", wname, "set",
+         "classes", "patterns", "CpGs", "share", "members");
   for (uint32_t i = 0; i < s->n_sets; ++i) {
     mrmp_top_t *t = top[i];
-    uint64_t cpg = 0;
-    for (uint32_t p = 0; p < t->n_patterns; ++p) cpg += t->count[p];
-    printf("  %-12s %7u %9u %12" PRIu64 "  ", s->name[i], t->n_samples,
-           t->n_patterns, cpg);
+    printf("  %-*s  %7u  %8u  %12s  %5.1f%%  ", wname, s->name[i],
+           t->n_samples, t->n_patterns, commafmt_local(set_cpg[i], cb),
+           total_pat ? 100.0 * t->n_patterns / (double)total_pat : 0.0);
     /* naming every class is the point for a satellite; for a big global set it
      * would be noise, so elide past a handful */
-    if (t->n_samples <= 8) {
+    if (t->n_samples <= 6) {
       for (uint32_t k = 0; k < t->n_samples; ++k)
         printf("%s%s", k ? ", " : "", t->labels[k]);
     } else {
@@ -2701,38 +2769,14 @@ int main_mrmpset_inspect(const char *path) {
     putchar('\n');
   }
 
-  /* pooled rank by CpG count, the same order the featurizer selects in */
-  typedef struct { uint64_t cnt; uint32_t set; } pc_t;
-  pc_t *all = xcalloc(total ? total : 1, sizeof(*all), "pooled");
-  uint64_t n = 0;
-  for (uint32_t i = 0; i < s->n_sets; ++i)
-    for (uint32_t p = 0; p < top[i]->n_patterns; ++p) {
-      all[n].cnt = top[i]->count[p]; all[n].set = i; ++n;
-    }
-  for (uint64_t a = 1; a < n; ++a) {            /* insertion sort by -cnt */
-    pc_t v = all[a]; uint64_t b = a;
-    while (b && all[b-1].cnt < v.cnt) { all[b] = all[b-1]; --b; }
-    all[b] = v;
-  }
-  static const uint64_t CUTS[] = {100, 500, 1000, 2000};
-  printf("\n  pooled selection by CpG count (what --top actually keeps)\n");
-  printf("  %-8s %10s  %s\n", "--top", "CpG floor", "columns per set");
-  uint32_t *per = xcalloc(s->n_sets, sizeof(uint32_t), "per-set counts");
-  for (unsigned c = 0; c < sizeof(CUTS)/sizeof(*CUTS); ++c) {
-    uint64_t k = CUTS[c] < n ? CUTS[c] : n;
-    if (!k) continue;
-    memset(per, 0, s->n_sets * sizeof(uint32_t));
-    for (uint64_t a = 0; a < k; ++a) per[all[a].set]++;
-    printf("  %-8" PRIu64 " %10" PRIu64 "  ", CUTS[c], all[k-1].cnt);
-    for (uint32_t i = 0; i < s->n_sets; ++i)
-      printf("%s%s=%u", i ? " " : "", s->name[i], per[i]);
-    putchar('\n');
-  }
-  printf("\n  %" PRIu64 " patterns available across all sets\n", n);
-
-  free(per); free(all);
+  /* The per-set totals ARE the budget now. There used to be a table here
+   * simulating what a further --top K would keep, back when the cut was a view
+   * over patterns that all stayed on disk; mrmp-pool prunes, so a set holds
+   * exactly its columns and the simulation answered a question that no longer
+   * exists -- while printing 100 name=count pairs on one line. */
+  printf("\n");
   for (uint32_t i = 0; i < s->n_sets; ++i) ms_mrmp_top_free(top[i]);
-  free(top);
+  free(top); free(set_cpg);
   ms_mrmpset_free(s);
   return 0;
 }
