@@ -245,6 +245,30 @@ static void *worker(void *arg) {
   return NULL;
 }
 
+/* Two passes over a block's membership runs: count memberships per CpG, then
+ * fill the flat column array. `base` is the set's first global column so the
+ * fill writes the final column id and the worker needs no per-set arithmetic. */
+typedef struct {
+  uint32_t *cnt;        /* count pass */
+  uint16_t *col;        /* fill pass */
+  uint32_t *cur;        /* fill pass: per-CpG write cursor */
+  const uint32_t *off;  /* fill pass: per-CpG start */
+  uint32_t base, patterns;
+} runacc_t;
+
+static void run_count(void *ctx, uint64_t start, uint64_t len, uint32_t rank) {
+  runacc_t *a = ctx;
+  if (rank == MRMP_PNA_MEMBERSHIP || rank >= a->patterns) return;
+  for (uint64_t i = start; i < start + len; ++i) ++a->cnt[i];
+}
+static void run_fill(void *ctx, uint64_t start, uint64_t len, uint32_t rank) {
+  runacc_t *a = ctx;
+  if (rank == MRMP_PNA_MEMBERSHIP || rank >= a->patterns) return;
+  uint16_t col = (uint16_t)(a->base + rank);
+  for (uint64_t i = start; i < start + len; ++i)
+    a->col[a->off[i] + a->cur[i]++] = col;
+}
+
 /* ---- entry point -------------------------------------------------------- */
 
 ms_matrix_t *ms_matrix_build_threaded(const char *query, const char *mrmp,
@@ -287,7 +311,7 @@ void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t pattern
                            uint32_t *ncol_out) {
   const char *one[1] = {mrmp};
   uint32_t np[1] = {patterns};
-  ms_msfm_build_sampled_multi(query, one, np, 1, rep_sample, n_reps, binarize,
+  ms_msfm_build_sampled_multi(query, one, NULL, NULL, np, 1, rep_sample, n_reps, binarize,
                               min_cpgs, seed, threads, beta_out, levels_out,
                               names_out, n_cells_out, ncol_out, NULL);
 }
@@ -297,6 +321,7 @@ void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t pattern
  * With n_sets == 1 the layout and the arithmetic are identical to the old
  * single-mask path, which is what lets the wrapper above stay byte-compatible. */
 void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
+                           const uint64_t *mrmp_base, const uint64_t *mrmp_len,
                            const uint32_t *patterns_in, uint32_t n_sets,
                            const uint32_t *rep_sample, uint32_t n_reps,
                            int binarize, uint32_t min_cpgs,
@@ -342,18 +367,28 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   uint32_t *cpg_cnt = bmal((size_t)(n_cpg + 1) * sizeof(uint32_t), "cpg membership counts");
   memset(cpg_cnt, 0, (size_t)(n_cpg + 1) * sizeof(uint32_t));
   uint16_t **stage = bmal((size_t)n_sets * sizeof(uint16_t *), "staged maps");
-  for (uint32_t si = 0; si < n_sets; ++si) stage[si] = NULL;
+  uint8_t *ra_base = bmal((size_t)n_sets, "run-walk flags");
+  for (uint32_t si = 0; si < n_sets; ++si) { stage[si] = NULL; ra_base[si] = 0; }
   uint32_t *pna_col = bmal((size_t)n_sets * sizeof(uint32_t), "pna cols");
   uint32_t *set_col0 = bmal((size_t)n_sets * sizeof(uint32_t), "set offsets");
   uint32_t ncol = 0;
   for (uint32_t si = 0; si < n_sets; ++si) {
   mrmp = mrmps[si];
   patterns = patterns_in[si];
-  uint16_t *group = bmal((size_t)n_cpg * sizeof(uint16_t), "group map");
+  uint16_t *group = NULL;
   if (ms_mrmp_is_artifact(mrmp)) {
-    ms_mrmp_group_map(mrmp, group, n_cpg, patterns);
+    /* A .mrmp block is walked as runs in place -- no dense map, and no temp .cm
+     * materialised on the way in. Exporting one per block used to inflate a
+     * membership, walk it twice and recompress a 175 MB buffer, ~0.86 s per set
+     * before a single cell was read. */
     if (!patterns) bdie("artifact needs an explicit pattern count", mrmp);
+    runacc_t ra; memset(&ra, 0, sizeof ra);
+    ra.cnt = cpg_cnt; ra.patterns = patterns;
+    ms_mrmp_membership_runs(mrmp, mrmp_base ? mrmp_base[si] : 0,
+                            mrmp_len ? mrmp_len[si] : 0, run_count, &ra);
+    ra_base[si] = 1;                       /* mark: fill from runs, not a map */
   } else {
+    group = bmal((size_t)n_cpg * sizeof(uint16_t), "group map");
     cfile_t cmf = open_cfile((char *)mrmp);
     cdata_t cm = read_cdata1(&cmf);
     bgzf_close(cmf.fh);
@@ -434,10 +469,13 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
    * the map is rewritten to address the GLOBAL column so the worker needs no
    * per-set offset arithmetic in its inner loop */
   set_col0[si] = ncol;
-  for (uint64_t i = 0; i < n_cpg; ++i)
-    if (group[i]) group[i] = (uint16_t)(set_col0[si] + group[i]);
+  /* Only the dense path needs rebasing here; the run walk writes the final
+   * column directly, and `group` is NULL for it. */
+  if (group)
+    for (uint64_t i = 0; i < n_cpg; ++i)
+      if (group[i]) group[i] = (uint16_t)(set_col0[si] + group[i]);
   stage[si] = group;
-  for (uint64_t i = 0; i < n_cpg; ++i) if (group[i]) ++cpg_cnt[i];
+  if (group) for (uint64_t i = 0; i < n_cpg; ++i) if (group[i]) ++cpg_cnt[i];
   pna_col[si] = ncol + patterns;
   ncol += patterns + 1;
   if (ncol > UINT16_MAX) bdie("fused column count exceeds uint16", mrmp);
@@ -452,12 +490,20 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   uint16_t *cpg_col = bmal((acc ? acc : 1) * sizeof(uint16_t), "cpg columns");
   memset(cpg_cnt, 0, (size_t)(n_cpg + 1) * sizeof(uint32_t));   /* reuse as cursor */
   for (uint32_t si = 0; si < n_sets; ++si) {
+    if (ra_base[si]) {
+      runacc_t ra; memset(&ra, 0, sizeof ra);
+      ra.col = cpg_col; ra.cur = cpg_cnt; ra.off = cpg_off;
+      ra.base = set_col0[si]; ra.patterns = pna_col[si] - set_col0[si];
+      ms_mrmp_membership_runs(mrmps[si], mrmp_base ? mrmp_base[si] : 0,
+                              mrmp_len ? mrmp_len[si] : 0, run_fill, &ra);
+      continue;
+    }
     const uint16_t *g = stage[si];
     for (uint64_t i = 0; i < n_cpg; ++i)
       if (g[i]) cpg_col[cpg_off[i] + cpg_cnt[i]++] = (uint16_t)(g[i] - 1);
     free(stage[si]);
   }
-  free(stage); free(cpg_cnt);
+  free(stage); free(cpg_cnt); free(ra_base);
   fprintf(stderr, "[methscope] classify-featurize: %" PRIu64 " pattern membership(s) "
           "over %" PRIu64 " CpGs (%.2f%% carry any)\n", acc, n_cpg,
           100.0 * (double)acc / (double)n_cpg);

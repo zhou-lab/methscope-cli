@@ -148,6 +148,7 @@ void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t pattern
  *
  * set_col0_out (optional) receives the first column of each set. */
 void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
+                           const uint64_t *mrmp_base, const uint64_t *mrmp_len,
                            const uint32_t *patterns, uint32_t n_sets,
                            const uint32_t *rep_sample, uint32_t n_reps,
                            int binarize, uint32_t min_cpgs,

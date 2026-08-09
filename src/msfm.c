@@ -581,7 +581,8 @@ static int usage(void) {
  * what YAME tooling reads. */
 static void expand_mask_args(int n_arg, char *const *arg, uint32_t *n_out,
                              const char ***refs_out, char ***tmps_out,
-                             char ***names_out) {
+                             char ***names_out, uint64_t **base_out,
+                             uint64_t **len_out, uint32_t **pat_out) {
   int is_chain = 0;
   if (n_arg == 1) {
     FILE *f = fopen(arg[0], "rb");
@@ -607,24 +608,32 @@ static void expand_mask_args(int n_arg, char *const *arg, uint32_t *n_out,
       memcpy(nms[s], b, ln); nms[s][ln] = '\0';
     }
     *n_out = n; *refs_out = refs; *tmps_out = tmps; *names_out = nms;
+    *base_out = NULL; *len_out = NULL; *pat_out = NULL;
     return;
   }
 
+  /* A chain is handed over BY REFERENCE: same path, one (offset, length) per
+   * block. Nothing is materialised. Exporting a temp .cm per set used to inflate
+   * each membership, walk it twice and recompress a 175 MB buffer -- ~0.86 s per
+   * set, which at 100 sets was most of a featurize run before any cell was
+   * read. The builder walks the block's runs in place instead. */
   ms_mrmpset_t *ch = ms_mrmpset_open(arg[0]);
   uint32_t n = ch->n_sets;
   const char **refs = xmal(n * sizeof(char *), "mask list");
   char **tmps = xmal(n * sizeof(char *), "mask temps");
   char **nms = xmal(n * sizeof(char *), "set names");
+  uint64_t *base = xmal(n * sizeof(uint64_t), "block offsets");
+  uint64_t *blen = xmal(n * sizeof(uint64_t), "block lengths");
+  uint32_t *pat = xmal(n * sizeof(uint32_t), "per-set patterns");
   for (uint32_t s = 0; s < n; ++s) {
-    char tpl[] = "/tmp/methscope_mrmpXXXXXX";
-    int fd = mkstemp(tpl);
-    if (fd < 0) fdie("cannot create a temporary mask", tpl);
-    close(fd);
-    ms_mrmp_write_mask_at(arg[0], ch->block_off[s], ch->block_bytes[s], tpl,
-                          "Pna", UINT32_MAX);
-    tmps[s] = strdup(tpl); refs[s] = tmps[s];
+    tmps[s] = NULL; refs[s] = arg[0];
+    base[s] = ch->block_off[s]; blen[s] = ch->block_bytes[s];
     nms[s] = strdup(ch->name[s]);
+    mrmp_top_t *t = ms_mrmp_top_read_at(arg[0], ch->block_off[s], UINT32_MAX);
+    pat[s] = t->n_patterns;                 /* the block IS its patterns now */
+    ms_mrmp_top_free(t);
   }
+  *base_out = base; *len_out = blen; *pat_out = pat;
   fprintf(stderr, "[methscope] classify-featurize: %s holds %u set(s)\n",
           arg[0], n);
   ms_mrmpset_free(ch);
@@ -691,7 +700,9 @@ int main_classify_featurize(int argc, char *argv[]) {
   if (argc - i < 2) return usage();
   const char *query = argv[i];
   uint32_t n_sets; const char **refs; char **tmps; char **snames;
-  expand_mask_args(argc - i - 1, argv + i + 1, &n_sets, &refs, &tmps, &snames);
+  uint64_t *mbase, *mlen; uint32_t *mpat;
+  expand_mask_args(argc - i - 1, argv + i + 1, &n_sets, &refs, &tmps, &snames,
+                   &mbase, &mlen, &mpat);
   const char *ref = refs[0];
 
   /* The sampled builder is the DEFAULT: it reproduces the summarize1 path
@@ -735,10 +746,12 @@ int main_classify_featurize(int argc, char *argv[]) {
        * own mask (np = 0), because a satellite holds 2-30 patterns and giving
        * it the global's cap would pad it with thousands of empty columns --
        * 15 satellites x 6001 would be 90k columns of which ~90 are real. */
-      np[0] = patterns;
-      for (uint32_t s = 1; s < n_sets; ++s) np[s] = 0;
+      /* From a chain each block reports its own pattern count; --patterns still
+       * caps the first set for the loose .cm form. */
+      if (mpat) for (uint32_t s = 0; s < n_sets; ++s) np[s] = mpat[s];
+      else { np[0] = patterns; for (uint32_t s = 1; s < n_sets; ++s) np[s] = 0; }
       uint32_t *col0 = xmal(n_sets * sizeof(uint32_t), "set offsets");
-      ms_msfm_build_sampled_multi(query, refs, np, n_sets, rep_sample, n_reps,
+      ms_msfm_build_sampled_multi(query, refs, mbase, mlen, np, n_sets, rep_sample, n_reps,
                                   binarize, min_cpgs, seed, threads,
                                   &beta, &levels, &names, &n_cells, &ncol, col0);
       fprintf(stderr, "[methscope] classify-featurize: %u sets fused, "
@@ -756,7 +769,7 @@ int main_classify_featurize(int argc, char *argv[]) {
     free(col0_out);
     if (snames) { for (uint32_t s = 0; s < n_sets; ++s) free(snames[s]); free(snames); }
     for (uint32_t s = 0; s < n_sets; ++s) ms_mrmp_cleanup(tmps[s]);
-    free(refs); free(tmps);
+    free(refs); free(tmps); free(mbase); free(mlen); free(mpat);
     if (lab) { for (uint32_t r = 0; r < n_cells; ++r) free(lab[r]); free(lab); }
     for (uint32_t r = 0; r < n_cells; ++r) free(names[r]);
     free(names); free(beta); free(levels); free(rep_sample);
