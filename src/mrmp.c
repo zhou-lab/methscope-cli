@@ -2431,7 +2431,10 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
   ms_mrmp_write_mask(global, tpl, "Pna", UINT32_MAX);
   uint16_t *beta = NULL; uint32_t *levels = NULL; char **rec = NULL;
   uint32_t n_rec = 0, ncol = 0, native = 0;
-  ms_msfm_build_sampled(store, tpl, 0, &native, 1, 0, 0, 1, 1,
+  /* binarize_feat = 0: the projection is a distance between pattern-average
+   * vectors, so it needs continuous betas. Binarising here would collapse the
+   * partner distances onto a handful of values. */
+  ms_msfm_build_sampled(store, tpl, 0, &native, 1, 0, 0, 1, 1, 0,
                         &beta, &levels, &rec, &n_rec, &ncol);
   unlink(tpl);
   free(levels);
