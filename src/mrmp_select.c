@@ -26,6 +26,9 @@ void ms_select_defaults(ms_select_opt_t *o) {
   o->max_frac_na = 0.0f;
   o->depth_floor_frac = 0.0f;      /* off; satellites turn it on */
   o->depth_floor_cap = 20;
+  o->p01_on = 1;                   /* the default rule; legacy flags switch off */
+  o->p01_top = 0;                  /* no cap: --p01-min alone selects */
+  o->p01_min = 0.60f;
 }
 
 static void *xc(size_t n, size_t sz, const char *what) {
@@ -73,11 +76,12 @@ static double *class_mean_depth(const char *ref, uint32_t ns, uint32_t mincov,
   return mean;
 }
 
-/* qsort comparator: CpG indices, descending by the delta they carry. */
-static const float *g_delta;
-static int by_delta_desc(const void *a, const void *b) {
+/* qsort comparator: CpG indices, descending by whichever statistic ranks them
+ * -- delta_mean by default, P(01) under --p01-top. */
+static const float *g_rank;
+static int by_rank_desc(const void *a, const void *b) {
   uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
-  float dx = g_delta[x], dy = g_delta[y];
+  float dx = g_rank[x], dy = g_rank[y];
   if (dx > dy) return -1;
   if (dx < dy) return 1;
   return (x < y) ? -1 : (x > y);        /* stable, so runs reproduce */
@@ -88,8 +92,12 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
                         uint64_t n_cand, const char *const *binstr,
                         const ms_select_opt_t *o, uint64_t *n_kept,
                         const int64_t *rec_off) {
-  const int use_strict = (o->strict_lo >= 0.0f && o->strict_hi >= 0.0f);
-  if (!o->delta_mean_top && !use_strict) return NULL;   /* selection disabled */
+  /* --p01-top replaces the whole rule, so the strict union leg goes with it:
+   * the point of P(01) is one number deciding both admission and rank. */
+  const int use_p01 = o->p01_on;
+  const int use_strict =
+      !use_p01 && (o->strict_lo >= 0.0f && o->strict_hi >= 0.0f);
+  if (!use_p01 && !o->delta_mean_top && !use_strict) return NULL;  /* disabled */
 
   /* per-class relative-depth targets: min(frac * own mean, cap) */
   double *target = NULL;
@@ -112,8 +120,14 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
   uint8_t *npres = xc(n_cpg, 1, "npres");
   uint8_t *floor_ok = xc(n_cpg, 1, "floor_ok");
   uint16_t *mincv = xc(n_cpg, sizeof(uint16_t), "min coverage");
+  /* Worst class on each side, as a Jeffreys-shrunk predictive probability.
+   * Allocated only under --p01-top: two more floats per CpG is ~175 MB at
+   * mm10 scale, which the delta path has no use for. */
+  float *w1 = use_p01 ? xc(n_cpg, sizeof(float), "worst P(1)") : NULL;
+  float *w0 = use_p01 ? xc(n_cpg, sizeof(float), "worst P(0)") : NULL;
   for (uint64_t i = 0; i < n_cpg; ++i) {
     min1[i] = 2.0f; max0[i] = -1.0f; mincv[i] = 0xFFFF; floor_ok[i] = 1;
+    if (use_p01) { w1[i] = 2.0f; w0[i] = 2.0f; }
   }
 
   /* One streaming pass. For each class we know, per CpG, whether its binstring
@@ -136,12 +150,20 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
       if (cov < mincv[i]) mincv[i] = (uint16_t)(cov > 0xFFFF ? 0xFFFF : cov);
       if (target && (double)cov < tk) floor_ok[i] = 0;
       float b = (float)MU2beta(mu);
+      /* P(a future single-cell draw from class k reads 1), Jeffreys-shrunk.
+       * At depth 1 per cell, cov is the number of cells covering this CpG and
+       * mu>>32 the number of them reading 1, so this is a shrunk cell count. */
+      const float p1k =
+          use_p01 ? (float)(((double)(mu >> 32) + 0.5) / ((double)cov + 1.0))
+                  : 0.0f;
       if (binstr[r][k] == '1') {
         if (b < min1[i]) min1[i] = b;
         sum1[i] += b; ++n1[i];
+        if (use_p01 && p1k < w1[i]) w1[i] = p1k;
       } else if (binstr[r][k] == '0') {
         if (b > max0[i]) max0[i] = b;
         sum0[i] += b; ++n0[i];
+        if (use_p01 && 1.0f - p1k < w0[i]) w0[i] = 1.0f - p1k;
       }
     }
     free_cdata(&c);
@@ -154,14 +176,20 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
   const uint32_t na_allow = (uint32_t)(o->max_frac_na * (float)ns);
   uint8_t *keep = xc(n_cpg, 1, "keep");
   uint8_t *qok = xc(n_cpg, 1, "qok");
-  float *delta = xc(n_cpg, sizeof(float), "delta_mean");
-  uint64_t n_strict = 0;
+  float *rank = xc(n_cpg, sizeof(float), "rank statistic");
+  double p01_sum = 0.0;
+  uint64_t n_strict = 0, n_admit = 0;
   for (uint64_t i = 0; i < n_cpg; ++i) {
     if (memb[i] == MRMP_PNA_MEMBERSHIP || !n1[i] || !n0[i]) continue;
     if ((uint32_t)(ns - npres[i]) > na_allow) continue;
     if (o->min_cg_depth && mincv[i] < o->min_cg_depth) continue;
     if (!floor_ok[i]) continue;
-    delta[i] = sum1[i] / n1[i] - sum0[i] / n0[i];
+    if (use_p01) {
+      rank[i] = w1[i] * w0[i];
+      if (rank[i] >= o->p01_min) { qok[i] = 1; ++n_admit; p01_sum += rank[i]; }
+      continue;                       /* P(01) is the gate and the rank both */
+    }
+    rank[i] = sum1[i] / n1[i] - sum0[i] / n0[i];
     if (max0[i] <= o->qfilter_lo && min1[i] >= o->qfilter_hi) qok[i] = 1;
     if (use_strict && max0[i] <= o->strict_lo && min1[i] >= o->strict_hi) {
       keep[i] = 1; ++n_strict;                     /* self-sizing leg */
@@ -169,12 +197,19 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
   }
   free(min1); free(max0); free(sum1); free(sum0);
   free(n1); free(n0); free(npres); free(floor_ok); free(mincv);
+  free(w1); free(w0);
 
   /* Floor leg: per binstring, the top delta_mean_top among q-filter passers.
    * Counting sort by pattern rank, so this is O(n_cpg) plus a per-pattern sort
    * rather than one global sort of 21.9M keys. */
+  const uint32_t top = use_p01 ? o->p01_top : o->delta_mean_top;
   uint64_t n_floor = 0;
-  if (o->delta_mean_top) {
+  if (use_p01 && !top) {
+    /* Uncapped, the default: P(01) >= --p01-min IS the rule, so admission is
+     * the selection and there is nothing left to rank. */
+    for (uint64_t i = 0; i < n_cpg; ++i)
+      if (qok[i]) { keep[i] = 1; ++n_floor; }
+  } else if (top) {
     uint64_t *cnt = xc(n_cand + 1, sizeof(uint64_t), "per-pattern counts");
     for (uint64_t i = 0; i < n_cpg; ++i)
       if (qok[i]) ++cnt[memb[i]];
@@ -186,25 +221,35 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
     uint64_t *fill = xc(n_cand, sizeof(uint64_t), "fill cursor");
     for (uint64_t i = 0; i < n_cpg; ++i)
       if (qok[i]) idx[off[memb[i]] + fill[memb[i]]++] = (uint32_t)i;
-    g_delta = delta;
+    g_rank = rank;
     for (uint64_t r = 0; r < n_cand; ++r) {
       uint64_t m = cnt[r];
       if (!m) continue;
       uint32_t *v = idx + off[r];
-      if (m > o->delta_mean_top) qsort(v, m, sizeof(uint32_t), by_delta_desc);
-      uint64_t take = m < o->delta_mean_top ? m : o->delta_mean_top;
+      if (m > top) qsort(v, m, sizeof(uint32_t), by_rank_desc);
+      uint64_t take = m < top ? m : top;
       for (uint64_t t = 0; t < take; ++t)
         if (!keep[v[t]]) { keep[v[t]] = 1; ++n_floor; }
     }
     free(cnt); free(off); free(idx); free(fill);
   }
-  free(qok); free(delta);
+  free(qok); free(rank);
 
   uint64_t tot = 0;
   for (uint64_t i = 0; i < n_cpg; ++i) tot += keep[i];
-  fprintf(stderr, "  select: %" PRIu64 " CpGs kept (%" PRIu64 " strict, %"
-          PRIu64 " added by the top-%u floor)\n",
-          tot, n_strict, n_floor, o->delta_mean_top);
+  if (use_p01) {
+    char cap[48] = "uncapped";
+    if (o->p01_top) snprintf(cap, sizeof(cap), "capped at %u/binstring",
+                             o->p01_top);
+    fprintf(stderr, "  select: %" PRIu64 " CpGs kept by P(01) >= %.3f, %s "
+            "(%" PRIu64 " admitted, mean P(01) %.3f)\n",
+            tot, (double)o->p01_min, cap, n_admit,
+            n_admit ? p01_sum / (double)n_admit : 0.0);
+  }
+  else
+    fprintf(stderr, "  select: %" PRIu64 " CpGs kept (%" PRIu64 " strict, %"
+            PRIu64 " added by the top-%u floor)\n",
+            tot, n_strict, n_floor, o->delta_mean_top);
   if (n_kept) *n_kept = tot;
   return keep;
 }

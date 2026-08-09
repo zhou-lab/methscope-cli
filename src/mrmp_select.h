@@ -6,7 +6,12 @@
  * built first over every CpG, then each binstring independently decides which
  * of its CpGs to keep.
  *
- *     keep = q_filter_strict  UNION  (q_filter AND top-N by delta_mean)
+ * THE DEFAULT RULE IS P(01) >= 0.60, documented in its own section below. The
+ * q-filter rule described first is the legacy one, still selectable with
+ * --qfilter / --qfilter-strict / --delta-mean-top, and kept because it is what
+ * every artifact before 2026-08-09 was built with.
+ *
+ *     legacy: keep = q_filter_strict  UNION  (q_filter AND top-N by delta_mean)
  *
  * The two legs do different jobs. STRICT self-sizes: a set whose classes have
  * genuinely clean positions contributes all of them, however many that is. The
@@ -30,7 +35,79 @@
  * Ranking by delta beats the old ranking by depth: +0.586 against +0.446 at the
  * same 10,000-CpG budget. Depth and contrast are near-orthogonal, so depth
  * ranking took an unbiased sample of whatever the filter admitted rather than
- * concentrating the discriminating positions. */
+ * concentrating the discriminating positions.
+ *
+ * ---------------------------------------------------------------------------
+ * P(01): ONE STATISTIC INSTEAD OF A GATE PLUS A RANK
+ *
+ * The default, and what any of the legacy flags switches away from:
+ *
+ *     keep = every CpG with  P(01) >= --p01-min   (default 0.60)
+ *            (optionally capped at the --p01-top N best PER BINSTRING)
+ *
+ * The cap is off by default and is a budget, not part of the rule: a threshold
+ * on a calibrated probability already says which CpGs are usable, so imposing
+ * top-N on top of it would silently discard CpGs that met the bar. Reach for it
+ * only to bound artifact size.
+ *
+ * where P(01) is the probability that a future single-cell draw reads 0 in the
+ * expected-0 group AND 1 in the expected-1 group. At the depth single-cell data
+ * actually has -- one read per cell per CpG -- a class's beta at a CpG IS the
+ * fraction of its cells reading 1, so that probability is a shrunk count. Under
+ * a Jeffreys Beta(1/2,1/2) prior, for class k with M methylated and U
+ * unmethylated cells,
+ *
+ *     P(1 | k) = (M + 1/2) / (M + U + 1)        P(0 | k) = 1 - P(1 | k)
+ *
+ * and, keeping the worst class on each side exactly as the q-filter's min1/max0
+ * already do,
+ *
+ *     P(01) = min over 1-classes P(1|k)  *  min over 0-classes P(0|k)
+ *
+ * This folds together what the old rule tuned separately. DEPTH enters through
+ * the prior: a CpG seen in 3 cells is pulled toward 1/2 and cannot outrank one
+ * seen in 300. DELTA enters through the product, which is largest when the two
+ * sides sit at opposite ends. And LO,HI disappear, because "is this CpG usable"
+ * and "how good is it" become one number rather than a gate feeding a rank.
+ *
+ * What it does NOT replace: the coverage gates above it -- max_frac_na,
+ * min_cg_depth and the relative depth floor -- still run first and are
+ * unchanged. The prior makes them less load-bearing, but the benchmark below
+ * was measured with them on, so they stay on.
+ *
+ * It is also the statistic matched to what the classifier does. Features are
+ * binarised at a flat 0.5, so what decides whether a CpG helps is its distance
+ * from 0.5, not the gap between the classes -- delta_mean ranks by the
+ * CONTINUOUS-feature objective while the model trains on the binary one. P(01)
+ * ranks by the binary objective directly, and being a product it prefers a
+ * balanced split (0.25/0.75) over a lopsided one (0.45/0.95) at equal delta,
+ * which is what a symmetric 0.5 threshold wants.
+ *
+ * End to end on the mouse cohort, binary features, 400 cells/class train and
+ * 50/class test, at a fixed 1,000-pattern budget -- native-coverage accuracy
+ * 0.9533 / 0.9561 / 0.9533 / 0.9544 at P(01) >= 0.50 / 0.60 / 0.70 / 0.75,
+ * against 0.9516 for the legacy rule. Paired McNemar puts every one of those
+ * inside noise (p = 0.28 to 0.75), so 0.60 is the default because it topped the
+ * sweep, not because it is separable from its neighbours. The case for the rule
+ * is that a 4x swing in CpG count moves accuracy by 0.0028: one threshold that
+ * barely needs tuning, in place of two q-filters, a rank budget and two depth
+ * floors. It also carries 1.3-2.5x more CpGs at the same pattern budget
+ * (763k -> 1.68M covered rows at 0.60).
+ *
+ * Measured on the IT-L5/IT-L6 neighbour pair, the hardest in the mouse cohort
+ * (distance 0.101): the 1,000 CpGs the delta rule selected have mean P(0)=0.836
+ * and P(1)=0.791, and Spearman rho between P(01) and delta_mean among them is
+ * 0.987 -- so among survivors the two agree almost perfectly, and the change
+ * has to earn its keep at ADMISSION (shallow CpGs with a large apparent delta
+ * that shrinkage demotes) rather than by reordering winners.
+ *
+ * Do not expect it to close the binary-vs-continuous gap. On that same pair a
+ * cell observes ~70 of the 1,000 CpGs, which under independence would put its
+ * pattern beta 8-9 SE clear of 0.5; measured across 400 training cells the
+ * per-cell SD is 0.143 (IT-L5) and 0.188 (IT-L6) against an independent 0.046 --
+ * a 10-15x design effect, so the pattern carries ~5-7 independent observations
+ * rather than 70. Per-CpG quality is not what limits that pair; CpG-CpG
+ * correlation within a cell is, and no per-CpG statistic can see it. */
 #ifndef MS_MRMP_SELECT_H
 #define MS_MRMP_SELECT_H
 
@@ -44,6 +121,9 @@ typedef struct {
   float    max_frac_na;              /* fraction of classes allowed absent */
   float    depth_floor_frac;         /* relative to each class's OWN mean */
   uint32_t depth_floor_cap;          /* ceiling on the relative target */
+  int      p01_on;                   /* either P(01) flag switches the rule over */
+  uint32_t p01_top;                  /* OPTIONAL cap per binstring; 0 = uncapped */
+  float    p01_min;                  /* floor on P(01); the selector when uncapped */
 } ms_select_opt_t;
 
 /* Returns a malloc'd 0/1 byte per CpG, or NULL if selection is disabled.

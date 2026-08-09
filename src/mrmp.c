@@ -2322,6 +2322,33 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
         "        --qfilter already bounds the worst case; the two scored within\n"
         "        0.007 of each other on held-out margin. Identical for 2\n"
         "        classes, diverging only at 3+.\n\n"
+        "  --p01-min X               (DEFAULT rule, at 0.60)\n"
+        "        The rule in force unless --qfilter, --qfilter-strict or\n"
+        "        --delta-mean-top is given, any of which reverts to the legacy\n"
+        "        rule above. Keep every CpG\n"
+        "        whose P(01) is at least X. That is the probability a future\n"
+        "        single-cell draw reads 0 in the expected-0 group AND 1 in the\n"
+        "        expected-1 group, worst class on each side:\n"
+        "            P(01) = min_1classes (M+0.5)/(M+U+1)\n"
+        "                  * min_0classes (U+0.5)/(M+U+1)\n"
+        "        At one read per cell per CpG a class's beta IS the fraction of\n"
+        "        its cells reading 1, so this is a Jeffreys-shrunk cell count.\n"
+        "        It unifies depth (shallow CpGs shrink toward 0.5 and cannot\n"
+        "        outrank deep ones) with contrast (the product peaks when the\n"
+        "        sides sit at opposite ends), and it selects on the BINARY\n"
+        "        objective the classifier trains on rather than the continuous\n"
+        "        one delta_mean measures. 0.25 is chance; 1.0 is a CpG that is\n"
+        "        deeply covered and clean on both sides. 0.60 is the default\n"
+        "        because it scored best of 0.50/0.60/0.70/0.75 on the mouse\n"
+        "        cohort (0.9561 native vs 0.9516 for the legacy rule) -- though\n"
+        "        the spread across all four was 0.0028, within noise, so the\n"
+        "        real argument is that one threshold replaces five knobs.\n\n"
+        "  --p01-top N               (default 0, uncapped)\n"
+        "        Optional cap: keep at most the N highest by P(01) PER\n"
+        "        BINSTRING. A budget, not part of the rule -- a threshold on a\n"
+        "        calibrated probability already says which CpGs are usable, so\n"
+        "        a cap on top of it silently drops CpGs that met the bar. Use\n"
+        "        only to bound artifact size.\n\n"
         "  --depth-floor-frac F      (default 1.0)\n"
         "        Per class, require coverage of at least F times THAT CLASS'S\n"
         "        OWN genome-wide mean depth. Relative, so one number serves\n"
@@ -2342,8 +2369,17 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
       n_partner = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--projection-top") && i + 1 < argc)
       proj_top = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc)
-      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc) {
+      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a); sel.p01_on = 0;
+    }
+    else if (!strcmp(a, "--p01-top") && i + 1 < argc) {
+      sel.p01_top = (uint32_t)parse_u64(argv[++i], a); sel.p01_on = 1;
+    }
+    else if (!strcmp(a, "--p01-min") && i + 1 < argc) {
+      sel.p01_min = (float)atof(argv[i + 1]); ++i; sel.p01_on = 1;
+      if (!(sel.p01_min >= 0.0f && sel.p01_min <= 1.0f))
+        die("--p01-min needs 0 <= X <= 1", argv[i]);
+    }
     else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
       sel.depth_floor_frac = (float)atof(argv[++i]);
     else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
@@ -2358,6 +2394,7 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
       if (!(lo >= 0.0f && hi <= 1.0f && lo < hi)) die("needs 0 <= LO < HI <= 1", a);
       if (strict) { sel.strict_lo = lo; sel.strict_hi = hi; }
       else        { sel.qfilter_lo = lo; sel.qfilter_hi = hi; }
+      sel.p01_on = 0;                 /* asking for the old rule selects it */
     }
     else if (!strcmp(a, "--force")) force = 1;
     else if (a[0] == '-') die("unrecognized or incomplete option", a);
@@ -2632,6 +2669,33 @@ int main_mrmp_build_neighbor(int argc, char *argv[]) {
         "        PER BINSTRING, keep the N highest by delta_mean among --qfilter\n"
         "        passers. The floor leg: it guarantees a pattern is never starved\n"
         "        when --qfilter-strict returns almost nothing.\n\n"
+        "  --p01-min X               (DEFAULT rule, at 0.60)\n"
+        "        The rule in force unless --qfilter, --qfilter-strict or\n"
+        "        --delta-mean-top is given, any of which reverts to the legacy\n"
+        "        rule above. Keep every CpG\n"
+        "        whose P(01) is at least X. That is the probability a future\n"
+        "        single-cell draw reads 0 in the expected-0 group AND 1 in the\n"
+        "        expected-1 group, worst class on each side:\n"
+        "            P(01) = min_1classes (M+0.5)/(M+U+1)\n"
+        "                  * min_0classes (U+0.5)/(M+U+1)\n"
+        "        At one read per cell per CpG a class's beta IS the fraction of\n"
+        "        its cells reading 1, so this is a Jeffreys-shrunk cell count.\n"
+        "        It unifies depth (shallow CpGs shrink toward 0.5 and cannot\n"
+        "        outrank deep ones) with contrast (the product peaks when the\n"
+        "        sides sit at opposite ends), and it selects on the BINARY\n"
+        "        objective the classifier trains on rather than the continuous\n"
+        "        one delta_mean measures. 0.25 is chance; 1.0 is a CpG that is\n"
+        "        deeply covered and clean on both sides. 0.60 is the default\n"
+        "        because it scored best of 0.50/0.60/0.70/0.75 on the mouse\n"
+        "        cohort (0.9561 native vs 0.9516 for the legacy rule) -- though\n"
+        "        the spread across all four was 0.0028, within noise, so the\n"
+        "        real argument is that one threshold replaces five knobs.\n\n"
+        "  --p01-top N               (default 0, uncapped)\n"
+        "        Optional cap: keep at most the N highest by P(01) PER\n"
+        "        BINSTRING. A budget, not part of the rule -- a threshold on a\n"
+        "        calibrated probability already says which CpGs are usable, so\n"
+        "        a cap on top of it silently drops CpGs that met the bar. Use\n"
+        "        only to bound artifact size.\n\n"
         "  --depth-floor-frac F      (default 1.0)\n"
         "        Per class, require coverage of at least F times THAT CLASS'S OWN\n"
         "        genome-wide mean depth. Relative, so one number serves classes\n"
@@ -2658,8 +2722,17 @@ int main_mrmp_build_neighbor(int argc, char *argv[]) {
     else if (!strcmp(a, "--dist-top") && i + 1 < argc)
       dist_top = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--max-dist") && i + 1 < argc) max_dist = atof(argv[++i]);
-    else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc)
-      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc) {
+      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a); sel.p01_on = 0;
+    }
+    else if (!strcmp(a, "--p01-top") && i + 1 < argc) {
+      sel.p01_top = (uint32_t)parse_u64(argv[++i], a); sel.p01_on = 1;
+    }
+    else if (!strcmp(a, "--p01-min") && i + 1 < argc) {
+      sel.p01_min = (float)atof(argv[i + 1]); ++i; sel.p01_on = 1;
+      if (!(sel.p01_min >= 0.0f && sel.p01_min <= 1.0f))
+        die("--p01-min needs 0 <= X <= 1", argv[i]);
+    }
     else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
       sel.depth_floor_frac = (float)atof(argv[++i]);
     else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
@@ -2674,6 +2747,7 @@ int main_mrmp_build_neighbor(int argc, char *argv[]) {
       if (!(lo >= 0.0f && hi <= 1.0f && lo < hi)) die("needs 0 <= LO < HI <= 1", a);
       if (strict) { sel.strict_lo = lo; sel.strict_hi = hi; }
       else        { sel.qfilter_lo = lo; sel.qfilter_hi = hi; }
+      sel.p01_on = 0;                 /* asking for the old rule selects it */
     }
     else if (!strcmp(a, "--dry-run")) dry_run = 1;
     else if (!strcmp(a, "--force")) force = 1;
