@@ -20,6 +20,14 @@
 #include "msfm.h"
 #include "cfile.h"
 #include "cdata.h"
+#include "index.h"
+#include <zlib.h>
+
+/* BGZF blocks are framed here, on zlib, rather than through htslib's
+ * bgzf_compress(): libyame.a carries its own bgzf.o which shadows htslib's, so
+ * referencing the htslib symbol pulls in a second definition and the link fails
+ * on `multiple definition of bgzf_close`. YAME's own bgzf exports no
+ * compress-to-buffer entry point. See the note in YAME/tmp. */
 
 /* binstring defaults, matching YAME rowop.c (main_rowop getopt defaults). */
 #define MRMP_DEF_MINCOV        1u
@@ -263,6 +271,78 @@ static void write_or_die(FILE *fp, const void *p, size_t n, const char *path) {
 
 /* Membership RLE, defined with the reader further down since inflating is where
  * the format is interpreted; declared here because mrmp-build deflates. */
+/* ---- BGZF framing for the membership payload ----------------------------
+ *
+ * htslib exports bgzf_compress() for ONE block and no in-memory inflate, so the
+ * blocks are emitted in a loop here and walked on the way back -- the same thing
+ * htslib does internally, and the reason the reader parses BSIZE rather than
+ * handing the buffer to zlib as a multi-member gzip stream. */
+
+static uint8_t *bgzf_deflate_buf(const uint8_t *src, uint64_t slen,
+                                 uint64_t *out_n) {
+  uint64_t cap = slen + slen / 8 + 4096, n = 0;
+  uint8_t *out = xcalloc(cap, 1, "bgzf buffer");
+  uint8_t *tmp = xcalloc(BGZF_MAX_BLOCK_SIZE, 1, "bgzf block");
+  uint64_t at = 0;
+  do {                                   /* do/while so slen == 0 still frames */
+    uint32_t want = slen - at < BGZF_BLOCK_SIZE ? (uint32_t)(slen - at)
+                                                : (uint32_t)BGZF_BLOCK_SIZE;
+    z_stream zs; memset(&zs, 0, sizeof zs);
+    if (deflateInit2(&zs, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK)
+      die("deflateInit2 failed", "membership");
+    zs.next_in = (Bytef *)(uintptr_t)(src + at); zs.avail_in = want;
+    zs.next_out = tmp; zs.avail_out = BGZF_MAX_BLOCK_SIZE;
+    if (deflate(&zs, Z_FINISH) != Z_STREAM_END) die("deflate failed", "membership");
+    uint32_t clen = (uint32_t)zs.total_out;
+    deflateEnd(&zs);
+
+    uint32_t bsize = 18 + clen + 8;      /* header + payload + CRC32 + ISIZE */
+    if (n + bsize > cap) { cap = (n + bsize) * 2; out = realloc(out, cap);
+                           if (!out) die("out of memory", "bgzf buffer"); }
+    uint8_t *b = out + n;
+    static const uint8_t hdr[12] = {31,139,8,4,0,0,0,0,0,255,6,0};
+    memcpy(b, hdr, 12);
+    b[12] = 'B'; b[13] = 'C'; b[14] = 2; b[15] = 0;
+    b[16] = (uint8_t)((bsize - 1) & 0xff);
+    b[17] = (uint8_t)(((bsize - 1) >> 8) & 0xff);
+    memcpy(b + 18, tmp, clen);
+    uint32_t crc = (uint32_t)crc32(crc32(0L, NULL, 0), src + at, want);
+    for (int k = 0; k < 4; ++k) b[18 + clen + k] = (uint8_t)(crc >> (8 * k));
+    for (int k = 0; k < 4; ++k) b[22 + clen + k] = (uint8_t)(want >> (8 * k));
+    n += bsize; at += want;
+  } while (at < slen);
+  free(tmp);
+  *out_n = n;
+  return out;
+}
+
+/* Walk the framed blocks, inflating each with raw deflate. A BGZF block is a
+ * gzip member whose BC extra subfield carries BSIZE-1 at byte 16, so the block
+ * extent is known before inflating and the payload is [18, bsize-8). */
+static void bgzf_inflate_buf(const uint8_t *src, uint64_t slen,
+                             uint8_t *dst, uint64_t dlen, const char *what) {
+  uint64_t at = 0, out = 0;
+  while (at < slen) {
+    if (slen - at < 18) die("truncated BGZF block header", what);
+    if (src[at] != 31 || src[at + 1] != 139) die("not a BGZF block", what);
+    uint32_t bsize = (uint32_t)src[at + 16] | ((uint32_t)src[at + 17] << 8);
+    ++bsize;
+    if (bsize < 26 || bsize > slen - at) die("bad BGZF block size", what);
+    z_stream zs; memset(&zs, 0, sizeof zs);
+    zs.next_in = (Bytef *)(uintptr_t)(src + at + 18);
+    zs.avail_in = bsize - 18 - 8;
+    zs.next_out = dst + out;
+    zs.avail_out = (uInt)(dlen - out);
+    if (inflateInit2(&zs, -15) != Z_OK) die("inflateInit2 failed", what);
+    int rc = inflate(&zs, Z_FINISH);
+    uint64_t got = zs.total_out;
+    inflateEnd(&zs);
+    if (rc != Z_STREAM_END) die("BGZF block did not inflate", what);
+    out += got; at += bsize;
+  }
+  if (out != dlen) die("membership inflated to the wrong size", what);
+}
+
 static uint8_t *memb_compress(const uint32_t *memb, uint64_t n_cpg,
                               uint64_t n_cand, uint64_t *out_n);
 
@@ -557,7 +637,7 @@ int main_mrmp_build(int argc, char *argv[]) {
   hd.patterns_offset = off;  off += n_cand * mrmp_pattern_stride(ns);
   hd.membership_offset = off; off += memb_n;
   hd.thresh_offset = off;    off += (uint64_t)n_cand * sizeof(float);
-  hd.flags |= MRMP_FLAG_THRESH | MRMP_FLAG_MEMB_RLE;
+  hd.flags |= MRMP_FLAG_THRESH | MRMP_FLAG_MEMB_RLE | MRMP_FLAG_MEMB_BGZF;
   /* Pad to 8 so this file can be cat'd in front of another one and leave its
    * header aligned. Every MRMPIDX1 is self-padding for exactly this reason. */
   const uint64_t pad_bytes = (((off + 7u) & ~7ull) - off);
@@ -705,17 +785,39 @@ static uint8_t *memb_compress(const uint32_t *memb, uint64_t n_cpg,
     for (int b = 0; b < 8; ++b) d[b] = (uint8_t)(v >> (8 * b));
   }
   cdata_compress(&c);                                /* -> RLE fmt2 */
-  *out_n = c.n;
-  return c.s;                                        /* caller owns */
+
+  /* Then deflate. The RLE is where the shape is, but the deflate is where the
+   * bytes are -- 2.74x measured on a 34-class global. Section layout is
+   * [uint64 rle_bytes][BGZF blocks]; the length rides inline because the header
+   * has no field left to hold it. */
+  uint64_t blob_n = 0;
+  uint8_t *blob = bgzf_deflate_buf(c.s, c.n, &blob_n);
+  uint8_t *sec = xcalloc(8 + blob_n, 1, "membership section");
+  uint64_t rle_n = c.n;
+  memcpy(sec, &rle_n, 8);
+  memcpy(sec + 8, blob, blob_n);
+  free(blob); free(c.s);
+  *out_n = 8 + blob_n;
+  return sec;                                        /* caller owns */
 }
 
 static uint32_t *memb_decompress(const uint8_t *buf, uint64_t nbytes,
-                                 uint64_t n_cpg, uint64_t n_cand,
+                                 uint64_t n_cpg, uint64_t n_cand, int bgzf,
                                  const char *what) {
   cdata_t c; memset(&c, 0, sizeof c);
-  c.fmt = '2'; c.compressed = 1; c.unit = 8; c.n = nbytes;
-  c.s = xcalloc(nbytes ? nbytes : 1, 1, "membership rle");
-  memcpy(c.s, buf, nbytes);
+  c.fmt = '2'; c.compressed = 1; c.unit = 8;
+  if (bgzf) {
+    if (nbytes < 8) die("membership section is truncated", what);
+    uint64_t rle_n = 0;
+    memcpy(&rle_n, buf, 8);
+    c.n = rle_n;
+    c.s = xcalloc(rle_n ? rle_n : 1, 1, "membership rle");
+    bgzf_inflate_buf(buf + 8, nbytes - 8, c.s, rle_n, what);
+  } else {
+    c.n = nbytes;
+    c.s = xcalloc(nbytes ? nbytes : 1, 1, "membership rle");
+    memcpy(c.s, buf, nbytes);
+  }
   cdata_t d = decompress(c);
   free(c.s);
   if (cdata_n(&d) != n_cpg) die("membership inflates to the wrong CpG count", what);
@@ -846,7 +948,7 @@ static const uint32_t *mrmp_membership(mrmp_reader_t *r) {
     r->membership = r->memb_owned =
       memb_decompress((const uint8_t *)(r->blk + r->h->membership_offset),
                       r->h->membership_bytes, r->h->n_cpg, r->h->n_candidates,
-                      "membership");
+                      (r->h->flags & MRMP_FLAG_MEMB_BGZF) != 0, "membership");
   return r->membership;
 }
 
@@ -924,7 +1026,20 @@ ms_mrmpset_t *ms_mrmpset_open(const char *path) {
 
   uint64_t at = 0;
   while (at < fsz) {
-    if (fsz - at < sizeof(mrmp_header_t))
+    /* Peek the magic before anything else, however few bytes remain. A chain
+     * ends at EOF or at the start of something deliberately not another block:
+     * a bundle puts the .mrmp at offset 0 and its MSBNDL1 container right after,
+     * exactly as it used to rely on a .cm's BGZF EOF marker to stop yame. The
+     * container is far SHORTER than a block header, so this has to be checked
+     * before the truncation test rather than after it. Anything else still
+     * dies -- stopping only on a known magic is what keeps the bounds check a
+     * real corruption test. */
+    char mg[8] = {0};
+    uint64_t left = fsz - at;
+    if (fseeko(f, (off_t)at, SEEK_SET)) die("cannot seek MRMP", path);
+    size_t got = fread(mg, 1, left < 8 ? (size_t)left : 8, f);
+    if (got >= 7 && !memcmp(mg, "MSBNDL1", 7)) break;
+    if (left < sizeof(mrmp_header_t))
       die("MRMP chain ends mid-header -- the file is truncated", path);
     mrmp_header_t h;
     if (fseeko(f, (off_t)at, SEEK_SET) || fread(&h, 1, sizeof h, f) != sizeof h)
@@ -1005,6 +1120,85 @@ void ms_mrmp_chain_write(const char *out, uint32_t n_sets,
  * The pooled cut is the only mutation, and n_selected lives in the block's first
  * 128 bytes, so patching the first chunk is enough; no block is rewritten, and
  * the output is byte-for-byte a concatenation of the (patched) inputs. */
+static void img_put(char *img, uint64_t *at, const void *p, size_t n);
+
+/* Rewrite a block to hold ONLY its first `keep_n` patterns, folding the CpGs of
+ * every dropped pattern into PNA.
+ *
+ * This is what makes --pooled-top a real cut rather than a view. It used to be
+ * expressed by shrinking n_selected while every pattern stayed on disk, so a
+ * file that said 1000 held 5,005 and a consumer had to be told which prefix was
+ * live. Now the artifact IS its patterns, n_selected == n_candidates always, and
+ * the pooled .mrmp can travel to a model unchanged.
+ *
+ * Winners are a PREFIX of each set's own ranking -- both rankings are by CpG
+ * count descending -- so keeping the first keep_n is exactly keeping the pooled
+ * winners, and no pattern has to be dropped from the middle.
+ *
+ * content_checksum is carried over deliberately. It hashes the per-CpG key
+ * stream, which is a property of how the reference RESOLVED, and pruning drops
+ * patterns without re-resolving any CpG -- so it still identifies the build this
+ * came from, and two differently-pruned files share it correctly. */
+static void prune_block(const char *path, uint64_t base, uint64_t blk_bytes,
+                        uint32_t keep_n, void **img_out, uint64_t *bytes_out) {
+  mrmp_reader_t r; mrmp_open_at(&r, path, base, blk_bytes);
+  const mrmp_header_t *h = r.h;
+  const uint32_t ns = h->n_samples, nw = r.nw;
+  const uint64_t n_cpg = h->n_cpg;
+  if (keep_n > h->n_candidates) keep_n = (uint32_t)h->n_candidates;
+
+  const uint32_t *memb = mrmp_membership(&r);
+  uint32_t *memb2 = xcalloc(n_cpg, sizeof(uint32_t), "pruned membership");
+  uint64_t pna_cpg = 0;
+  for (uint64_t i = 0; i < n_cpg; ++i) {
+    uint32_t rank = memb[i];
+    if (rank == MRMP_PNA_MEMBERSHIP || rank >= keep_n) {
+      memb2[i] = MRMP_PNA_MEMBERSHIP; ++pna_cpg;
+    } else memb2[i] = rank;
+  }
+  uint64_t memb_n = 0;
+  uint8_t *memb_rle = memb_compress(memb2, n_cpg, keep_n, &memb_n);
+  if (memb_n > UINT32_MAX) die("compressed membership exceeds 4 GB", path);
+
+  const char *set_name = h->name_offset ? r.blk + h->name_offset : "set";
+  const float *thr = (h->flags & MRMP_FLAG_THRESH)
+                   ? (const float *)(const void *)(r.blk + h->thresh_offset) : NULL;
+
+  mrmp_header_t hd = *h;
+  hd.n_candidates = keep_n; hd.n_selected = keep_n;
+  hd.pna_cpg = pna_cpg;
+  hd.membership_bytes = (uint32_t)memb_n;
+  hd.flags |= MRMP_FLAG_MEMB_RLE | MRMP_FLAG_MEMB_BGZF;
+
+  uint64_t off = sizeof(hd);
+  hd.refname_offset = off;    off += strlen(r.refname) + 1;
+  hd.name_offset = (uint32_t)off; off += strlen(set_name) + 1;
+  hd.names_offset = off;      for (uint32_t k = 0; k < ns; ++k) off += strlen(r.names[k]) + 1;
+  hd.patterns_offset = off;   off += (uint64_t)keep_n * mrmp_pattern_stride(ns);
+  hd.membership_offset = off; off += memb_n;
+  if (thr) { hd.thresh_offset = off; off += (uint64_t)keep_n * sizeof(float); }
+  const uint64_t img_bytes = (off + 7u) & ~7ull;
+
+  char *img = xcalloc(img_bytes, 1, "pruned block");
+  uint64_t at = 0;
+  img_put(img, &at, &hd, sizeof(hd));
+  img_put(img, &at, r.refname, strlen(r.refname) + 1);
+  img_put(img, &at, set_name, strlen(set_name) + 1);
+  for (uint32_t k = 0; k < ns; ++k)
+    img_put(img, &at, r.names[k], strlen(r.names[k]) + 1);
+  for (uint32_t p = 0; p < keep_n; ++p) {
+    img_put(img, &at, pat_key(&r, p), (size_t)nw * sizeof(uint64_t));
+    uint64_t cnt = pat_count(&r, p);
+    img_put(img, &at, &cnt, sizeof(uint64_t));
+  }
+  img_put(img, &at, memb_rle, (size_t)memb_n);
+  if (thr) img_put(img, &at, thr, (size_t)keep_n * sizeof(float));
+
+  free(memb_rle); free(memb2);
+  mrmp_close(&r);
+  *img_out = img; *bytes_out = img_bytes;
+}
+
 static void chain_write_streamed(const char *out, uint32_t n_sets,
                                  const char *const *src, const uint64_t *src_off,
                                  const uint64_t *block_bytes,
@@ -1117,25 +1311,49 @@ int main_mrmp_inspect(int argc, char *argv[]) {
  * a directory listing is alphabetical, while the pooled feature vector is laid
  * out in SET order, and a classifier handed its columns in the wrong order fails
  * silently rather than loudly. */
-static int export_container(const char *path, const char *dir,
+static void mrmp_block_mask_cdata(const char *artifact, uint64_t base,
+                                  uint64_t blk_bytes, const char *pna_label,
+                                  uint32_t top_k, cdata_t *out,
+                                  uint64_t *n_keys_out);
+
+static int export_container(const char *path, const char *out_cm,
                             const char *pna_label, uint32_t top_k) {
   ms_mrmpset_t *s = ms_mrmpset_open(path);
-  if (mkdir(dir, 0777) && errno != EEXIST)
-    die("cannot create output directory", dir);
-  char buf[PATH_MAX];
+
+  /* One .cm holding every set as a record, plus the .idx naming them -- YAME's
+   * own multi-record store convention, written with YAME's own index writer so
+   * the offsets are the BGZF VIRTUAL offsets it expects rather than byte
+   * offsets. (Hand-writing those is the classic way to scramble sample->data.)
+   *
+   * This used to be a directory of <set>.cm files plus an order.txt. Nothing in
+   * methscope reads either any more -- classify-featurize takes the .mrmp and
+   * the bundle carries one -- so export exists purely to hand sets to YAME, and
+   * it should speak YAME's idiom. The .idx is also strictly better than
+   * order.txt was: it names records rather than ordering them, so
+   * `yame subset -s <set>` works. */
+  BGZF *fp = bgzf_open2(out_cm, "w");
+  if (!fp) die("cannot create", out_cm);
+  index_t *idx = kh_init(index);   /* insert_index fills a table, never makes one */
   for (uint32_t k = 0; k < s->n_sets; ++k) {
-    if (snprintf(buf, sizeof buf, "%s/%s.cm", dir, s->name[k]) >= (int)sizeof buf)
-      die("output path too long for set", s->name[k]);
-    ms_mrmp_write_mask_at(path, s->block_off[k], s->block_bytes[k], buf,
-                          pna_label, top_k);
+    cdata_t c; uint64_t n_keys = 0;
+    mrmp_block_mask_cdata(path, s->block_off[k], s->block_bytes[k],
+                          pna_label, top_k, &c, &n_keys);
+    int64_t voff = bgzf_tell(fp);      /* before the record, not after */
+    cdata_write1(fp, &c);
+    free_cdata(&c);
+    idx = insert_index(idx, s->name[k], voff);   /* borrows the name string */
   }
-  if (snprintf(buf, sizeof buf, "%s/order.txt", dir) >= (int)sizeof buf)
-    die("output path too long", dir);
-  FILE *f = fopen(buf, "w");
-  if (!f) die("cannot create order.txt", buf);
-  for (uint32_t k = 0; k < s->n_sets; ++k) fprintf(f, "%s\n", s->name[k]);
-  if (fclose(f)) die("error closing order.txt", buf);
-  fprintf(stderr, "[methscope] mrmp-export: %u sets -> %s/\n", s->n_sets, dir);
+  if (bgzf_close(fp) < 0) die("error closing", out_cm);
+
+  char *ipath = get_fname_index(out_cm);
+  FILE *ifp = fopen(ipath, "w");
+  if (!ifp) die("cannot create index", ipath);
+  writeIndex(ifp, idx);
+  fclose(ifp);
+  freeIndex(idx);                  /* the keys belong to the walked chain */
+  fprintf(stderr, "[methscope] mrmp-export: %u sets -> %s (+ %s)\n",
+          s->n_sets, out_cm, ipath);
+  free(ipath);
   ms_mrmpset_free(s);
   return 0;
 }
@@ -1150,18 +1368,16 @@ int main_mrmp_export(int argc, char *argv[]) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       ms_help(stderr,
-        "Usage: methscope mrmp-export [options] IN.mrmp OUT.cm\n"
-        "       methscope mrmp-export [options] IN.mrmpset OUTDIR\n\n"
+        "Usage: methscope mrmp-export [options] IN.mrmp OUT.cm\n\n"
         "  IN               a .mrmp: one set, or a chain of several\n"
         "  OUT.cm           per-CpG P1..PK/Pna labels as a YAME format-2 mask\n"
-        "  OUTDIR           for a container with no --set: one <name>.cm per set\n"
-        "                   plus order.txt. This is what turns a POOLED artifact\n"
-        "                   into something classify-featurize can read -- it takes\n"
-        "                   N masks, and a set's ranks are its own, so P1 means a\n"
-        "                   different pattern in each and they cannot share one\n"
-        "                   .cm. order.txt records SET order, which a directory\n"
-        "                   listing (alphabetical) loses and a classifier handed\n"
-        "                   its columns out of order fails silently on.\n\n"
+        "  OUT.cm           a multi-set input writes ONE .cm holding every set as\n"
+        "                   a record, plus OUT.cm.idx naming them -- YAME's own\n"
+        "                   store convention, so `yame subset -s <set>` works.\n\n"
+        "  This command is an INTERFACE TO YAME, not part of the pipeline.\n"
+        "  classify-featurize reads a .mrmp directly and a bundle carries one, so\n"
+        "  nothing in methscope consumes a .cm any more; export exists to hand\n"
+        "  sets to yame and should speak yame's idiom rather than ours.\n\n"
         "  --set NAME       export just this set of a container, to OUT.cm\n"
         "  --top K          rank cut for the mask and --patterns (default 1000)\n"
         "  --patterns TSV   also write top-K patterns: string<tab>P<rank><tab>count\n"
@@ -1274,20 +1490,26 @@ void ms_mrmp_group_map(const char *artifact, uint16_t *group, uint64_t n_cpg,
   ms_mrmp_group_map_at(artifact, 0, group, n_cpg, patterns);
 }
 
-void ms_mrmp_write_mask_at(const char *artifact, uint64_t base,
-                           uint64_t blk_bytes, const char *out_cm,
-                           const char *pna_label, uint32_t top_k) {
+/* Build the fmt2 mask cdata for ONE block, without deciding where it goes.
+ *
+ * Split out so a block's mask can be either a standalone .cm or one record of a
+ * multi-record store: mrmp-export's only remaining job is handing sets to YAME,
+ * and YAME's idiom for many records is one file plus a .idx of names, not a
+ * directory of files plus a hand-rolled order list. */
+static void mrmp_block_mask_cdata(const char *artifact, uint64_t base,
+                                  uint64_t blk_bytes, const char *pna_label,
+                                  uint32_t top_k, cdata_t *out,
+                                  uint64_t *n_keys_out) {
   mrmp_reader_t r; mrmp_open_at(&r, artifact, base, blk_bytes);
   const mrmp_header_t *h = r.h;
   if (!pna_label) pna_label = "Pna";
-  if (!top_k) die("mask needs a positive rank cut", out_cm);
+  if (!top_k) die("mask needs a positive rank cut", artifact);
   if (top_k > h->n_selected) top_k = h->n_selected;
   {
     /* Build a raw YAME format-2 cdata directly (no genome-sized text file),
      * mirroring fmt2_read_raw: first-seen key order over genomic CpGs, then
      * cdata_compress (RLE) + cdata_write. Labels: P(rank+1) or the PNA label. */
     const uint64_t n = h->n_cpg, K = top_k;
-    const char *mask = out_cm;
     /* distinct label ids in first-seen order */
     uint32_t *label_id = xcalloc(n, sizeof(uint32_t), "label ids");
     /* map rank(<K) -> key id; PNA and below-K share the PNA label. */
@@ -1346,14 +1568,22 @@ void ms_mrmp_write_mask_at(const char *artifact, uint64_t base,
       for (int b = 0; b < 8; ++b) d[b] = (uint8_t)(label_id[i] >> (8 * b));
     }
     cdata_compress(&c);               /* -> RLE fmt2 */
-    cdata_write((char *)mask, &c, "w", 0);
-    free_cdata(&c);
     for (uint64_t kk = 0; kk < n_keys; ++kk) free(keys[kk]);
     free(keys); free(label_id); free(key_of_rank);
-    fprintf(stderr, "[methscope] mrmp: wrote mask %s (%" PRIu64 " labels)\n",
-            mask, n_keys);
+    *out = c; *n_keys_out = n_keys;
   }
   mrmp_close(&r);
+}
+
+void ms_mrmp_write_mask_at(const char *artifact, uint64_t base,
+                           uint64_t blk_bytes, const char *out_cm,
+                           const char *pna_label, uint32_t top_k) {
+  cdata_t c; uint64_t n_keys = 0;
+  mrmp_block_mask_cdata(artifact, base, blk_bytes, pna_label, top_k, &c, &n_keys);
+  cdata_write((char *)out_cm, &c, "w", 0);
+  free_cdata(&c);
+  fprintf(stderr, "[methscope] mrmp: wrote mask %s (%" PRIu64 " labels)\n",
+          out_cm, n_keys);
 }
 
 void ms_mrmp_write_mask(const char *artifact, const char *out_cm,
@@ -1407,8 +1637,13 @@ int main_mrmp_pool(int argc, char *argv[]) {
         "                   slots rather than being reserved any, so a set that\n"
         "                   cannot field well-covered patterns loses -- the right\n"
         "                   verdict, since a pattern too thin to rank is too thin\n"
-        "                   to trust. 0 disables the cut, leaving a plain `cat`\n"
-        "                   plus the row-space check.\n"
+        "                   to trust. The cut PRUNES: the output holds exactly N\n"
+        "                   patterns, with the CpGs of the rest folded into PNA\n"
+        "                   and any set winning nothing dropped, so the file IS\n"
+        "                   what it claims and can go to a model unchanged. To\n"
+        "                   re-pool at another budget, re-run this on the same\n"
+        "                   generator outputs -- they are untouched. 0 disables\n"
+        "                   the cut, leaving a plain `cat` plus the row check.\n"
         "  -o OUT           output container\n");
       return 0;
     }
@@ -1529,7 +1764,36 @@ int main_mrmp_pool(int argc, char *argv[]) {
     free(e);
   }
 
-  chain_write_streamed(out, n, path, soff, len, won);
+  if (!pooled_top) {
+    /* No cut: nothing to prune, so this is a byte-for-byte concatenation --
+     * exactly what `cat` of the same inputs produces. */
+    chain_write_streamed(out, n, path, soff, len, won);
+  } else {
+    /* PRUNE. Each block is rewritten to hold only the patterns it won, with the
+     * CpGs of the rest folded into PNA, so the output holds exactly --pooled-top
+     * patterns and can travel to a model as-is.
+     *
+     * A set that won NOTHING is dropped entirely rather than kept as an empty
+     * block: it would otherwise export a mask whose only label is background and
+     * contribute a dead all-PNA column to every fused feature matrix. */
+    uint32_t m = 0;
+    void **img = xcalloc(n, sizeof(void *), "pruned blocks");
+    uint64_t *ilen = xcalloc(n, sizeof(uint64_t), "pruned sizes");
+    uint32_t dropped = 0;
+    for (uint32_t k = 0; k < n; ++k) {
+      if (!won[k]) { ++dropped; continue; }
+      prune_block(path[k], soff[k], len[k], won[k], &img[m], &ilen[m]);
+      ++m;
+    }
+    if (!m) die("every set was cut to nothing; raise --pooled-top", out);
+    if (dropped)
+      fprintf(stderr, "[methscope] mrmp-pool: %u set(s) won no column and were "
+              "dropped\n", dropped);
+    ms_mrmp_chain_write(out, m, (const void *const *)img, ilen);
+    for (uint32_t k = 0; k < m; ++k) free(img[k]);
+    free(img); free(ilen);
+    n = m;
+  }
   fprintf(stderr, "[methscope] mrmp-pool: %u sets, budget %u -> %s\n",
           n, pooled_top, out);
   free(name); free(len); free(soff); free(path); free(hd); free(won);
@@ -1776,7 +2040,7 @@ static void build_subset_block(const char *store, uint32_t ns,
   uint8_t *memb_rle = memb_compress(memb2, n_cpg, n_cand, &memb_n);
   if (memb_n > UINT32_MAX) die("compressed membership exceeds 4 GB", label[0]);
   hd.membership_bytes = (uint32_t)memb_n;
-  hd.flags |= MRMP_FLAG_MEMB_RLE;
+  hd.flags |= MRMP_FLAG_MEMB_RLE | MRMP_FLAG_MEMB_BGZF;
 
   uint64_t off = sizeof(hd);
   hd.refname_offset = off;    off += strlen(store) + 1;

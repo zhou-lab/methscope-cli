@@ -68,6 +68,21 @@
  * bump -- the same compatibility discipline the derived key width used. */
 #define MRMP_FLAG_MEMB_RLE 4u
 
+/* The RLE membership payload is additionally BGZF-compressed, and the section
+ * is [uint64 rle_bytes][BGZF blocks] -- the length is carried inline because the
+ * 128-byte header has no room left.
+ *
+ * Deflate is where the remaining size is: measured on a 34-class global, the RLE
+ * alone is 1,717,137 bytes and BGZF takes it to ~620 K, a 2.74x that dwarfs
+ * every other lever. Folding non-selected patterns into the background -- the
+ * one thing an exported .cm does that this does not -- is worth only 4.4%, which
+ * is why a .mrmp is not pruned and does not need to be.
+ *
+ * BGZF rather than a raw deflate stream so the payload is the same framing YAME
+ * writes everywhere else; the block index it enables is unused here, since the
+ * section is always inflated whole. */
+#define MRMP_FLAG_MEMB_BGZF 8u
+
 /* 128-byte fixed header; all little-endian, offsets are absolute file bytes. */
 typedef struct {
   char     magic[8];          /* "MRMPIDX1" */
