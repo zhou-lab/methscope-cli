@@ -411,9 +411,13 @@ static void write_msfm_raw(const char *out, const uint16_t *beta,
   wr(f, beta, (size_t)nr * ncol * 2, out);
   if (fclose(f)) fdie("cannot finalize output", out);
 
-  fprintf(stderr, "[methscope] classify-featurize: %" PRIu64 " records "
-          "(%u cells x %u replicates) x %u patterns, %u classes -> %s (%.1f MB)\n",
-          nr, n_cells, n_reps, ncol, nk, out, (double)h.file_bytes / 1048576.0);
+  if (isatty(STDERR_FILENO)) fprintf(stderr, "\r\033[K");
+  { char c1[32], c2[32];
+    fprintf(stderr, "  %-14s %s records (%u cells x %u draw(s)) x %s "
+            "patterns, %u classes\n", "output",
+            commafmt_msfm(nr, c1), n_cells, n_reps, commafmt_msfm(ncol, c2), nk);
+    fprintf(stderr, "  %-14s %s (%.1f MB)\n\n", "wrote", out,
+            (double)h.file_bytes / 1048576.0); }
   (void)rep_sample;
   free(cid); free(uniq); free(pn);
 }
@@ -664,8 +668,8 @@ static void expand_mask_args(int n_arg, char *const *arg, uint32_t *n_out,
     ms_mrmp_top_free(t);
   }
   *base_out = base; *len_out = blen; *pat_out = pat;
-  fprintf(stderr, "[methscope] classify-featurize: %s holds %u set(s)\n",
-          arg[0], n);
+  fprintf(stderr, "\n[methscope] classify-featurize\n\n");
+  fprintf(stderr, "  %-14s %s, %u set(s)\n", "artifact", arg[0], n);
   ms_mrmpset_free(ch);
   *n_out = n; *refs_out = refs; *tmps_out = tmps; *names_out = nms;
 }
@@ -758,7 +762,16 @@ int main_classify_featurize(int argc, char *argv[]) {
   if (!legacy && have_idx) {
     uint32_t n_reps = 1;
     uint32_t *rep_sample;
-    if (sample_spec) rep_sample = parse_levels(sample_spec, reps ? reps : 1, &n_reps);
+    if (sample_spec) {
+      rep_sample = parse_levels(sample_spec, reps ? reps : 1, &n_reps);
+      /* n_reps is RUNGS x --reps. Reporting only the product invited reading it
+       * as the thread count, which it has nothing to do with: a 24-rung ladder
+       * at --reps 1 is 24 replicates whether you run 1 thread or 64. */
+      uint32_t rungs = 1;
+      for (const char *q = sample_spec; *q; ++q) if (*q == ',') ++rungs;
+      fprintf(stderr, "  %-14s %u rung(s) x %u replicate(s) = %u draw(s)/cell\n",
+              "sampling", rungs, reps ? reps : 1, n_reps);
+    }
     else { rep_sample = xmal(4, "rep sample"); rep_sample[0] = 0; n_reps = 1; }
 
     uint16_t *beta; uint32_t *levels; char **names; uint32_t n_cells, ncol;
@@ -788,10 +801,10 @@ int main_classify_featurize(int argc, char *argv[]) {
       ms_msfm_build_sampled_multi(query, refs, mbase, mlen, np, n_sets, rep_sample, n_reps,
                                   binarize, min_cpgs, seed, threads, binarize_feat,
                                   &beta, &levels, &names, &n_cells, &ncol, col0);
-      fprintf(stderr, "[methscope] classify-featurize: %u sets fused, "
-              "%u patterns; set starts:", n_sets, ncol);
-      for (uint32_t s = 0; s < n_sets; ++s) fprintf(stderr, " %u", col0[s]);
-      fputc('\n', stderr);
+      /* The per-set start offsets used to be dumped here -- 100 numbers on one
+       * line, for a layout `inspect` reports properly. */
+      fprintf(stderr, "  %-14s %u set(s) fused, %u patterns\n",
+              "layout", n_sets, ncol);
       set_names = snames; snames = NULL;       /* ownership moves to the writer */
       n_sets_out = n_sets; col0_out = col0;
       free(np);

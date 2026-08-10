@@ -174,6 +174,11 @@ int main_mrmpset_inspect(const char *path);   /* the MRMPIDX1 arm of `inspect` *
 /* Nonzero if PATH is a MRMPIDX1 artifact rather than an exported .cm mask. */
 int ms_mrmp_is_artifact(const char *path);
 
+/* CpG row count of the block at BASE. Header-only, so it costs a seek and a
+ * read -- cheap enough to validate every set against the query before any
+ * indexing happens. */
+uint64_t ms_mrmp_n_cpg_at(const char *path, uint64_t base);
+
 /* Write the artifact's per-CpG P1..P<top_k> / PNA labels as a YAME format-2
  * .cm. The caller owns top_k: for a model bundle it is the model's MRMP input
  * count, so the shipped mask cannot disagree with the input dimension.

@@ -1629,6 +1629,18 @@ int main_mrmp_export(int argc, char *argv[]) {
 
 /* ---------------- artifact -> runtime forms ------------------------------ */
 
+uint64_t ms_mrmp_n_cpg_at(const char *path, uint64_t base) {
+  FILE *f = fopen(path, "rb");
+  if (!f) die("cannot open", path);
+  mrmp_header_t h;
+  if (fseeko(f, (off_t)base, SEEK_SET) || fread(&h, 1, sizeof h, f) != sizeof h) {
+    fclose(f); die("cannot read MRMP header", path);
+  }
+  fclose(f);
+  if (memcmp(h.magic, MRMPIDX_MAGIC, 8)) die("not an MRMPIDX1 block", path);
+  return h.n_cpg;
+}
+
 int ms_mrmp_is_artifact(const char *path) {
   char magic[8];
   FILE *f = fopen(path, "rb");

@@ -143,6 +143,18 @@ typedef struct {
   int             progress;
 } job_t;
 
+/* thousands separators; buf >= 32 bytes */
+static const char *commafmt_mb(uint64_t v, char *buf) {
+  char tmp[24]; int n = snprintf(tmp, sizeof tmp, "%" PRIu64, v);
+  int o = 0;
+  for (int i = 0; i < n; ++i) {
+    if (i && (n - i) % 3 == 0) buf[o++] = ',';
+    buf[o++] = tmp[i];
+  }
+  buf[o] = '\0';
+  return buf;
+}
+
 static void *worker(void *arg) {
   job_t *J = (job_t *)arg;
   cfile_t cf = open_cfile((char *)J->query);
@@ -258,8 +270,11 @@ static void *worker(void *arg) {
       TOCK(t_emit);
     }
     free_cdata(&c);
-    if (J->progress && (cell % 500) == 0)
-      fprintf(stderr, "[methscope] classify-featurize: cell %u/%u\n", cell, J->n_cells);
+    /* No per-cell progress line. Cells are claimed by N threads from a shared
+     * cursor, so the number printed was whichever thread happened to hit a
+     * multiple of 500 -- it sat at 0 for a 286-cell run and then jumped to the
+     * end. A counter that does not track progress is worse than none. */
+    (void)0;
   }
   bgzf_close(cf.fh);
   if (getenv("METHSCOPE_PROFILE"))
@@ -393,6 +408,22 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
    * real membership (~865k on a 100-set artifact) instead of one per CpG per set
    * (2.18 billion). The dense .cm path below is unchanged -- an exported mask has
    * no runs to walk. */
+  /* Every set must share the query's row space BEFORE anything is sized to it.
+   * cpg_cnt is allocated over the QUERY's n_cpg and then filled at positions
+   * taken from the ARTIFACT, so a mismatch walks off the end of the heap --
+   * pairing a mouse store with a human artifact segfaulted here rather than
+   * reporting the obvious. */
+  for (uint32_t si = 0; si < n_sets; ++si) {
+    if (!ms_mrmp_is_artifact(mrmps[si])) continue;
+    uint64_t a_cpg = ms_mrmp_n_cpg_at(mrmps[si], mrmp_base ? mrmp_base[si] : 0);
+    if (a_cpg != n_cpg) {
+      char m[256];
+      snprintf(m, sizeof m, "artifact spans %" PRIu64 " CpG rows but the query "
+               "has %" PRIu64 " -- different references", a_cpg, n_cpg);
+      bdie(m, mrmps[si]);
+    }
+  }
+
   uint32_t *cpg_cnt = bmal((size_t)(n_cpg + 1) * sizeof(uint32_t), "cpg membership counts");
   memset(cpg_cnt, 0, (size_t)(n_cpg + 1) * sizeof(uint32_t));
   uint16_t **stage = bmal((size_t)n_sets * sizeof(uint16_t *), "staged maps");
@@ -538,9 +569,10 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
     free(stage[si]);
   }
   free(stage); free(cpg_cnt); free(ra_base);
-  fprintf(stderr, "[methscope] classify-featurize: %" PRIu64 " pattern membership(s) "
-          "over %" PRIu64 " CpGs (%.2f%% carry any)\n", acc, n_cpg,
-          100.0 * (double)acc / (double)n_cpg);
+  { char c1[32], c2[32];
+    fprintf(stderr, "  %-14s %s over %s CpGs (%.2f%% carry any)\n", "membership",
+            commafmt_mb(acc, c1), commafmt_mb(n_cpg, c2),
+            100.0 * (double)acc / (double)n_cpg); }
 
   /* Per-column cut. 0.5 by default: it is an ABSOLUTE call ("this cell is
    * methylated here"), so it means the same thing on a cohort this reference
@@ -594,9 +626,14 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   if (threads < 1) threads = 1;
   if (threads > n_cells) threads = n_cells;
   pthread_t *tid = bmal(threads * sizeof(pthread_t), "threads");
-  fprintf(stderr, "[methscope] classify-featurize: %u cells x %u replicate(s) "
-          "x %u patterns, %u thread(s)%s\n",
-          n_cells, n_reps, ncol - n_sets, threads, binarize ? ", binarized" : "");
+  /* ncol, not ncol - n_sets: there is no background column per set to discount
+   * any more, so the old expression under-reported by exactly the set count
+   * (989 for a 1,000-pattern, 11-set artifact). */
+  { char c1[32];
+    fprintf(stderr, "  %-14s %s cells%s\n",
+            "input", commafmt_mb(n_cells, c1),
+            binarize ? ", binarised reads" : "");
+    fprintf(stderr, "  %-14s %u\n", "threads", threads); }
   for (unsigned t = 0; t < threads; ++t)
     if (pthread_create(&tid[t], NULL, worker, &J)) bdie("cannot create thread", NULL);
   for (unsigned t = 0; t < threads; ++t) pthread_join(tid[t], NULL);
