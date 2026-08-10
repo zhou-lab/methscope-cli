@@ -110,6 +110,18 @@ static int bundle_model(const char *out, const char *kind, const char *inner_tmp
   return trimmed;
 }
 
+/* thousands separators; buf >= 32 bytes */
+static const char *commafmt_tr(uint64_t v, char *buf) {
+  char tmp[24]; int n = snprintf(tmp, sizeof tmp, "%llu", (unsigned long long)v);
+  int o = 0;
+  for (int i = 0; i < n; ++i) {
+    if (i && (n - i) % 3 == 0) buf[o++] = ',';
+    buf[o++] = tmp[i];
+  }
+  buf[o] = '\0';
+  return buf;
+}
+
 static int train_usage(void) {
   ms_help(stderr,
     "\n"
@@ -171,6 +183,10 @@ static int train_usage(void) {
     "                   the expected-1 and expected-0 sides before a call (default 20);\n"
     "                   below it the record is reported NA rather than guessed.\n"
     "  -n <nrounds>     Boosting rounds, xgboost only (default: round(sqrt(n_cells))).\n"
+    "  --eval-every <N> Report training mlogloss every N rounds, as a rolling\n"
+    "                   window of the last 5. Default: nrounds/20, about 5%%\n"
+    "                   overhead -- each evaluation predicts over the whole\n"
+    "                   training matrix. 0 disables, 1 evaluates every round.\n"
     "  --threads <N>    xgboost nthread (default: the CPUs this process may\n"
     "                   actually use). Left to xgboost it sizes its pool from\n"
     "                   the machine, which on a shared batch node is not what\n"
@@ -208,6 +224,7 @@ int main_train(int argc, char *argv[]) {
   const char *data_path = NULL, *hier_path = NULL;
   int npattern = 0, nrounds = 0, include_pna = 0, scalar_cov = 0;
   int nthread = 0;                    /* 0 = derive; see ms_train_threads() */
+  int eval_every = -1;                /* -1 = auto (nrounds/20); 0 = off */
   /* xgboost tree-shape knobs. Default max_depth stays xgboost's 6; the point of
    * exposing it is that a redundant training set -- one pseudobulk replicated
    * across a coverage ladder -- makes every split look far more confident than
@@ -224,6 +241,8 @@ int main_train(int argc, char *argv[]) {
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-l") == 0 && i+1 < argc) labels_path = argv[++i];
     else if (strcmp(argv[i], "--data") == 0 && i+1 < argc) data_path = argv[++i];
+    else if (strcmp(argv[i], "--eval-every") == 0 && i+1 < argc)
+      eval_every = parse_nonneg_int(argv[++i], "--eval-every expects a non-negative integer");
     else if (strcmp(argv[i], "--threads") == 0 && i+1 < argc)
       nthread = parse_nonneg_int(argv[++i], "--threads expects a non-negative integer");
     else if (strcmp(argv[i], "--scalar-coverage") == 0) scalar_cov = 1;
@@ -315,7 +334,15 @@ int main_train(int argc, char *argv[]) {
     tdie("--scalar-coverage is xgboost-only", framework);
   const char *query_cg = data_path ? NULL : argv[i];
   char *tmp_mrmp = NULL;
-  const char *ref_mrmp = ms_mrmp_resolve(argv[i + (data_path ? 0 : 1)], &tmp_mrmp);
+  /* Keep the ARTIFACT path as given. ms_mrmp_resolve() materialises a runtime
+   * mask for featurizing, but the bundle should carry the .mrmp itself: it is
+   * self-describing, keeps set names and per-set structure, and needs no
+   * sibling .idx -- which ms_bundle_pack cannot store anyway, so bundling a
+   * resolved multi-record mask silently lost every record's name. The chain
+   * walker stops at MSBNDL1, so a bundled .mrmp is readable straight off the
+   * bundle prefix, exactly as a bundled .cm was. */
+  const char *ref_arg  = argv[i + (data_path ? 0 : 1)];
+  const char *ref_mrmp = ms_mrmp_resolve(ref_arg, &tmp_mrmp);
 
   /* ---- features ----
    * Featurize now, or reuse a .msfm built earlier by `classify-featurize`.
@@ -423,7 +450,7 @@ int main_train(int argc, char *argv[]) {
     if (fd < 0) tdie("cannot create temp linear model file", NULL);
     close(fd);
     ms_linmodel_write(lm, tmpl);
-    trimmed = bundle_model(out_path, framework, tmpl, ref_mrmp,
+    trimmed = bundle_model(out_path, framework, tmpl, ref_arg,
                            m->pattern_names, npattern, n_nonpna);
     unlink(tmpl);
     ms_linmodel_free(lm);
@@ -449,6 +476,7 @@ int main_train(int argc, char *argv[]) {
       for (int c = 0; c < npattern; ++c) dst[c] = (float)src[c];
       if (scalar_cov) dst[npattern] = (float)log1p((double)levels[r]);
     }
+    const int nrounds_auto = (nrounds <= 0);
     if (nrounds <= 0) nrounds = (int)(sqrt((double)m->n_cells) + 0.5);
     if (nrounds < 1) nrounds = 1;
 
@@ -478,7 +506,15 @@ int main_train(int argc, char *argv[]) {
     if (nt > 0) {
       char tbuf[16]; snprintf(tbuf, sizeof(tbuf), "%d", nt);
       XGCHK(XGBoosterSetParam(booster, "nthread", tbuf));
-      fprintf(stderr, "[methscope] classify-train: xgboost nthread=%d\n", nt);
+      { char c1[32], c2[32];
+        fprintf(stderr, "\n[methscope] classify-train\n\n");
+        fprintf(stderr, "  %-14s %s records x %s patterns, %d classes\n", "data",
+                commafmt_tr((uint64_t)m->n_cells, c1),
+                commafmt_tr((uint64_t)npattern, c2), K);
+        fprintf(stderr, "  %-14s gbtree, multi:softprob, mlogloss\n", "booster");
+        fprintf(stderr, "  %-14s %d%s\n", "rounds", nrounds,
+                nrounds_auto ? " (round(sqrt(records)))" : "");
+        fprintf(stderr, "  %-14s %d\n", "threads", nt); }
     }
     char pbuf[32];
     if (max_depth > 0) {
@@ -493,8 +529,46 @@ int main_train(int argc, char *argv[]) {
       snprintf(pbuf, sizeof(pbuf), "%g", colsample);
       XGCHK(XGBoosterSetParam(booster, "colsample_bytree", pbuf));
     }
-    for (int it = 0; it < nrounds; ++it)
+    /* Periodic training mlogloss, so a run that is not converging is visible
+     * while it happens rather than after.
+     *
+     * XGBoosterEvalOneIter predicts over the whole training matrix, so it is
+     * not free -- evaluating every round would roughly double the cost. Every
+     * nrounds/20 keeps the overhead near 5% and still shows the shape of the
+     * curve. --eval-every 0 turns it off, 1 evaluates every round.
+     *
+     * The rolling window is the point: a single number says nothing, five in a
+     * row say whether it is still descending. */
+    int estep = eval_every >= 0 ? eval_every : (nrounds >= 20 ? nrounds / 20 : 1);
+    const int tty = isatty(STDERR_FILENO);
+    double hist[5]; int nh = 0;
+    for (int it = 0; it < nrounds; ++it) {
       XGCHK(XGBoosterUpdateOneIter(booster, it, dtrain));
+      if (!estep || (it + 1) % estep != 0) continue;
+      const char *ev = NULL;
+      const char *nm = "train";
+      if (XGBoosterEvalOneIter(booster, it, &dtrain, &nm, 1, &ev) || !ev) continue;
+      const char *c = strrchr(ev, ':');
+      if (!c) continue;
+      if (nh < 5) hist[nh++] = atof(c + 1);
+      else { for (int k = 0; k < 4; ++k) hist[k] = hist[k + 1]; hist[4] = atof(c + 1); }
+      char buf[160]; int at = 0;
+      for (int k = 0; k < nh; ++k)
+        at += snprintf(buf + at, sizeof buf - at, "%s%.4f", k ? " " : "", hist[k]);
+      fprintf(stderr, "%s  %-14s round %d/%d  mlogloss %s%s",
+              tty ? "\r\033[K" : "", "training", it + 1, nrounds, buf,
+              tty ? "" : "\n");
+      if (tty) fflush(stderr);
+    }
+    if (tty) fprintf(stderr, "\r\033[K");
+    /* One final evaluation regardless of --eval-every: the number a reader
+     * actually wants is where it ended up, and it costs one pass. */
+    { const char *ev = NULL, *nm = "train";
+      if (!XGBoosterEvalOneIter(booster, nrounds - 1, &dtrain, &nm, 1, &ev) && ev) {
+        const char *c = strrchr(ev, ':');
+        if (c) fprintf(stderr, "  %-14s %.4f  (train mlogloss after %d rounds)\n",
+                       "final loss", atof(c + 1), nrounds);
+      } }
 
     /* embed labels; save as loose .ubj or a (trimmed-mrmp) .ubjx bundle */
     ms_booster_set_meta(booster, uniq, K);
@@ -536,16 +610,15 @@ int main_train(int argc, char *argv[]) {
       if (fd < 0) tdie("cannot create temp booster file", NULL);
       close(fd);
       XGCHK(XGBoosterSaveModel(booster, tmpl));
-      trimmed = bundle_model(out_path, "xgboost", tmpl, ref_mrmp,
+      trimmed = bundle_model(out_path, "xgboost", tmpl, ref_arg,
                              m->pattern_names, npattern, n_nonpna);
       unlink(tmpl);
     } else {
       XGCHK(XGBoosterSaveModel(booster, out_path));
     }
-    fprintf(stderr, "[methscope] trained %d-class xgboost model on %d cells x %d feature(s), "
-                    "%d rounds -> %s%s%s\n", K, m->n_cells, npattern, nrounds, out_path,
-                    bundled ? " (booster+MRMP bundle" : "",
-                    bundled ? (trimmed ? ", trimmed mrmp)" : ")") : "");
+    fprintf(stderr, "  %-14s %s%s%s\n\n", "wrote", out_path,
+            bundled ? " (booster + MRMP bundle" : "",
+            bundled ? (trimmed ? ", trimmed mrmp)" : ")") : "");
     XGDMatrixFree(dtrain); XGBoosterFree(booster);
     free(data); free(ylab);
   }

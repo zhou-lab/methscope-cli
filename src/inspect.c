@@ -66,16 +66,28 @@ static char *buf_to_tmp(const void *buf, size_t len) {
   return strdup(tmpl);
 }
 
-/* number of distinct states in a fmt2 .cm, or -1 on failure */
-static long mrmp_state_count(const char *cm_path) {
+/* States in the FIRST record of a .cm, and how many records it holds. The
+ * record count matters since the chain-aware resolve: a multi-set .mrmp now
+ * resolves to one record per set, and reporting only the first record's states
+ * described a fraction of the mask as if it were the whole thing. -1 on
+ * failure; *nrec_out is 0 then. */
+static long mrmp_state_count(const char *cm_path, long *nrec_out) {
+  if (nrec_out) *nrec_out = 0;
   cfile_t cf = open_cfile((char *)cm_path);
   cdata_t c  = read_cdata1(&cf);
-  bgzf_close(cf.fh);
-  if (c.fmt != '2') { free_cdata(&c); return -1; }
+  if (c.fmt != '2') { free_cdata(&c); bgzf_close(cf.fh); return -1; }
   cdata_t d = decompress(c);
   free_cdata(&c);
   long n = (long)fmt2_get_keys_n(&d);
   free_cdata(&d);
+  long rec = 1;
+  for (;;) {                                   /* count the remaining records */
+    cdata_t e = read_cdata1(&cf);
+    if (!e.n) { free_cdata(&e); break; }
+    free_cdata(&e); ++rec;
+  }
+  bgzf_close(cf.fh);
+  if (nrec_out) *nrec_out = rec;
   return n;
 }
 
@@ -198,7 +210,13 @@ bundle_report:;
   size_t rlen = 0;
   void *rbuf = ms_bundle_section_opt(path, "mrmp", &rlen);
   long ns = -1;
-  if (rbuf) { char *t = buf_to_tmp(rbuf, rlen); ns = mrmp_state_count(t); unlink(t); free(t); }
+  long nrec = 0;
+  int  ref_is_mrmp = (rbuf && rlen >= 8 && !memcmp(rbuf, "MRMPIDX1", 8));
+  if (rbuf && !ref_is_mrmp) {
+    char *t = buf_to_tmp(rbuf, rlen);
+    ns = mrmp_state_count(t, &nrec);
+    unlink(t); free(t);
+  }
   free(rbuf);
 
   /* framework-specific dims parsed once (reused by the layout + the model block) */
@@ -267,7 +285,12 @@ bundle_report:;
     char cbuf[176]; const char *c = "";
     if      (strcmp(secs[i].name, "model")     == 0) c = mdesc;
     else if (strcmp(secs[i].name, "mrmp")   == 0) {
-      if (ns >= 0) { snprintf(cbuf, sizeof cbuf, "fmt2 MRMP definition, %ld states", ns); c = cbuf; }
+      if (ref_is_mrmp) { snprintf(cbuf, sizeof cbuf, "MRMPIDX1 artifact"); c = cbuf; }
+      else if (ns >= 0 && nrec > 1)
+        { snprintf(cbuf, sizeof cbuf, "YAME .cm mask, %ld records, %ld states in the first",
+                   nrec, ns); c = cbuf; }
+      else if (ns >= 0)
+        { snprintf(cbuf, sizeof cbuf, "YAME .cm mask, %ld states", ns); c = cbuf; }
       else c = "MRMP definition (YAME .cm)";
     }
     else if (strcmp(secs[i].name, "outcpg") == 0) c = "genome-wide output-CpG mask";
@@ -284,7 +307,8 @@ bundle_report:;
     const char *nm = secs[i].name;
     const char *hdr =
       strcmp(nm, "model")     == 0 ? role :
-      strcmp(nm, "mrmp")   == 0 ? "MRMP feature definition (fmt2 YAME .cm)" :
+      strcmp(nm, "mrmp")   == 0 ? (ref_is_mrmp ? "MRMP feature definition (MRMPIDX1)"
+                                              : "MRMP feature definition (YAME .cm)") :
       strcmp(nm, "outcpg") == 0 ? "genome-wide output-CpG mask" :
       strcmp(nm, "kind")      == 0 ? "bundle framework mark" : "";
     printf("\n  [%d] %-9s  %s\n", i, nm, hdr);
@@ -383,6 +407,22 @@ bundle_report:;
       }
     } else if (strcmp(nm, "mrmp") == 0) {
       if (ns >= 0) printf("      %-10s %ld\n", "states", ns);
+      if (nrec > 1) printf("      %-10s %ld  (one per set)\n", "records", nrec);
+      if (ref_is_mrmp) {
+        /* The chain sits at offset 0 of the bundle and the walker stops at the
+         * MSBNDL1 trailer, so it reads straight off the bundle path -- the same
+         * prefix trick a bundled .cm relied on. */
+        ms_mrmpset_t *ch = ms_mrmpset_open(path);
+        uint64_t pats = 0;
+        for (uint32_t k = 0; k < ch->n_sets; ++k) {
+          mrmp_top_t *t = ms_mrmp_top_read_at(path, ch->block_off[k], UINT32_MAX);
+          pats += t->n_patterns;
+          ms_mrmp_top_free(t);
+        }
+        printf("      %-10s %u\n", "sets", ch->n_sets);
+        printf("      %-10s %llu\n", "patterns", (unsigned long long)pats);
+        ms_mrmpset_free(ch);
+      }
     } else if (strcmp(nm, "outcpg") == 0) {
       printf("      imputed-CpG locations; makes `upscale` emit a whole-genome .cg\n");
     } else if (strcmp(nm, "kind") == 0) {
