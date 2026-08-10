@@ -19,7 +19,25 @@
 /* ------------------------------------------------------------------ */
 typedef struct ms_matrix_t {
   int      n_cells;        /* rows    */
-  int      n_patterns;     /* columns, ordered by numeric pattern id (Pna last) */
+  /* Columns. The order depends on WHERE the matrix came from, and the
+   * difference is load-bearing:
+   *
+   *   ms_matrix_build()           sorts by numeric pattern id, "Pna" last
+   *   ms_matrix_build_threaded()  one set, so "Pna" is simply the last column
+   *   ms_msfm_to_matrix()         VERBATIM FILE ORDER -- no sort
+   *
+   * A single-set .msfm is P1..PN followed by Pna, so the last case looks like
+   * the other two and the old blanket claim of "Pna last" seemed to hold. A
+   * FUSED multi-set .msfm breaks it: that layout is set-major, so each set's
+   * "Pna.<set>" sits immediately after that set's own patterns and the
+   * backgrounds are INTERLEAVED rather than trailing.
+   *
+   * So never assume the first k columns are the real patterns. That read is
+   * what fed 66 background columns into the classifier as features and dropped
+   * 66 real patterns off the end of a 100-set artifact, silently and in both
+   * training and scoring. Test names with ms_is_pna_name() and rebuild the
+   * matrix around the selection with ms_matrix_select(). */
+  int      n_patterns;
   char   **cell_names;     /* length n_cells    */
   char   **pattern_names;  /* length n_patterns */
   double  *M;              /* row-major n_cells x n_patterns; NAN = missing */
