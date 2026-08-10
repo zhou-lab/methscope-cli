@@ -35,14 +35,16 @@ static long pattern_numeric_key(const char *s) {
   /* Checked BEFORE the digit scan: a fused background is "Pna.<set>" and a set
    * name may carry digits ("Pna.bio_itl23"), which would otherwise be read as
    * pattern number 23 and sorted among the real patterns. */
-  if (ms_is_pna_name(s)) return LONG_MAX;
+  /* NULL sorts with the backgrounds. ms_is_pna_name() deliberately tolerates
+   * NULL and returns 0, which used to hand a NULL straight to the scan below --
+   * an unnamed column is a malformed artifact, not a reason to segfault. */
+  if (!s || ms_is_pna_name(s)) return LONG_MAX;
   for (const char *p = s; *p; ++p)
     if (*p >= '0' && *p <= '9') return atol(p);
-  /* Non-numeric names have no recurrence rank. The NA background "Pna" always
-   * sorts strictly last; other curated marker names (e.g. "Xa_hi") sort after
-   * the numeric patterns but before "Pna", keeping their definition order via
-   * the stable tie-break in cmp_colkey. */
-  if (strcmp(s, "Pna") == 0) return LONG_MAX;
+  /* Non-numeric names have no recurrence rank. Curated marker names (e.g.
+   * "Xa_hi") sort after the numeric patterns but before the backgrounds,
+   * keeping their definition order via the stable tie-break in cmp_colkey.
+   * ("Pna" itself never reaches here -- it returned above.) */
   return LONG_MAX - 1;
 }
 
@@ -138,9 +140,14 @@ ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm) {
     prepare_mask(&cq);
 
     size_t col = 0;
+    /* summarize1() takes char*, not const char*, so a string literal here is
+     * only safe as long as it never writes. Hand it a writable empty buffer
+     * instead of betting on that. */
+    char no_query_name[] = "";
     for (size_t k = 0; k < n_masks; ++k) {
       uint64_t n_st = 0;
-      stats_t *st = summarize1(&cq, &c_masks[k], &n_st, mask_names[k], "", &config);
+      stats_t *st = summarize1(&cq, &c_masks[k], &n_st, mask_names[k],
+                               no_query_name, &config);
       for (uint64_t j = 0; j < n_st; ++j) {
         double v = (st[j].beta >= 0) ? st[j].beta : NAN;
         if (first) {
@@ -151,7 +158,10 @@ ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm) {
             raw_Ncnt  = realloc(raw_Ncnt,  rawcap * sizeof(int));
             if (!raw_names || !raw_row || !raw_Ncnt) mdie("out of memory (columns)", NULL);
           }
-          raw_names[col] = strdup(st[j].sm);
+          /* Both guards matter: strdup(NULL) is undefined, and an unchecked
+           * strdup would store NULL for the sort key to walk into. */
+          raw_names[col] = strdup(st[j].sm ? st[j].sm : "");
+          if (!raw_names[col]) mdie("out of memory (column name)", NULL);
         }
         raw_row[col]  = v;
         raw_Ncnt[col] = (st[j].n_o > (uint64_t)INT_MAX) ? INT_MAX : (int)st[j].n_o;

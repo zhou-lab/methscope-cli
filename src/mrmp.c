@@ -1088,9 +1088,9 @@ ms_mrmpset_t *ms_mrmpset_open(const char *path) {
     if (h.name_offset && h.name_offset < nb) {
       char buf[256];
       if (fseeko(f, (off_t)(at + h.name_offset), SEEK_SET)) die("cannot seek", path);
-      size_t got = fread(buf, 1, sizeof buf - 1, f);
-      buf[got] = '\0';
-      if (got) { nm = xcalloc(strlen(buf) + 1, 1, "set name"); strcpy(nm, buf); }
+      size_t nread = fread(buf, 1, sizeof buf - 1, f);
+      buf[nread] = '\0';
+      if (nread) { nm = xcalloc(strlen(buf) + 1, 1, "set name"); strcpy(nm, buf); }
     }
     if (!nm) {
       char buf[32]; snprintf(buf, sizeof buf, "set%u", s->n_sets);
