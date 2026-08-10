@@ -249,7 +249,21 @@ static void *worker(void *arg) {
         if (J->col_thresh) {
           float t = J->col_thresh[g];
           if (t != t) { out[g] = MSFM_NA; continue; }   /* unusable pattern */
-          if (t >= 0.0f) b = (b > (double)t) ? 1.0 : 0.0;
+          if (t >= 0.0f) {
+            /* Landing exactly on the cut is not evidence for either side, and
+             * `b > t` used to resolve it to 0 -- silently, and always against
+             * the expected-1 class. It is not rare: a beta is k/n over the
+             * CpGs a cell happened to observe, so any even n split down the
+             * middle ties, and at one read per CpG that is mostly n=2. Across
+             * mouse single cells 2.60% of observed pattern-betas sit exactly on
+             * 0.5, and 99.9% of records carry at least one (median 13, max 68).
+             *
+             * NA is both honest and better handled: xgboost routes missing down
+             * a learned default direction per node, so the model works out which
+             * way a tie should fall instead of us hardcoding it wrong. */
+            if (b == (double)t) { out[g] = MSFM_NA; continue; }
+            b = (b > (double)t) ? 1.0 : 0.0;
+          }
         }
         out[g] = msfm_encode(b);
       }
