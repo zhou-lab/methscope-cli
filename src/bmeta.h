@@ -33,6 +33,18 @@
  * the columns `classify-train` used, whatever order the query artifact has. */
 #define MS_ATTR_FEATURES "methscope_features"
 
+/* How the pattern features were coded when the model was trained: "0.5" for the
+ * flat cut, "pattern" for --thresh-pattern. Absent means continuous, which is
+ * what every model trained before 2026-08-09 was.
+ *
+ * `classify --data` reads a .msfm that is already coded, but `classify` on a
+ * raw .cg builds features through ms_matrix_build(), which returns a continuous
+ * mean. Without this, a model trained on {0,1,NA} silently scores against betas
+ * in [0,1] -- measured at 2 of 42 cells correct, with 39 of 43 collapsing onto
+ * one class. The coding travels with the model so the .cg path reproduces it
+ * rather than guessing. */
+#define MS_ATTR_BINARIZE "methscope_binarize"
+
 /* The label hierarchy, so a prediction is self-describing: one row per class,
  * "label\tcompartment\tlineage\tgroup\tsubtype", rows newline-separated.
  * Lets `classify --levels` report the taxonomy path without a side table, and
@@ -56,6 +68,11 @@ char *ms_booster_get_hier(BoosterHandle b);
  * Caller frees each string and the array. */
 void   ms_booster_set_features(BoosterHandle b, char *const *names, int n_feat);
 char **ms_booster_get_features(BoosterHandle b, int *n_feat);
+
+/* Record / read the feature coding (see MS_ATTR_BINARIZE). The getter returns
+ * a malloc'd string or NULL when the attribute is absent. */
+void  ms_booster_set_binarize(BoosterHandle b, const char *how);
+char *ms_booster_get_binarize(BoosterHandle b);
 
 /* Mark / test the scalar coverage feature (see MS_ATTR_SCALARCOV). */
 void ms_booster_set_scalar_cov(BoosterHandle b);

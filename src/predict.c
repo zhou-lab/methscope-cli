@@ -8,6 +8,7 @@
  */
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
 #include <math.h>
 #include <unistd.h>
 #include "methscope.h"
@@ -346,7 +347,7 @@ int main_predict(int argc, char *argv[]) {
        * positionally, which is exactly the case that used to go wrong quietly.
        * Say so rather than scoring on a guess. */
       fprintf(stderr, "[methscope] classify: model predates feature-name "
-              "recording and the query has %d columns for %d model features; "
+              "recording and the query has %d patterns for %d the model wants; "
               "taking the first %d BY POSITION, which is only correct if the "
               "artifact is single-set. Retrain to remove this ambiguity.\n",
               m->n_patterns, n_pat, n_pat);
@@ -354,6 +355,56 @@ int main_predict(int argc, char *argv[]) {
   }
   if (m->n_patterns < n_pat)
     pdie("reference .mrmp has fewer patterns than the booster expects", ref_mrmp);
+
+  /* Reproduce the training feature coding.
+   *
+   * classify --data reads a .msfm whose pattern columns are already coded, but
+   * this path built them with ms_matrix_build(), which returns a continuous
+   * mean. Scoring a model trained on {0,1,NA} against betas in [0,1] is a
+   * silent feature-space mismatch, and it does not degrade gracefully: measured
+   * at 2 of 42 cells correct, 39 of 43 collapsed onto a single class. */
+  {
+    char *how = ms_booster_get_binarize(booster);
+    if (how && !data_path)
+      /* Refuse rather than answer confidently and wrongly. Coding is only half
+       * of it: ms_matrix_build_threaded() also passes `patterns = n_pat` to the
+       * featurizer, so the .cg route RE-SELECTS the top-N patterns by rank
+       * instead of using the model's own columns -- measured at 1.20% of CpGs
+       * carrying a pattern against the artifact's 7.69%. Both selections are
+       * named P1..PN, so the MS_ATTR_FEATURES check matches and nothing errors:
+       * right names, wrong CpGs, 0 of 40 cells correct. Until scoring
+       * featurizes against the model's exact artifact, this path cannot honour
+       * a model trained through a .msfm. */
+      pdie("this model was trained on binarised features and scoring a .cg "
+           "cannot yet reproduce that feature space (it re-selects patterns by "
+           "rank); featurize first with classify-featurize and pass --data",
+           model_name);
+    if (how && !strcmp(how, "0.5")) {
+      if (data_path) {
+        /* already coded by the featurizer -- re-cutting is a no-op on {0,1} but
+         * would turn a 0.5-valued CONTINUOUS artifact into NA, so don't. */
+      } else {
+        uint64_t nbin = 0, ntie = 0;
+        for (size_t k = 0; k < (size_t)m->n_cells * m->n_patterns; ++k) {
+          double b = m->M[k];
+          if (b != b) continue;                       /* already missing */
+          if (b == 0.5) { m->M[k] = 0.0 / 0.0; m->N[k] = 0; ++ntie; ++nbin; continue; }
+          m->M[k] = b > 0.5 ? 1.0 : 0.0; ++nbin;
+        }
+        fprintf(stderr, "[methscope] classify: binarised %" PRIu64 " feature(s) "
+                "at 0.5 to match the model (%" PRIu64 " tie(s) -> NA)\n", nbin, ntie);
+      }
+    } else if (how && !strcmp(how, "pattern")) {
+      if (!data_path)
+        pdie("model was trained with --thresh-pattern, whose cuts are per-pattern "
+             "and derived from the reference; score it with --data <.msfm> built "
+             "the same way, not from a .cg", model_name);
+    } else if (!how && !data_path) {
+      /* Pre-2026-08-09 model: continuous features, and this path is continuous
+       * too, so they agree. Nothing to do, and nothing to warn about. */
+    }
+    free(how);
+  }
 
   /* Pack the first n_pat columns into a float matrix; NaN stays missing. */
   bst_ulong nrow = (bst_ulong)m->n_cells;

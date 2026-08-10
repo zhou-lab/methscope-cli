@@ -103,11 +103,33 @@ int ms_msfm_open(ms_msfm_t *f, const char *path, char *err, size_t errn) {
   return 1;
 }
 
+/* thousands separators, as mrmp.c's commafmt_local does; buf >= 32 bytes */
+static const char *commafmt_msfm(uint64_t v, char *buf) {
+  char tmp[24]; int n = snprintf(tmp, sizeof tmp, "%" PRIu64, v);
+  int o = 0;
+  for (int i = 0; i < n; ++i) {
+    if (i && (n - i) % 3 == 0) buf[o++] = ',';
+    buf[o++] = tmp[i];
+  }
+  buf[o] = '\0';
+  return buf;
+}
+
 void ms_msfm_close(ms_msfm_t *f) {
   free(f->pattern_names); free(f->record_names); free(f->class_names);
   if (f->map) munmap(f->map, (size_t)f->length);
   if (f->fd > 0) close(f->fd);
   memset(f, 0, sizeof(*f));
+}
+
+uint32_t ms_msfm_flags(const char *path) {
+  FILE *f = fopen(path, "rb");
+  if (!f) fdie("cannot open", path);
+  msfm_header_t h;
+  if (fread(&h, 1, sizeof h, f) != sizeof h) { fclose(f); fdie("short header", path); }
+  fclose(f);
+  if (!msfm_is(&h)) fdie("not an MSFMAT1 artifact", path);
+  return h.flags;
 }
 
 ms_matrix_t *ms_msfm_to_matrix(const char *path, char ***labels_out,
@@ -160,19 +182,28 @@ void ms_msfm_report(const char *path) {
     fprintf(stderr, "[methscope] inspect: %s\n", err); exit(1);
   }
   const msfm_header_t *h = f.header;
-  printf("format\tMSFMAT1 v%u\n", h->version);
-  printf("records\t%u\n", h->n_records);
-  printf("patterns\t%u\n", h->n_patterns);
-  printf("beta\tu16 fixed point (code/65534; 65535 = NA)\n");
-  printf("classes\t%u\n", h->n_classes);
+  /* Same shape as `inspect` on a .mrmp: banner, aligned keys, thousands
+   * separators, blank-line groups. */
+  char cb[32], cb2[32], cb3[32];
+  printf("\nMSFM  %s\n", path);
+  { const char *coding =
+      (h->flags & MSFM_FLAG_BIN_FLAT) ? "patterns binarised at 0.5"
+    : (h->flags & MSFM_FLAG_BIN_PAT)  ? "patterns cut at per-pattern midpoints"
+                                      : "continuous pattern betas";
+    printf("  %-14s MSFMAT1 v%u, %s\n", "format", h->version, coding); }
+  printf("\n");
+  printf("  %-14s %s\n", "records", commafmt_msfm(h->n_records, cb));
+  printf("  %-14s %s\n", "patterns", commafmt_msfm(h->n_patterns, cb));
+  printf("  %-14s %s\n", "classes", commafmt_msfm(h->n_classes, cb));
   if (h->n_classes) {
-    printf("labels\t");
+    printf("  %-14s ", "labels");
     for (uint32_t k = 0; k < h->n_classes && k < 8; ++k)
       printf("%s%s", k ? ", " : "", f.class_names[k]);
     if (h->n_classes > 8) printf(", ... (%u total)", h->n_classes);
     printf("\n");
   }
-  /* the coverage scalar's raw input, summarized so a bad ladder is obvious */
+  printf("\n");
+  printf("  %-14s u16 fixed point (code/65534; 65535 = NA)\n", "beta");
   uint64_t lo = UINT64_MAX, hi = 0, sum = 0;
   for (uint32_t r = 0; r < h->n_records; ++r) {
     uint32_t v = f.levels[r];
@@ -181,9 +212,10 @@ void ms_msfm_report(const char *path) {
     sum += v;
   }
   if (h->n_records)
-    printf("covered_cpgs\tmin %" PRIu64 "  mean %" PRIu64 "  max %" PRIu64 "\n",
-           lo, sum / h->n_records, hi);
-  printf("file_bytes\t%" PRIu64 "\n", h->file_bytes);
+    printf("  %-14s min %s   mean %s   max %s\n", "covered CpGs",
+           commafmt_msfm(lo, cb), commafmt_msfm(sum / h->n_records, cb2),
+           commafmt_msfm(hi, cb3));
+  printf("  %-14s %s bytes\n\n", "on disk", commafmt_msfm(h->file_bytes, cb));
   ms_msfm_close(&f);
 }
 
@@ -302,7 +334,7 @@ static void write_msfm_raw(const char *out, const uint16_t *beta,
                            uint32_t n_cells, uint32_t n_reps, uint32_t ncol,
                            char *const *lab, const uint32_t *rep_sample,
                            uint32_t n_sets, const uint32_t *col0,
-                           char *const *set_names) {
+                           char *const *set_names, uint32_t flags) {
   uint64_t nr = (uint64_t)n_reps * n_cells;
   if (nr > UINT32_MAX) fdie("too many records", NULL);
 
@@ -328,34 +360,18 @@ static void write_msfm_raw(const char *out, const uint16_t *beta,
     }
   }
 
-  /* Pattern names. Column layout is set-major and the LAST column of each set is
-   * that set's NA background, so each one is named "Pna.<set>" and the real
-   * patterns get a single running P1..PN across all sets.
+  /* Pattern names: one running P1..PN across all sets, in set order.
    *
-   * The running number is what makes the feature count equal the pooled budget:
-   * mrmp-pool's --pooled-top N buys N patterns, each set adds one background on
-   * top, and naming the backgrounds is what lets a consumer drop exactly those.
-   * Before this only the final column was called "Pna", so a 100-set fusion put
-   * 99 backgrounds into the classifier as ordinary patterns. */
+   * No background columns any more. They used to be emitted one per set, named
+   * "Pna.<set>" so a consumer could drop them again -- which made "column" and
+   * "pattern" different units and put the backgrounds BETWEEN pattern blocks,
+   * the layout that let a positional feature cut swallow backgrounds and drop
+   * real patterns off the end. The matrix is now exactly its patterns, so
+   * ncol == mrmp-pool's --pooled-top and there is nothing to exclude. */
   const size_t PN = 64;
   char (*pn)[64] = xmal((size_t)ncol * PN, "pattern names");
-  if (n_sets > 1 && col0) {
-    uint32_t p = 0;
-    for (uint32_t sIdx = 0; sIdx < n_sets; ++sIdx) {
-      uint32_t lo = col0[sIdx];
-      uint32_t hi = (sIdx + 1 < n_sets) ? col0[sIdx + 1] : ncol;
-      for (uint32_t g = lo; g + 1 < hi; ++g) snprintf(pn[g], PN, "P%u", ++p);
-      if (hi > lo) {
-        if (set_names && set_names[sIdx])
-          snprintf(pn[hi - 1], PN, "Pna.%s", set_names[sIdx]);
-        else
-          snprintf(pn[hi - 1], PN, "Pna.%u", sIdx + 1);
-      }
-    }
-  } else {
-    for (uint32_t g = 0; g + 1 < ncol; ++g) snprintf(pn[g], PN, "P%u", g + 1);
-    snprintf(pn[ncol - 1], PN, "Pna");
-  }
+  for (uint32_t g = 0; g < ncol; ++g) snprintf(pn[g], PN, "P%u", g + 1);
+  (void)col0; (void)set_names; (void)n_sets;
 
   uint64_t names_b = 0, rows_b = 0, class_b = 0;
   for (uint32_t g = 0; g < ncol; ++g) names_b += strlen(pn[g]) + 1;
@@ -370,7 +386,7 @@ static void write_msfm_raw(const char *out, const uint16_t *beta,
   msfm_header_t h; memset(&h, 0, sizeof(h));
   memcpy(h.magic, MSFM_MAGIC, 7);
   h.version = 1; h.n_records = (uint32_t)nr; h.n_patterns = ncol; h.n_classes = nk;
-  h.flags = 0;
+  h.flags = flags;
   h.names_offset  = sizeof(h);
   h.rows_offset   = h.names_offset + names_b;
   h.labels_offset = h.rows_offset + rows_b;
@@ -551,7 +567,7 @@ static int usage(void) {
     "                 reads 0.918\". The call is absolute, so it means the same\n"
     "                 thing on a cohort this reference never saw -- which a raw\n"
     "                 beta does not once a global shift, mitotic or otherwise,\n"
-    "                 moves every value at once. Background columns stay\n"
+    "                 moves every value at once.\n"
     "                 continuous either way; they are not a contrast.\n"
     "  --thresh-pattern\n"
     "                 Cut at each pattern's OWN midpoint (stored in the .mrmp)\n"
@@ -773,7 +789,7 @@ int main_classify_featurize(int argc, char *argv[]) {
                                   binarize, min_cpgs, seed, threads, binarize_feat,
                                   &beta, &levels, &names, &n_cells, &ncol, col0);
       fprintf(stderr, "[methscope] classify-featurize: %u sets fused, "
-              "%u columns; set starts:", n_sets, ncol);
+              "%u patterns; set starts:", n_sets, ncol);
       for (uint32_t s = 0; s < n_sets; ++s) fprintf(stderr, " %u", col0[s]);
       fputc('\n', stderr);
       set_names = snames; snames = NULL;       /* ownership moves to the writer */
@@ -781,8 +797,12 @@ int main_classify_featurize(int argc, char *argv[]) {
       free(np);
     }
     char **lab = labels ? read_labels(labels, (int)n_cells) : NULL;
+    /* Explicit rather than passing binarize_feat straight through: the CLI
+     * encoding and the on-disk flag are separate vocabularies. */
+    uint32_t fflags = binarize_feat == 1 ? MSFM_FLAG_BIN_FLAT
+                    : binarize_feat == 2 ? MSFM_FLAG_BIN_PAT : 0u;
     write_msfm_raw(out, beta, levels, names, n_cells, n_reps, ncol, lab,
-                   rep_sample, n_sets_out, col0_out, set_names);
+                   rep_sample, n_sets_out, col0_out, set_names, fflags);
     if (set_names) { for (uint32_t s = 0; s < n_sets_out; ++s) free(set_names[s]); free(set_names); }
     free(col0_out);
     if (snames) { for (uint32_t s = 0; s < n_sets; ++s) free(snames[s]); free(snames); }

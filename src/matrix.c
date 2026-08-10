@@ -149,6 +149,10 @@ ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm) {
       stats_t *st = summarize1(&cq, &c_masks[k], &n_st, mask_names[k],
                                no_query_name, &config);
       for (uint64_t j = 0; j < n_st; ++j) {
+        /* Drop the background. classify-featurize no longer emits one, so
+         * emitting it here would make the two feature paths different widths --
+         * the divergence that scored 2 of 42 cells correct. */
+        if (ms_is_pna_name(st[j].sm)) continue;
         double v = (st[j].beta >= 0) ? st[j].beta : NAN;
         if (first) {
           if (col == rawcap) {

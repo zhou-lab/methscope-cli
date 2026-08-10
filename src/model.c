@@ -105,6 +105,20 @@ char **ms_booster_get_features(BoosterHandle b, int *n_feat) {
   return out;
 }
 
+void ms_booster_set_binarize(BoosterHandle b, const char *how) {
+  XGCHK(XGBoosterSetAttr(b, MS_ATTR_BINARIZE, how));
+}
+
+char *ms_booster_get_binarize(BoosterHandle b) {
+  const char *val = NULL;
+  int success = 0;
+  if (XGBoosterGetAttr(b, MS_ATTR_BINARIZE, &val, &success) != 0 || !success || !val)
+    return NULL;
+  char *out = strdup(val);
+  if (!out) die("out of memory (binarize)", NULL);
+  return out;
+}
+
 void ms_booster_set_scalar_cov(BoosterHandle b) {
   XGCHK(XGBoosterSetAttr(b, MS_ATTR_SCALARCOV, "log1p"));
 }

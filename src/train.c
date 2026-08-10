@@ -137,9 +137,9 @@ static int train_usage(void) {
     "                   run directly; a plain '.ubj' writes just the loose booster.\n"
     "                   The bundled MRMP is TRIMMED to exactly the patterns used\n"
     "                   (others folded into 'Pna'), and `predict` uses that same set.\n"
-    "  -p <npattern>    Use the first N FEATURE columns -- that is, the first N\n"
+    "  -p <npattern>    Use the first N patterns in the artifact's own order.\n"
     "                   after the 'Pna' backgrounds have been excluded, in the\n"
-    "                   artifact's own column order. For an auto MRMP that order\n"
+    "                   For an auto MRMP that order\n"
     "                   is recurrence rank (P1,P2,...), so N means the N most\n"
     "                   recurrent; for curated named markers it is definition\n"
     "                   order, and leaving it unset is what you want.\n"
@@ -148,7 +148,7 @@ static int train_usage(void) {
     "                   drop whole trailing sets. Cut with mrmp-pool --pooled-top\n"
     "                   instead if you want a per-set budget.\n"
     "                   Default: every non-'Pna' state.\n"
-    "  --include-pna    Also use the 'Pna' NA-background state as a feature\n"
+
     "                   (default: excluded).\n"
     "  --framework <f>  Model framework (default: xgboost):\n"
     "                     xgboost    gradient-boosted trees (multiclass).\n"
@@ -193,7 +193,7 @@ static int train_usage(void) {
     "                   the path, and an external cohort labelled only coarsely can\n"
     "                   still be scored at the level both sides resolve.\n"
     "  --scalar-coverage  Append ONE extra feature, log1p(covered CpGs) for the\n"
-    "                   record, after the pattern columns -- the classifier analogue\n"
+    "                   record, after the patterns -- the classifier analogue\n"
     "                   of the upscale model's `--features scalar`. Worth it when\n"
     "                   training spans a coverage ladder, so the model can tell which\n"
     "                   sparsity regime it is in. Requires --data (the artifact\n"
@@ -231,7 +231,9 @@ int main_train(int argc, char *argv[]) {
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out_path    = argv[++i];
     else if (strcmp(argv[i], "-p") == 0 && i+1 < argc)
       npattern = parse_nonneg_int(argv[++i], "-p expects a non-negative integer");
-    else if (strcmp(argv[i], "--include-pna") == 0)    include_pna = 1;
+    else if (strcmp(argv[i], "--include-pna") == 0)
+      tdie("--include-pna is gone: featurize no longer emits background "
+           "patterns, so there is nothing to include", NULL);
     else if (strcmp(argv[i], "--framework") == 0 && i+1 < argc) framework = argv[++i];
     else if (strcmp(argv[i], "--max-depth") == 0 && i+1 < argc)
       max_depth = parse_nonneg_int(argv[++i], "--max-depth expects a non-negative integer");
@@ -354,10 +356,10 @@ int main_train(int argc, char *argv[]) {
    * satellite by landing mid-set the way a positional cut did. */
   if (npattern > 0) {
     if (npattern > n_feat)
-      tdie("-p exceeds the number of feature columns", NULL);
+      tdie("-p exceeds the number of patterns", NULL);
     n_feat = npattern;
   }
-  if (n_feat <= 0) tdie("no feature columns after excluding Pna", NULL);
+  if (n_feat <= 0) tdie("the artifact has no patterns", NULL);
   /* Rebuild the matrix around the selection so every consumer below -- xgboost,
    * the linear frameworks, the violation model, and the trim path that reads
    * pattern_names -- indexes features correctly without knowing any of this. */
@@ -496,6 +498,14 @@ int main_train(int argc, char *argv[]) {
 
     /* embed labels; save as loose .ubj or a (trimmed-mrmp) .ubjx bundle */
     ms_booster_set_meta(booster, uniq, K);
+    /* Carry the feature coding, taken from the artifact rather than from a CLI
+     * flag: the coding is decided at featurize time and baked into the .msfm,
+     * so the artifact is the only thing that actually knows. */
+    if (data_path) {
+      uint32_t ff = ms_msfm_flags(data_path);
+      if (ff & MSFM_FLAG_BIN_FLAT)      ms_booster_set_binarize(booster, "0.5");
+      else if (ff & MSFM_FLAG_BIN_PAT)  ms_booster_set_binarize(booster, "pattern");
+    }
     {   /* the exact columns, by name, so `classify` gathers the same ones */
       char **fn = malloc((size_t)npattern * sizeof(char *));
       if (!fn) tdie("out of memory", NULL);

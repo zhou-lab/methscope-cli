@@ -44,6 +44,18 @@
  * and 1/65534 is far finer than a beta backed by a few hundred CpGs warrants. */
 #define MSFM_NA UINT16_MAX
 
+/* header.flags -- how the PATTERN columns are coded. Recorded because the two
+ * scoring routes build features differently: classify --data reads this matrix,
+ * but classify on a raw .cg goes through ms_matrix_build(), which computes a
+ * continuous mean and has no cut. A model trained on {0,1,NA} scored against
+ * betas in [0,1] is a silent feature-space mismatch -- measured at 2 of 42
+ * cells correct. So the coding travels with the artifact, and from there into
+ * the booster (MS_ATTR_BINARIZE), instead of being re-derived. 0 = continuous,
+ * which is also what every artifact written before 2026-08-09 implies. */
+#define MSFM_FLAG_BIN_FLAT  1u   /* pattern columns cut at a flat 0.5 */
+#define MSFM_FLAG_BIN_PAT   2u   /* cut at per-pattern midpoints (--thresh-pattern) */
+/* Ties (beta exactly on the cut) are MSFM_NA under both; see msfm_build.c. */
+
 static inline uint16_t msfm_encode(double beta) {
   if (!(beta >= 0.0) && !(beta <= 0.0)) return MSFM_NA;   /* NaN */
   if (beta < 0.0) beta = 0.0;
@@ -100,6 +112,9 @@ void ms_msfm_close(ms_msfm_t *f);
  * with them. *labels_out gets one malloc'd label per record (NULL when the
  * artifact is unlabeled) and *levels_out a malloc'd per-record covered-CpG
  * total; both are caller-freed. Either out-pointer may be NULL. */
+/* Read just header.flags from PATH (see MSFM_FLAG_*). Fatal if unreadable. */
+uint32_t ms_msfm_flags(const char *path);
+
 ms_matrix_t *ms_msfm_to_matrix(const char *path, char ***labels_out,
                                uint32_t **levels_out);
 

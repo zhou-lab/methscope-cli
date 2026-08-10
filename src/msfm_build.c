@@ -109,7 +109,7 @@ typedef struct {
    * where the offsets plus the ~774k real memberships are under 100 MB. */
   const uint32_t *cpg_off;     /* n_cpg + 1 */
   const uint16_t *cpg_col;     /* global output column per membership */
-  const uint32_t *pna_col;     /* n_sets: each set's background column */
+  const uint32_t *set_end;     /* n_sets: one past a set's last pattern column */
   /* Per-column binarisation cut, or NULL to leave betas continuous.
    *
    * A pattern's beta is thresholded against ITS OWN midpoint -- the point
@@ -208,28 +208,15 @@ static void *worker(void *arg) {
       TICK();
       memset(sum, 0, (size_t)J->ncol * sizeof(double));
       memset(cnt, 0, (size_t)J->ncol * 4);
-      double tot_sum = 0;
       for (uint32_t k = 0; k < want; ++k) {
         uint64_t pos = elig[k];
         double b = MU2beta(f3_get_mu(&c, pos));
         /* One read at this CpG: the call is 0 or 1, never a fraction. */
         if (J->binarize) b = rng_01(&rng) < b ? 1.0 : 0.0;
-        tot_sum += b;
         for (uint32_t e = J->cpg_off[pos]; e < J->cpg_off[pos + 1]; ++e) {
           uint32_t col = J->cpg_col[e];
           sum[col] += b; ++cnt[col];
         }
-      }
-      /* Each set's background is what its patterns did NOT take. Deriving it
-       * costs O(columns) once instead of one increment per CpG per set, and is
-       * exact: every sampled CpG lands in exactly one column of every set. */
-      for (uint32_t si2 = 0; si2 < J->n_sets; ++si2) {
-        double ss = 0; uint32_t cc = 0;
-        for (uint32_t col = J->set_col0[si2]; col < J->pna_col[si2]; ++col) {
-          ss += sum[col]; cc += cnt[col];
-        }
-        sum[J->pna_col[si2]] = tot_sum - ss;
-        cnt[J->pna_col[si2]] = want - cc;
       }
       TOCK(t_scatter);
 
@@ -329,7 +316,7 @@ ms_matrix_t *ms_matrix_build_threaded(const char *query, const char *mrmp,
     char b[16]; snprintf(b, sizeof(b), "P%u", c + 1);
     m->pattern_names[c] = strdup(b);
   }
-  m->pattern_names[ncol - 1] = strdup("Pna");   /* canonical: Pna last */
+
   m->M = bmal((size_t)n_cells * ncol * sizeof(double), "betas");
   m->N = bmal((size_t)n_cells * ncol * sizeof(int), "counts");
   for (uint64_t k = 0; k < (uint64_t)n_cells * ncol; ++k) {
@@ -411,7 +398,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   uint16_t **stage = bmal((size_t)n_sets * sizeof(uint16_t *), "staged maps");
   uint8_t *ra_base = bmal((size_t)n_sets, "run-walk flags");
   for (uint32_t si = 0; si < n_sets; ++si) { stage[si] = NULL; ra_base[si] = 0; }
-  uint32_t *pna_col = bmal((size_t)n_sets * sizeof(uint32_t), "pna cols");
+  uint32_t *set_end = bmal((size_t)n_sets * sizeof(uint32_t), "set ends");
   uint32_t *set_col0 = bmal((size_t)n_sets * sizeof(uint32_t), "set offsets");
   uint32_t ncol = 0;
   for (uint32_t si = 0; si < n_sets; ++si) {
@@ -518,9 +505,14 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
       if (group[i]) group[i] = (uint16_t)(set_col0[si] + group[i]);
   stage[si] = group;
   if (group) for (uint64_t i = 0; i < n_cpg; ++i) if (group[i]) ++cpg_cnt[i];
-  pna_col[si] = ncol + patterns;
-  ncol += patterns + 1;
-  if (ncol > UINT16_MAX) bdie("fused column count exceeds uint16", mrmp);
+  /* No background column. It used to be emitted per set and then dropped again
+   * by every consumer, which made "column" and "pattern" different units and
+   * put the backgrounds between pattern blocks -- the layout that let a
+   * positional feature cut take backgrounds and drop real patterns. Now the
+   * matrix IS the patterns: ncol == --pooled-top. */
+  set_end[si] = ncol + patterns;
+  ncol += patterns;
+  if (ncol > UINT16_MAX) bdie("fused pattern count exceeds uint16", mrmp);
   }
 
   /* prefix-sum the per-CpG counts into offsets, then fill */
@@ -535,7 +527,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
     if (ra_base[si]) {
       runacc_t ra; memset(&ra, 0, sizeof ra);
       ra.col = cpg_col; ra.cur = cpg_cnt; ra.off = cpg_off;
-      ra.base = set_col0[si]; ra.patterns = pna_col[si] - set_col0[si];
+      ra.base = set_col0[si]; ra.patterns = set_end[si] - set_col0[si];
       ms_mrmp_membership_runs(mrmps[si], mrmp_base ? mrmp_base[si] : 0,
                               mrmp_len ? mrmp_len[si] : 0, run_fill, &ra);
       continue;
@@ -561,11 +553,10 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   if (binarize_feat) {
     col_thresh = bmal((size_t)ncol * sizeof(float), "column cuts");
     for (uint32_t g = 0; g < ncol; ++g) col_thresh[g] = 0.5f;
-    for (uint32_t si = 0; si < n_sets; ++si) col_thresh[pna_col[si]] = COL_CONTINUOUS;
     if (binarize_feat == 2) {                 /* --thresh-pattern */
       uint32_t got = 0;
       for (uint32_t si = 0; si < n_sets; ++si) {
-        uint32_t np_s = pna_col[si] - set_col0[si];
+        uint32_t np_s = set_end[si] - set_col0[si];
         if (ms_mrmp_is_artifact(mrmps[si]))
           got += ms_mrmp_thresholds_at(mrmps[si], mrmp_base ? mrmp_base[si] : 0,
                                        mrmp_len ? mrmp_len[si] : 0, np_s,
@@ -584,7 +575,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   J.query = query; J.n_cells = n_cells; J.n_cpg = n_cpg;
   J.col_thresh = col_thresh;
   J.cpg_off = cpg_off; J.cpg_col = cpg_col;
-  J.pna_col = pna_col; J.set_col0 = set_col0;
+  J.set_end = set_end; J.set_col0 = set_col0;
   J.n_sets = n_sets;
   J.ncol = ncol; J.rep_sample = rep_sample;
   J.n_reps = n_reps; J.binarize = binarize; J.seed = seed;
@@ -612,7 +603,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   pthread_mutex_destroy(&J.lock);
 
   free((void *)J.offset); free(tid);
-  free(cpg_off); free(cpg_col); free(pna_col); free(col_thresh);
+  free(cpg_off); free(cpg_col); free(set_end); free(col_thresh);
   if (set_col0_out) memcpy(set_col0_out, set_col0, n_sets * sizeof(uint32_t));
   free(set_col0);
   *beta_out = beta; *levels_out = levels; *names_out = names;
