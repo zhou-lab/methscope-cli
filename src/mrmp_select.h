@@ -122,6 +122,11 @@ typedef struct {
   float    depth_floor_frac;         /* relative to each class's OWN mean */
   uint32_t depth_floor_cap;          /* ceiling on the relative target */
   int      p01_on;                   /* either P(01) flag switches the rule over */
+  int      inc_all0, inc_all1;       /* keep patterns no class calls 1 / 0 */
+  int      quiet;                    /* suppress the per-call select line: the
+                                      * satellite builders run this once PER
+                                      * PAIR and fold the numbers into their own
+                                      * one-line-per-pair report instead */
   uint32_t p01_top;                  /* OPTIONAL cap per binstring; 0 = uncapped */
   float    p01_min;                  /* floor on P(01); the selector when uncapped */
 } ms_select_opt_t;

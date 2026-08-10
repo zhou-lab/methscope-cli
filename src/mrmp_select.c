@@ -26,6 +26,8 @@ void ms_select_defaults(ms_select_opt_t *o) {
   o->max_frac_na = 0.0f;
   o->depth_floor_frac = 0.0f;      /* off; satellites turn it on */
   o->depth_floor_cap = 20;
+  o->inc_all0 = 0; o->inc_all1 = 0;
+  o->quiet = 0;
   o->p01_on = 1;                   /* the default rule; legacy flags switch off */
   o->p01_top = 0;                  /* no cap: --p01-min alone selects */
   o->p01_min = 0.60f;
@@ -180,7 +182,12 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
   double p01_sum = 0.0;
   uint64_t n_strict = 0, n_admit = 0;
   for (uint64_t i = 0; i < n_cpg; ++i) {
-    if (memb[i] == MRMP_PNA_MEMBERSHIP || !n1[i] || !n0[i]) continue;
+    /* Same relaxation as mrmp-build's --qfilter: an empty side is normally no
+     * contrast and therefore skipped, but --include-all-0/-1 ask for exactly
+     * those, so the gate must yield to the flag rather than silently undo it. */
+    if (memb[i] == MRMP_PNA_MEMBERSHIP) continue;
+    if (!n1[i] && !o->inc_all0) continue;
+    if (!n0[i] && !o->inc_all1) continue;
     if ((uint32_t)(ns - npres[i]) > na_allow) continue;
     if (o->min_cg_depth && mincv[i] < o->min_cg_depth) continue;
     if (!floor_ok[i]) continue;
@@ -237,7 +244,8 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
 
   uint64_t tot = 0;
   for (uint64_t i = 0; i < n_cpg; ++i) tot += keep[i];
-  if (use_p01) {
+  if (o->quiet) { /* caller reports */ }
+  else if (use_p01) {
     char cap[48] = "uncapped";
     if (o->p01_top) snprintf(cap, sizeof(cap), "capped at %u/binstring",
                              o->p01_top);

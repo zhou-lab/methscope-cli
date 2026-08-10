@@ -13,6 +13,7 @@
 #include "bundle.h"
 #include "mrmp.h"
 #include "methscope.h"    /* ms_annotate_booster (for bundle -l) */
+#include "index.h"        /* get_fname_index -- the resolve temp has a sibling .idx */
 
 #define NAMELEN 16
 #define FOOTER_BYTES 8         /* trailing uint64 container-header offset */
@@ -185,7 +186,14 @@ const char *ms_mrmp_resolve(const char *path, char **tmp_out) {
 }
 
 void ms_mrmp_cleanup(char *tmp) {
-  if (tmp) { unlink(tmp); free(tmp); }
+  if (!tmp) return;
+  unlink(tmp);
+  /* A chained artifact resolves to YAME's multi-record form, which drops a
+   * sibling .idx next to the .cm. Removing only the .cm leaks one temp index
+   * per resolve. */
+  char *ipath = get_fname_index(tmp);
+  if (ipath) { unlink(ipath); free(ipath); }
+  free(tmp);
 }
 
 static uint64_t path_bytes(const char *path) {
