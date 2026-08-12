@@ -763,7 +763,17 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
    * every consumer that selects a node's columns trusts the latter. Check they
    * agree here rather than discover it as a silently wrong column range. Only
    * for a chain: a loose .cm list has no block to read a layout from. */
+  /* Only when the featurizer is using the WHOLE chain. `--set` restricts it to
+   * one block, and the layout describes the file, so comparing the two then is
+   * comparing different things -- which is what the check reported the first
+   * time --set ran ("layout says 4730 columns, featurizer emitted 2"). */
+  int whole_chain = 0;
   if (mrmp_base && ms_mrmp_is_artifact(mrmps[0])) {
+    ms_mrmpset_t *cs = ms_mrmpset_open(mrmps[0]);
+    whole_chain = (cs->n_sets == n_sets);
+    ms_mrmpset_free(cs);
+  }
+  if (whole_chain) {
     uint32_t fl = 0;
     if (contrast == 1) fl |= MSFM_FLAG_CONTRAST_ADD;
     if (contrast == 2) fl |= MSFM_FLAG_CONTRAST_ONLY;

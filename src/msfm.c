@@ -577,6 +577,10 @@ static int usage(void) {
     "                 beta does not once a global shift, mitotic or otherwise,\n"
     "                 moves every value at once.\n"
     "                 continuous either way; they are not a contrast.\n"
+    "  --set NAME     featurize only this set of a chain, so one node of an\n"
+    "                 mrmp-tree can be scored straight out of the tree it\n"
+    "                 lives in -- a block inside a chain is byte-identical to\n"
+    "                 the standalone .mrmp, so nothing need be kept beside it.\n"
     "  --rank-features off|add|replace   (default off)\n"
     "                 One column per class PAIR of a set: the mean over the\n"
     "                 patterns calling a 1 and b 0, against the mean over those\n"
@@ -641,6 +645,13 @@ static int usage(void) {
  *
  * N .cm arguments still work unchanged -- that is what mrmp-export produces and
  * what YAME tooling reads. */
+/* `--set` restricts a chain to ONE named set, so a node can be featurized
+ * straight out of the tree it lives in. Without it the per-node .mrmp files
+ * have to be kept beside the chain just to address one block -- and they are
+ * otherwise redundant, since a block inside the chain is byte-identical to the
+ * standalone file (verified with mrmp-export --set). */
+static const char *g_only_set = NULL;
+
 static void expand_mask_args(int n_arg, char *const *arg, uint32_t *n_out,
                              const char ***refs_out, char ***tmps_out,
                              char ***names_out, uint64_t **base_out,
@@ -687,14 +698,19 @@ static void expand_mask_args(int n_arg, char *const *arg, uint32_t *n_out,
   uint64_t *base = xmal(n * sizeof(uint64_t), "block offsets");
   uint64_t *blen = xmal(n * sizeof(uint64_t), "block lengths");
   uint32_t *pat = xmal(n * sizeof(uint32_t), "per-set patterns");
+  uint32_t keep = 0;
   for (uint32_t s = 0; s < n; ++s) {
-    tmps[s] = NULL; refs[s] = arg[0];
-    base[s] = ch->block_off[s]; blen[s] = ch->block_bytes[s];
-    nms[s] = strdup(ch->name[s]);
+    if (g_only_set && strcmp(ch->name[s], g_only_set)) continue;
+    tmps[keep] = NULL; refs[keep] = arg[0];
+    base[keep] = ch->block_off[s]; blen[keep] = ch->block_bytes[s];
+    nms[keep] = strdup(ch->name[s]);
     mrmp_top_t *t = ms_mrmp_top_read_at(arg[0], ch->block_off[s], UINT32_MAX);
-    pat[s] = t->n_patterns;                 /* the block IS its patterns now */
+    pat[keep] = t->n_patterns;               /* the block IS its patterns now */
     ms_mrmp_top_free(t);
+    ++keep;
   }
+  if (g_only_set && !keep) fdie("no set of that name in the chain", g_only_set);
+  n = keep;
   *base_out = base; *len_out = blen; *pat_out = pat;
   fprintf(stderr, "\n[methscope] classify-featurize\n\n");
   fprintf(stderr, "  %-14s %s, %u set(s)\n", "artifact", arg[0], n);
@@ -752,6 +768,7 @@ int main_classify_featurize(int argc, char *argv[]) {
       min_cpgs = (uint32_t)strtoul(argv[++i], NULL, 10);
     else if (!strcmp(argv[i], "--continuous-features")) binarize_feat = 0;
     else if (!strcmp(argv[i], "--thresh-pattern")) binarize_feat = 2;
+    else if (!strcmp(argv[i], "--set") && i + 1 < argc) g_only_set = argv[++i];
     else if (!strcmp(argv[i], "--rank-features") && i + 1 < argc) {
       const char *v = argv[++i];
       if      (!strcmp(v, "off"))     rank = 0;
