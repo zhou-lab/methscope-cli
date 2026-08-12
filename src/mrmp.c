@@ -3525,7 +3525,7 @@ int main_mrmp_tree(int argc, char *argv[]) {
   g_cmd = "mrmp-tree";
   if (argc == 1) { char *h[2]; h[0] = argv[0]; h[1] = (char *)"-h";
                    (void)main_mrmp_tree(2, h); return 1; }
-  const char *pos[2] = {NULL, NULL}, *treefile = NULL, *nodedir = NULL;
+  const char *pos[2] = {NULL, NULL}, *nodedir = NULL;
   int npos = 0, force = 0, dry = 0, have_fixed = 0;
   uint64_t fixed_seg = 0; uint32_t max_depth = 16;
   double split_q = 0.0;              /* only if --split-quantile asks for it */
@@ -3584,7 +3584,8 @@ int main_mrmp_tree(int argc, char *argv[]) {
         "    --node-dir DIR        also write DIR/<node>.mrmp, one per node, so the\n"
         "                          tree drives with plain classify-featurize /\n"
         "                          classify-train (a block is a standalone .mrmp)\n"
-        "    --tree FILE           write the tree shape here as well as stderr\n"
+        "    (the shape is not written to a file: `inspect --tree OUT.mrmp`\n"
+        "     derives it from the artifact, so there is nothing to keep in step)\n"
         "    --force               overwrite an existing output\n");
       return 0;
     }
@@ -3602,7 +3603,6 @@ int main_mrmp_tree(int argc, char *argv[]) {
       max_depth = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--mincov") && i + 1 < argc)
       gh.mincov = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--tree") && i + 1 < argc) treefile = argv[++i];
     else if (!strcmp(a, "--node-dir") && i + 1 < argc) nodedir = argv[++i];
     else if (!strcmp(a, "--p01-min") && i + 1 < argc) {
       sel.p01_min = (float)atof(argv[++i]); sel.p01_on = 1;
@@ -3654,9 +3654,11 @@ int main_mrmp_tree(int argc, char *argv[]) {
   for (uint32_t k = 0; k < nstore; ++k) idx[k] = k;
 
   const int tty = isatty(STDERR_FILENO);
+  /* The build report goes to stderr only. The SHAPE is not written anywhere:
+   * `inspect --tree` derives it from the chain -- parent from the name, classes
+   * from each block -- so a file here would be a second copy of something the
+   * artifact already answers, free to drift. */
   FILE *rep = stderr;
-  if (treefile) { rep = fopen(treefile, "w");
-                  if (!rep) die("cannot write tree file", treefile); }
   treeout_t t; memset(&t, 0, sizeof t);
   if (have_fixed)
     fprintf(stderr, "[methscope] %s: %u classes, split above %" PRIu64
@@ -3669,7 +3671,6 @@ int main_mrmp_tree(int argc, char *argv[]) {
   tree_build(store, slab, voff, idx, nstore, &gh, &sel, "root", split_q,
              fixed_seg, have_fixed, 0, max_depth, dry,
              rep == stderr ? tty : 0, &t, rep);
-  if (rep != stderr) fclose(rep);
   if (dry) return 0;
 
   ms_mrmp_chain_write(out, t.n, (const void *const *)t.img, t.len);

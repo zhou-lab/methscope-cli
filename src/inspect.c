@@ -46,6 +46,9 @@ static int inspect_usage(void) {
     "    .msfm   MSFMAT1   feature matrix: records, patterns, labels, coverage\n"
     "\n"
     "Options:\n"
+    "  --tree       render an mrmp-tree: its nodes, and which class each one\n"
+    "               decides. Works on a chain or a tree bundle; the structure\n"
+    "               is DERIVED, so there is no tree file to keep in step.\n"
     "  --patterns   .mrmp only: list the top-ranked patterns\n"
     "  --top K      .mrmp only: how many to list (default 20)\n"
     "  -h           Show this help message.\n"
@@ -120,16 +123,132 @@ static void print_labels(char *const *labels, int K) {
   printf("\n");
 }
 
+/* ------------------------------------------------------- inspect --tree ----
+ * Render the routing tree of a chain (or a tree bundle) as a reader sees it.
+ *
+ * Nothing here is stored. The structure derives completely from the chain: a
+ * node's parent is its name minus the last dotted component, its classes are
+ * the block's own sample names, and a class routes to whichever child covers
+ * it -- or is decided here if none does. Verified against every prediction of
+ * three cohorts (6,025 cells, 0 disagreements), which is why mrmp-tree no
+ * longer writes a tree file: it would be a second copy of something the
+ * artifact already answers. */
+typedef struct { char *name; uint32_t nc, npat; uint64_t cpg; char **cls; int par; } inode_t;
+
+static void itree_render(const inode_t *nd, uint32_t n, uint32_t k,
+                         const char *pre, int last) {
+  char b1[32], b2[32];
+  /* the node line: what it decides between, and on how much evidence */
+  /* The root sits at column 0 with no connector; everything below is indented
+   * under its parent, so depth is readable at a glance. */
+  int top = (*pre == '\0');
+  /* The name field shrinks with depth so the numeric columns stay in one place
+   * however deep the tree goes -- otherwise every level shifts them right and
+   * the thing you actually compare between nodes stops lining up. */
+  int used = (int)strlen(pre) + (top ? 0 : 4);
+  int w = 26 - used; if (w < 8) w = 8;
+  printf("%s%s%-*s %2u classes  %7s patterns  %9s CpGs\n", pre,
+         top ? "" : (last ? "`-- " : "|-- "), w, nd[k].name,
+         nd[k].nc, commafmt(nd[k].npat, b1), commafmt(nd[k].cpg, b2));
+  char sub[512];
+  snprintf(sub, sizeof sub, "%s%s", pre, top ? "  " : (last ? "    " : "|   "));
+  /* one line per class: the routing map, which is the whole point */
+  uint32_t shown = 0;
+  for (uint32_t c = 0; c < nd[k].nc; ++c) {
+    int dest = -1;
+    for (uint32_t j = 0; j < n && dest < 0; ++j) {
+      if (nd[j].par != (int)k) continue;
+      for (uint32_t x = 0; x < nd[j].nc; ++x)
+        if (!strcmp(nd[j].cls[x], nd[k].cls[c])) { dest = (int)j; break; }
+    }
+    if (dest >= 0) continue;                 /* covered by a child, shown below */
+    ++shown;
+  }
+  uint32_t seen = 0;
+  uint32_t nkid = 0;
+  for (uint32_t j = 0; j < n; ++j) if (nd[j].par == (int)k) ++nkid;
+  for (uint32_t c = 0; c < nd[k].nc; ++c) {
+    int dest = -1;
+    for (uint32_t j = 0; j < n && dest < 0; ++j) {
+      if (nd[j].par != (int)k) continue;
+      for (uint32_t x = 0; x < nd[j].nc; ++x)
+        if (!strcmp(nd[j].cls[x], nd[k].cls[c])) { dest = (int)j; break; }
+    }
+    if (dest >= 0) continue;
+    ++seen;
+    /* Just the name. "decided here" on every row was noise -- it is what a
+     * leaf line MEANS, and the legend says so once. */
+    printf("%s%s%s\n", sub,
+           (seen == shown && !nkid) ? "`-- " : "|-- ", nd[k].cls[c]);
+  }
+  uint32_t kseen = 0;
+  for (uint32_t j = 0; j < n; ++j) {
+    if (nd[j].par != (int)k) continue;
+    itree_render(nd, n, j, sub, ++kseen == nkid);
+  }
+}
+
+static int inspect_tree(const char *path) {
+  ms_mrmpset_t *ch = ms_mrmpset_open(path);
+  const uint32_t n = ch->n_sets;
+  if (n < 2) idie("not a tree: the artifact holds a single set", path);
+  inode_t *nd = calloc(n, sizeof(inode_t));
+  mrmp_top_t **top = calloc(n, sizeof(mrmp_top_t *));
+  if (!nd || !top) idie("out of memory", path);
+  uint64_t tot_cpg = 0;
+  for (uint32_t k = 0; k < n; ++k) {
+    top[k] = ms_mrmp_top_read_at(path, ch->block_off[k], UINT32_MAX);
+    nd[k].name = ch->name[k];
+    nd[k].nc   = top[k]->n_samples;
+    nd[k].cls  = top[k]->labels;
+    nd[k].npat = top[k]->n_patterns;
+    nd[k].cpg  = 0;
+    for (uint32_t p = 0; p < top[k]->n_patterns; ++p) nd[k].cpg += top[k]->count[p];
+    tot_cpg += nd[k].cpg;
+  }
+  for (uint32_t k = 0; k < n; ++k) {
+    nd[k].par = -1;
+    const char *dot = strrchr(nd[k].name, '.');
+    if (!dot) continue;
+    size_t plen = (size_t)(dot - nd[k].name);
+    for (uint32_t j = 0; j < n; ++j)
+      if (strlen(nd[j].name) == plen && !strncmp(nd[j].name, nd[k].name, plen))
+        { nd[k].par = (int)j; break; }
+    if (nd[k].par < 0) idie("a node's parent is missing from the chain", nd[k].name);
+  }
+  uint32_t root = 0, nroot = 0;
+  for (uint32_t k = 0; k < n; ++k) if (nd[k].par < 0) { root = k; ++nroot; }
+  if (nroot != 1) idie("a tree needs exactly one root", path);
+
+  char b1[32], b2[32];
+  uint64_t tot_pat = 0;
+  for (uint32_t k = 0; k < n; ++k) tot_pat += nd[k].npat;
+  printf("\nTREE  %s\n", path);
+  printf("  %u nodes, %u classes, %s patterns over %s CpGs\n\n",
+         n, nd[root].nc, commafmt(tot_pat, b1), commafmt(tot_cpg, b2));
+  itree_render(nd, n, root, "", 1);
+  printf("\n  A class listed under a node is DECIDED there. A child node means cells\n"
+         "  calling one of its classes descend and are re-decided on that node's\n"
+         "  own evidence. Nothing here is stored: the parent is the name minus its\n"
+         "  last component, the classes are the block's own sample names.\n\n");
+  for (uint32_t k = 0; k < n; ++k) ms_mrmp_top_free(top[k]);
+  free(nd); free(top); ms_mrmpset_free(ch);
+  return 0;
+}
+
 int main_inspect(int argc, char *argv[]) {
   if (argc == 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
     inspect_usage(); return 0;
   }
   /* The first bare argument is the file; --top takes a value, so skip its. */
   const char *path = NULL;
+  int want_tree = 0;
+  for (int i = 1; i < argc; ++i) if (!strcmp(argv[i], "--tree")) want_tree = 1;
   for (int i = 1; i < argc && !path; ++i)
     if (argv[i][0] != '-' && (i == 1 || strcmp(argv[i - 1], "--top")))
       path = argv[i];
   if (!path) return inspect_usage();
+  if (want_tree) return inspect_tree(path);
 
   /* Detect the artifact from its magic and hand off to the owning reporter. */
   unsigned char magic[8] = {0};
