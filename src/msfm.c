@@ -122,6 +122,30 @@ void ms_msfm_close(ms_msfm_t *f) {
   memset(f, 0, sizeof(*f));
 }
 
+/* Materialise the embedded chain to a temp file. A path rather than bytes
+ * because every mrmp reader takes a path, and the alternative is a memory
+ * variant of each. */
+char *ms_msfm_chain(const char *path) {
+  FILE *f = fopen(path, "rb");
+  if (!f) fdie("cannot open", path);
+  msfm_header_t h;
+  if (fread(&h, 1, sizeof h, f) != sizeof h) { fclose(f); fdie("short header", path); }
+  if (!msfm_is(&h) || !h.mrmp_offset) { fclose(f); return NULL; }
+  if (fseek(f, (long)h.mrmp_offset, SEEK_SET)) { fclose(f); fdie("bad mrmp offset", path); }
+  uint64_t n = 0;
+  if (fread(&n, 1, sizeof n, f) != sizeof n) { fclose(f); fdie("short embedded mrmp", path); }
+  char tmp[] = "/tmp/methscope_chain_XXXXXX";
+  int fd = mkstemp(tmp);
+  if (fd < 0) { fclose(f); fdie("cannot create a temp file for the chain", path); }
+  FILE *o = fdopen(fd, "wb");
+  char buf[1 << 16]; size_t got; uint64_t left = n;
+  while (left && (got = fread(buf, 1, left < sizeof buf ? (size_t)left : sizeof buf, f)) > 0)
+    { if (fwrite(buf, 1, got, o) != got) fdie("write error", tmp); left -= got; }
+  fclose(o); fclose(f);
+  if (left) fdie("short read on the embedded mrmp", path);
+  return strdup(tmp);
+}
+
 uint32_t ms_msfm_flags(const char *path) {
   FILE *f = fopen(path, "rb");
   if (!f) fdie("cannot open", path);
@@ -247,6 +271,19 @@ static char **read_labels(const char *path, int expect) {
   return v;
 }
 
+/* Path of the .mrmp chain to embed, set by the featurize entry point. A global
+ * because write_msfm() is reached through several callers that have no reason
+ * to grow an argument for it. */
+static const char *g_embed_chain = NULL;
+
+static uint64_t path_size(const char *p) {
+  FILE *f = fopen(p, "rb");
+  if (!f) fdie("cannot read the mrmp to embed", p);
+  fseek(f, 0, SEEK_END); long n = ftell(f); fclose(f);
+  if (n < 0) fdie("cannot size the mrmp to embed", p);
+  return (uint64_t)n;
+}
+
 static void write_msfm(const char *out, const ms_matrix_t *m, char **lab) {
   uint32_t nr = (uint32_t)m->n_cells, np = (uint32_t)m->n_patterns;
 
@@ -290,8 +327,12 @@ static void write_msfm(const char *out, const ms_matrix_t *m, char **lab) {
   h.labels_offset = h.rows_offset + rows_b;
   h.levels_offset = h.labels_offset + (uint64_t)nr * 2 + class_b;
   h.beta_offset   = h.levels_offset + (uint64_t)nr * 4;
-  h.count_offset  = 0;                  /* reserved; see msfm.h */
+  h.mrmp_offset   = 0;                  /* filled below when a chain is given */
   h.file_bytes    = h.beta_offset + (uint64_t)nr * np * 2;
+  /* The chain rides along after the betas, so its presence shifts nothing that
+   * an older reader looks at. */
+  uint64_t chain_b = g_embed_chain ? path_size(g_embed_chain) : 0;
+  if (chain_b) { h.mrmp_offset = h.file_bytes; h.file_bytes += 8 + chain_b; }
 
   FILE *f = fopen(out, "wb");
   if (!f) fdie("cannot create output", out);
@@ -322,6 +363,18 @@ static void write_msfm(const char *out, const ms_matrix_t *m, char **lab) {
     wr(f, row, (size_t)np * 2, out);
   }
   free(row);
+  /* the chain itself, length-prefixed so a reader needs no other field */
+  if (chain_b) {
+    wr(f, &chain_b, sizeof chain_b, out);
+    FILE *cf = fopen(g_embed_chain, "rb");
+    if (!cf) fdie("cannot read the mrmp to embed", g_embed_chain);
+    char buf[1 << 16]; size_t got;
+    uint64_t left = chain_b;
+    while (left && (got = fread(buf, 1, left < sizeof buf ? (size_t)left : sizeof buf, cf)) > 0)
+      { wr(f, buf, got, out); left -= got; }
+    fclose(cf);
+    if (left) fdie("short read on the mrmp to embed", g_embed_chain);
+  }
   if (fclose(f)) fdie("cannot finalize output", out);
 
   fprintf(stderr, "[methscope] classify-featurize: %u records x %u patterns"
@@ -396,8 +449,10 @@ static void write_msfm_raw(const char *out, const uint16_t *beta,
   h.labels_offset = h.rows_offset + rows_b;
   h.levels_offset = h.labels_offset + nr * 2 + class_b;
   h.beta_offset   = h.levels_offset + nr * 4;
-  h.count_offset  = 0;
+  h.mrmp_offset   = 0;
   h.file_bytes    = h.beta_offset + nr * ncol * 2;
+  uint64_t chain_b = g_embed_chain ? path_size(g_embed_chain) : 0;
+  if (chain_b) { h.mrmp_offset = h.file_bytes; h.file_bytes += 8 + chain_b; }
 
   FILE *f = fopen(out, "wb");
   if (!f) fdie("cannot create output", out);
@@ -413,6 +468,18 @@ static void write_msfm_raw(const char *out, const uint16_t *beta,
   for (uint32_t k = 0; k < nk; ++k) wr(f, uniq[k], strlen(uniq[k]) + 1, out);
   wr(f, levels, (size_t)nr * 4, out);
   wr(f, beta, (size_t)nr * ncol * 2, out);
+  /* the chain that defined these columns, length-prefixed, after the betas so
+   * its presence shifts nothing an older reader looks at */
+  if (chain_b) {
+    wr(f, &chain_b, sizeof chain_b, out);
+    FILE *cf = fopen(g_embed_chain, "rb");
+    if (!cf) fdie("cannot read the mrmp to embed", g_embed_chain);
+    char cb[1 << 16]; size_t got; uint64_t left = chain_b;
+    while (left && (got = fread(cb, 1, left < sizeof cb ? (size_t)left : sizeof cb, cf)) > 0)
+      { wr(f, cb, got, out); left -= got; }
+    fclose(cf);
+    if (left) fdie("short read on the mrmp to embed", g_embed_chain);
+  }
   if (fclose(f)) fdie("cannot finalize output", out);
 
   if (isatty(STDERR_FILENO)) fprintf(stderr, "\r\033[K");
@@ -483,7 +550,7 @@ static int merge_msfm(const char *out, char **in, int n_in) {
   h.labels_offset = h.rows_offset + rows_b;
   h.levels_offset = h.labels_offset + nr_tot * 2 + class_b;
   h.beta_offset   = h.levels_offset + nr_tot * 4;
-  h.count_offset  = 0;                  /* reserved; see msfm.h */
+  h.mrmp_offset   = 0;                  /* --merge does not carry one; see below */
   h.file_bytes    = h.beta_offset + nr_tot * np * 2;
 
   FILE *o = fopen(out, "wb");
@@ -692,6 +759,7 @@ static void expand_mask_args(int n_arg, char *const *arg, uint32_t *n_out,
    * read. The builder walks the block's runs in place instead. */
   ms_mrmpset_t *ch = ms_mrmpset_open(arg[0]);
   uint32_t n = ch->n_sets;
+  g_embed_chain = arg[0];        /* travels with the matrix it defined */
   const char **refs = xmal(n * sizeof(char *), "mask list");
   char **tmps = xmal(n * sizeof(char *), "mask temps");
   char **nms = xmal(n * sizeof(char *), "set names");

@@ -104,7 +104,18 @@ typedef struct {
   uint64_t labels_offset;
   uint64_t levels_offset;
   uint64_t beta_offset;
-  uint64_t count_offset;    /* RESERVED, always 0 -- see the header comment */
+  uint64_t mrmp_offset;     /* the MRMP CHAIN this matrix was featurized against,
+                             * as [uint64 bytes][chain], or 0 when absent.
+                             *
+                             * Was a reserved pad, zero in every artifact ever
+                             * written, so old files read as "no chain" -- the
+                             * truth about them -- and need no version bump.
+                             *
+                             * Carrying it makes the matrix self-describing: the
+                             * column layout is (chain + flags), so a consumer
+                             * can find any set's columns from the file alone,
+                             * and a matrix CANNOT be paired with the wrong tree
+                             * because it brings its own. */
   uint64_t file_bytes;
 } msfm_header_t;
 #pragma pack(pop)
@@ -211,6 +222,12 @@ typedef struct {
 
 /* `flags` are MSFM_FLAG_* as recorded in a written artifact's header, so a
  * layout can be recovered from (chain, header) with no other context. */
+/* The chain a matrix was featurized against, written to a temp file whose path
+ * is returned (caller frees the string and unlinks). NULL when the artifact
+ * predates embedding. Everything that needs the layout can then work from the
+ * .msfm alone. */
+char *ms_msfm_chain(const char *msfm);
+
 ms_msfm_layout_t *ms_msfm_layout(const char *chain, uint32_t flags);
 void ms_msfm_layout_free(ms_msfm_layout_t *l);
 

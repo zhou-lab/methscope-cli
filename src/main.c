@@ -47,7 +47,6 @@ static int usage(void) {
 
   fprintf(stderr, "\n%sClassification%s %s(cell type, sex, ...)%s\n", B, R, D, R);
   CMD("classify",     "Classify a methylome -> labels + confidence");
-  CMD("classify-train-tree","Train every node of an mrmp-tree into one scorable bundle");
   CMD("classify-train","Fit a label classifier (xgboost / threshold / logistic)");
   CMD("classify-featurize","Prebuild the .msfm feature matrix (parallel, reusable)");
 

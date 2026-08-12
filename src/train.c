@@ -233,9 +233,11 @@ static int train_usage(void) {
  * coverage ladder is now drawn ONCE per sample rather than independently per
  * node, so every node sees the same draw. More consistent, but it does mean
  * per-node models are no longer reproducible from the old per-node commands. */
+typedef struct { int max_depth, min_child; double colsample; } tune_t;
+
 static BoosterHandle train_one(const float *X, const float *y, uint32_t nrow,
                                uint32_t ncol, int K, int nrounds, int nt,
-                               const char *tag) {
+                               const tune_t *tn, const char *tag) {
   DMatrixHandle dtrain; BoosterHandle b;
   XGCHK(XGDMatrixCreateFromMat(X, nrow, ncol, NAN, &dtrain));
   XGCHK(XGDMatrixSetFloatInfo(dtrain, "label", y, nrow));
@@ -248,6 +250,15 @@ static BoosterHandle train_one(const float *X, const float *y, uint32_t nrow,
   XGCHK(XGBoosterSetParam(b, "num_class", buf));
   snprintf(buf, sizeof buf, "%d", nt > 0 ? nt : 1);
   XGCHK(XGBoosterSetParam(b, "nthread", buf));
+  if (tn && tn->max_depth > 0)
+    { snprintf(buf, sizeof buf, "%d", tn->max_depth);
+      XGCHK(XGBoosterSetParam(b, "max_depth", buf)); }
+  if (tn && tn->min_child > 0)
+    { snprintf(buf, sizeof buf, "%d", tn->min_child);
+      XGCHK(XGBoosterSetParam(b, "min_child_weight", buf)); }
+  if (tn && tn->colsample > 0.0)
+    { snprintf(buf, sizeof buf, "%g", tn->colsample);
+      XGCHK(XGBoosterSetParam(b, "colsample_bytree", buf)); }
   for (int it = 0; it < nrounds; ++it)
     XGCHK(XGBoosterUpdateOneIter(b, it, dtrain));
   const char *ev = NULL, *nm = "train";
@@ -263,21 +274,34 @@ static BoosterHandle train_one(const float *X, const float *y, uint32_t nrow,
 }
 
 int main_train_tree(int argc, char *argv[]) {
-  const char *data_path = NULL, *out = NULL, *chain = NULL;
+  const char *data_path = NULL, *out = NULL;
   int nrounds = 0, nthread = 0;
+  tune_t tn = {0, 0, 0.0};
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "--data") && i + 1 < argc) data_path = argv[++i];
+    else if (!strcmp(a, "--max-depth") && i + 1 < argc) tn.max_depth = atoi(argv[++i]);
+    else if (!strcmp(a, "--min-child-weight") && i + 1 < argc) tn.min_child = atoi(argv[++i]);
+    else if (!strcmp(a, "--colsample") && i + 1 < argc) tn.colsample = atof(argv[++i]);
+    /* accepted and ignored: the .msfm carries its own labels and every column */
+    else if ((!strcmp(a, "-l") || !strcmp(a, "-p") || !strcmp(a, "--eval-every"))
+             && i + 1 < argc) ++i;
+    else if (!strcmp(a, "--framework") && i + 1 < argc) {
+      if (strcmp(argv[++i], "xgboost"))
+        tdie("only --framework xgboost trains per node; the others take a .mrmp "
+             "and are unfitted, so they stay on the flat path", argv[i]);
+    }
     else if (!strcmp(a, "-o") && i + 1 < argc) out = argv[++i];
     else if (!strcmp(a, "-n") && i + 1 < argc) nrounds = atoi(argv[++i]);
     else if (!strcmp(a, "--threads") && i + 1 < argc) nthread = atoi(argv[++i]);
     else if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       ms_help(stderr,
-        "Usage: methscope classify-train-tree --data TRAIN.msfm -o TREE.clfx CHAIN.mrmp\n\n"
+        "Usage: methscope classify-train-tree --data TRAIN.msfm -o TREE.clfx\n\n"
         "  Trains one model per node of a routing tree and writes them, with the\n"
         "  chain, as a single scorable bundle.\n\n"
-        "  TRAIN.msfm must be the training store featurized against CHAIN.mrmp\n"
-        "  ITSELF -- one pass, every node's columns present. A node is then its\n"
+        "  The chain comes from the .msfm, which carries the MRMP it was\n"
+        "  featurized against -- so there is no second argument to mismatch. A\n"
+        "  node is its\n"
         "  rows (samples labelled with one of its classes) by its columns (from\n"
         "  the chain's layout), so nothing is subset on disk and every node sees\n"
         "  the same coverage draw.\n\n"
@@ -287,10 +311,16 @@ int main_train_tree(int argc, char *argv[]) {
       return 0;
     }
     else if (a[0] == '-') tdie("unrecognized or incomplete option", a);
-    else chain = a;
+    else tdie("unexpected argument -- the chain comes from the .msfm", a);
   }
-  if (!data_path || !out || !chain)
-    tdie("need --data TRAIN.msfm -o TREE.clfx CHAIN.mrmp (see -h)", NULL);
+  if (!data_path || !out)
+    tdie("need --data TRAIN.msfm -o TREE.clfx (see -h)", NULL);
+  /* The matrix carries the chain it was featurized against, so there is no
+   * second argument to get wrong: a mismatched pairing is not expressible. */
+  char *chain = ms_msfm_chain(data_path);
+  if (!chain)
+    tdie("this .msfm carries no MRMP -- re-run classify-featurize against a "
+         "chain (artifacts written before embedding have none)", data_path);
 
   char **row_lab = NULL; uint32_t *levels = NULL;
   ms_matrix_t *m = ms_msfm_to_matrix(data_path, &row_lab, &levels);
@@ -335,7 +365,7 @@ int main_train_tree(int argc, char *argv[]) {
     int nrd = nrounds > 0 ? nrounds : (int)(sqrt((double)nr) + 0.5);
     if (nrd < 1) nrd = 1;
     BoosterHandle b = train_one(X, y, nr, ncol, (int)t->n_samples, nrd,
-                                nthread, nm[k]);
+                                nthread, &tn, nm[k]);
     ms_booster_set_meta(b, t->labels, (int)t->n_samples);
     if (flags & MSFM_FLAG_BIN_FLAT)     ms_booster_set_binarize(b, "0.5");
     else if (flags & MSFM_FLAG_BIN_PAT) ms_booster_set_binarize(b, "pattern");
@@ -368,10 +398,23 @@ int main_train_tree(int argc, char *argv[]) {
   for (uint32_t k = 0; k < n; ++k) { free(nm[k]); free(bl[k]); }
   free(nm); free(bl); free(bn);
   ms_msfm_layout_free(lay); ms_mrmpset_free(ch);
+  unlink(chain); free(chain);
   return 0;
 }
 
 int main_train(int argc, char *argv[]) {
+  /* xgboost + a prebuilt matrix is the tree path: the .msfm carries the chain
+   * it was featurized against, so training walks its nodes and emits one
+   * scorable bundle. The other frameworks are UNFITTED -- they transcribe a
+   * .mrmp and take no training data at all -- so they stay here. */
+  { const char *fw = "xgboost"; int has_data = 0;
+    for (int i = 1; i < argc; ++i) {
+      if (!strcmp(argv[i], "--framework") && i + 1 < argc) fw = argv[i + 1];
+      else if (!strcmp(argv[i], "--data") && i + 1 < argc) has_data = 1;
+    }
+    if (has_data && !strcmp(fw, "xgboost")) return main_train_tree(argc, argv);
+  }
+
   const char *labels_path = NULL, *out_path = NULL, *framework = "xgboost";
   const char *data_path = NULL, *hier_path = NULL;
   int npattern = 0, nrounds = 0, include_pna = 0, scalar_cov = 0;
