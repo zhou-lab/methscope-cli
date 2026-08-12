@@ -225,7 +225,8 @@ static void tree_score(tnode_t *nd, const uint16_t *beta, uint32_t ncol_all,
 }
 
 static int predict_tree(const char *query_cg, const char *bundle,
-                        unsigned threads, const char *out_path, int no_header) {
+                        const char *data_path, unsigned threads,
+                        const char *out_path, int no_header) {
   ms_mrmpset_t *ch = ms_mrmpset_open(bundle);
   const uint32_t n = ch->n_sets;
   tnode_t *nd = calloc(n, sizeof(tnode_t));
@@ -278,9 +279,36 @@ static int predict_tree(const char *query_cg, const char *bundle,
 
   const uint32_t mode = tree_mode(bundle, nd, n);
 
-  /* one pass over the query, every node's columns for every cell */
+  /* one pass over the query, every node's columns for every cell -- or none at
+   * all when a prebuilt matrix is handed over. A .msfm featurized against this
+   * chain already HOLDS every node's columns, so routing inside it needs no
+   * query pass: the refusal that used to sit here was written when classify had
+   * to featurize the chain itself. */
   uint32_t one = 0, ncells = 0, ncol = 0, *levels = NULL;
   uint16_t *beta = NULL; char **cellname = NULL;
+  ms_msfm_t mf; int mf_open = 0;
+  if (data_path) {
+    char err[256];
+    if (!ms_msfm_open(&mf, data_path, err, sizeof err)) pdie(err, data_path);
+    mf_open = 1;
+    ncells = mf.header->n_records; ncol = mf.header->n_patterns;
+    beta = (uint16_t *)mf.beta;          /* borrowed; freed with the artifact */
+    cellname = mf.record_names;
+    /* The width IS the check: the layout is (chain + flags), so a matrix built
+     * against a different tree cannot have this one's column count. Cheap, and
+     * it turns a mispairing into a refusal rather than a confident wrong call
+     * on the root's columns. */
+    ms_msfm_layout_t *lay = ms_msfm_layout(bundle, mode);
+    if (lay->total != ncol) {
+      char m[192];
+      snprintf(m, sizeof m, "this .msfm has %u columns, the tree's layout wants "
+               "%u -- it was featurized against a different artifact", ncol,
+               lay->total);
+      ms_msfm_layout_free(lay);
+      pdie(m, data_path);
+    }
+    ms_msfm_layout_free(lay);
+  } else {
   uint64_t *base = malloc(n * sizeof(uint64_t)), *blen2 = malloc(n * sizeof(uint64_t));
   uint32_t *np = malloc(n * sizeof(uint32_t));
   if (!base || !blen2 || !np) pdie("out of memory (tree)", NULL);
@@ -298,6 +326,8 @@ static int predict_tree(const char *query_cg, const char *bundle,
                               (mode & MSFM_FLAG_RANK_ONLY) ? 2 :
                               (mode & MSFM_FLAG_RANK_ADD)  ? 1 : 0,
                               &beta, &levels, &cellname, &ncells, &ncol, col0);
+  free(base); free(blen2); free(np); free((void *)rr); free(col0);
+  }
 
   char  **lab  = calloc(ncells, sizeof(char *));
   double *conf = calloc(ncells, sizeof(double));
@@ -338,11 +368,11 @@ static int predict_tree(const char *query_cg, const char *bundle,
   if (fo != stdout) fclose(fo);
 
   for (uint32_t k = 0; k < n; ++k) { XGBoosterFree(nd[k].bst); ms_mrmp_top_free(top[k]); }
-  free(nd); free(top); free(beta); free(levels); free(lab); free(conf);
-  free(cur); free(nxt); free(at); free(base); free(blen2); free(np);
-  free((void *)rr); free(col0);
-  for (uint32_t r = 0; r < ncells; ++r) free(cellname[r]);
-  free(cellname);
+  free(nd); free(top); free(lab); free(conf);
+  if (!mf_open) { free(beta); free(levels); }
+  free(cur); free(nxt); free(at);
+  if (mf_open) ms_msfm_close(&mf);
+  else { for (uint32_t r = 0; r < ncells; ++r) free(cellname[r]); free(cellname); }
   ms_mrmpset_free(ch);
   return 0;
 }
@@ -518,10 +548,8 @@ int main_predict(int argc, char *argv[]) {
       return rc;
     }
     if (strcmp(kind, "tree") == 0) {
-      if (data_path)
-        pdie("--data is not supported for a tree: it featurizes the whole chain "
-             "itself, in one pass", model_name);
-      int rc = predict_tree(query_cg, model_name, threads, out_path, no_header);
+      int rc = predict_tree(query_cg, model_name, data_path, threads,
+                            out_path, no_header);
       free(kind);
       return rc;
     }
