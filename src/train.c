@@ -219,6 +219,158 @@ static int train_usage(void) {
   return 1;
 }
 
+/* --------------------------------------------------------- classify-train-tree
+ * Train every node of a routing tree from ONE shared feature matrix.
+ *
+ * The shell loop this replaces built a per-node .cg with `yame subset` and
+ * featurized each separately -- a full store copy and a full pass per node, to
+ * arrive at columns that are bit-identical to the shared ones (verified: 0 of
+ * 1,201 rows differ). Here the store is featurized once against the chain, and
+ * a node is (its rows) x (its columns): rows whose label is one of its classes,
+ * columns from ms_msfm_layout(). Nothing is subset on disk.
+ *
+ * One behavioural change from the shell loop, and it is deliberate: the
+ * coverage ladder is now drawn ONCE per sample rather than independently per
+ * node, so every node sees the same draw. More consistent, but it does mean
+ * per-node models are no longer reproducible from the old per-node commands. */
+static BoosterHandle train_one(const float *X, const float *y, uint32_t nrow,
+                               uint32_t ncol, int K, int nrounds, int nt,
+                               const char *tag) {
+  DMatrixHandle dtrain; BoosterHandle b;
+  XGCHK(XGDMatrixCreateFromMat(X, nrow, ncol, NAN, &dtrain));
+  XGCHK(XGDMatrixSetFloatInfo(dtrain, "label", y, nrow));
+  XGCHK(XGBoosterCreate(&dtrain, 1, &b));
+  char buf[16];
+  snprintf(buf, sizeof buf, "%d", K);
+  XGCHK(XGBoosterSetParam(b, "booster", "gbtree"));
+  XGCHK(XGBoosterSetParam(b, "objective", "multi:softprob"));
+  XGCHK(XGBoosterSetParam(b, "eval_metric", "mlogloss"));
+  XGCHK(XGBoosterSetParam(b, "num_class", buf));
+  snprintf(buf, sizeof buf, "%d", nt > 0 ? nt : 1);
+  XGCHK(XGBoosterSetParam(b, "nthread", buf));
+  for (int it = 0; it < nrounds; ++it)
+    XGCHK(XGBoosterUpdateOneIter(b, it, dtrain));
+  const char *ev = NULL, *nm = "train";
+  double loss = 0.0 / 0.0;
+  if (!XGBoosterEvalOneIter(b, nrounds - 1, &dtrain, &nm, 1, &ev) && ev) {
+    const char *c = strrchr(ev, ':');
+    if (c) loss = atof(c + 1);
+  }
+  fprintf(stderr, "  %-12s %5u rows x %-5u col, %2d classes, %3d rounds"
+          "   mlogloss %.4f\n", tag, nrow, ncol, K, nrounds, loss);
+  XGDMatrixFree(dtrain);
+  return b;
+}
+
+int main_train_tree(int argc, char *argv[]) {
+  const char *data_path = NULL, *out = NULL, *chain = NULL;
+  int nrounds = 0, nthread = 0;
+  for (int i = 1; i < argc; ++i) {
+    const char *a = argv[i];
+    if (!strcmp(a, "--data") && i + 1 < argc) data_path = argv[++i];
+    else if (!strcmp(a, "-o") && i + 1 < argc) out = argv[++i];
+    else if (!strcmp(a, "-n") && i + 1 < argc) nrounds = atoi(argv[++i]);
+    else if (!strcmp(a, "--threads") && i + 1 < argc) nthread = atoi(argv[++i]);
+    else if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
+      ms_help(stderr,
+        "Usage: methscope classify-train-tree --data TRAIN.msfm -o TREE.clfx CHAIN.mrmp\n\n"
+        "  Trains one model per node of a routing tree and writes them, with the\n"
+        "  chain, as a single scorable bundle.\n\n"
+        "  TRAIN.msfm must be the training store featurized against CHAIN.mrmp\n"
+        "  ITSELF -- one pass, every node's columns present. A node is then its\n"
+        "  rows (samples labelled with one of its classes) by its columns (from\n"
+        "  the chain's layout), so nothing is subset on disk and every node sees\n"
+        "  the same coverage draw.\n\n"
+        "  -n N        boosting rounds per node (default round(sqrt(rows)))\n"
+        "  --threads T thread pool\n\n"
+        "  Score the result with: methscope classify query.cg TREE.clfx\n");
+      return 0;
+    }
+    else if (a[0] == '-') tdie("unrecognized or incomplete option", a);
+    else chain = a;
+  }
+  if (!data_path || !out || !chain)
+    tdie("need --data TRAIN.msfm -o TREE.clfx CHAIN.mrmp (see -h)", NULL);
+
+  char **row_lab = NULL; uint32_t *levels = NULL;
+  ms_matrix_t *m = ms_msfm_to_matrix(data_path, &row_lab, &levels);
+  if (!row_lab) tdie("training artifact carries no labels", data_path);
+  uint32_t flags = ms_msfm_flags(data_path);
+  ms_msfm_layout_t *lay = ms_msfm_layout(chain, flags);
+  if (lay->total != (uint32_t)m->n_patterns)
+    tdie("the .msfm was not featurized against this chain (column count differs)",
+         data_path);
+
+  ms_mrmpset_t *ch = ms_mrmpset_open(chain);
+  const uint32_t n = ch->n_sets;
+  fprintf(stderr, "\n[methscope] classify-train-tree\n\n");
+  fprintf(stderr, "  %-12s %d records x %d columns, %u node(s)\n", "data",
+          m->n_cells, m->n_patterns, n);
+
+  void **bl = calloc(n, sizeof(void *));
+  uint64_t *bn = calloc(n, sizeof(uint64_t));
+  char **nm = calloc(n, sizeof(char *));
+  if (!bl || !bn || !nm) tdie("out of memory", NULL);
+
+  for (uint32_t k = 0; k < n; ++k) {
+    mrmp_top_t *t = ms_mrmp_top_read_at(chain, ch->block_off[k], 1);
+    nm[k] = strdup(ch->name[k]);
+    /* rows: samples whose label is one of THIS node's classes. The class order
+     * is the block's, so the booster's class ids line up with the chain. */
+    uint32_t *row = malloc((size_t)m->n_cells * sizeof(uint32_t));
+    float *y = malloc((size_t)m->n_cells * sizeof(float));
+    if (!row || !y) tdie("out of memory", NULL);
+    uint32_t nr = 0;
+    for (int r = 0; r < m->n_cells; ++r)
+      for (uint32_t c = 0; c < t->n_samples; ++c)
+        if (!strcmp(row_lab[r], t->labels[c])) { row[nr] = (uint32_t)r; y[nr++] = (float)c; break; }
+    if (!nr) tdie("no training rows for a node's classes", nm[k]);
+    uint32_t ncol = lay->ncol[k], col0 = lay->col0[k];
+    float *X = malloc((size_t)nr * ncol * sizeof(float));
+    if (!X) tdie("out of memory", NULL);
+    for (uint32_t r = 0; r < nr; ++r)
+      for (uint32_t c = 0; c < ncol; ++c)
+        X[(size_t)r * ncol + c] =
+          (float)m->M[(size_t)row[r] * m->n_patterns + col0 + c];
+    int nrd = nrounds > 0 ? nrounds : (int)(sqrt((double)nr) + 0.5);
+    if (nrd < 1) nrd = 1;
+    BoosterHandle b = train_one(X, y, nr, ncol, (int)t->n_samples, nrd,
+                                nthread, nm[k]);
+    ms_booster_set_meta(b, t->labels, (int)t->n_samples);
+    if (flags & MSFM_FLAG_BIN_FLAT)     ms_booster_set_binarize(b, "0.5");
+    else if (flags & MSFM_FLAG_BIN_PAT) ms_booster_set_binarize(b, "pattern");
+    {  /* the exact columns, by name -- classify selects by LAYOUT, but the
+        * names keep a node's model self-describing if it is pulled out */
+      char **fn = malloc((size_t)ncol * sizeof(char *));
+      for (uint32_t c = 0; c < ncol; ++c) fn[c] = m->pattern_names[col0 + c];
+      ms_booster_set_features(b, fn, (int)ncol);
+      free(fn);
+    }
+    { char tmp[] = "/tmp/methscope_tree_XXXXXX.ubj";
+      int fd = mkstemps(tmp, 4);
+      if (fd < 0) tdie("cannot create temporary model", tmp);
+      close(fd);
+      XGCHK(XGBoosterSaveModel(b, tmp));
+      FILE *f = fopen(tmp, "rb");
+      if (!f) tdie("cannot read temporary model", tmp);
+      fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+      bl[k] = malloc((size_t)sz); bn[k] = (uint64_t)sz;
+      if (!bl[k] || fread(bl[k], 1, (size_t)sz, f) != (size_t)sz)
+        tdie("short read on temporary model", tmp);
+      fclose(f); unlink(tmp); }
+    XGBoosterFree(b);
+    free(X); free(row); free(y);
+    ms_mrmp_top_free(t);
+  }
+  ms_bundle_pack_tree(out, chain, n, nm, bl, bn);
+  fprintf(stderr, "\n  %-12s %u node(s) + the chain -> %s\n", "wrote", n, out);
+  fprintf(stderr, "  %-12s methscope classify query.cg %s\n", "score with", out);
+  for (uint32_t k = 0; k < n; ++k) { free(nm[k]); free(bl[k]); }
+  free(nm); free(bl); free(bn);
+  ms_msfm_layout_free(lay); ms_mrmpset_free(ch);
+  return 0;
+}
+
 int main_train(int argc, char *argv[]) {
   const char *labels_path = NULL, *out_path = NULL, *framework = "xgboost";
   const char *data_path = NULL, *hier_path = NULL;

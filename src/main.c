@@ -48,6 +48,7 @@ static int usage(void) {
 
   fprintf(stderr, "\n%sClassification%s %s(cell type, sex, ...)%s\n", B, R, D, R);
   CMD("classify",     "Classify a methylome -> labels + confidence");
+  CMD("classify-train-tree","Train every node of an mrmp-tree into one scorable bundle");
   CMD("classify-train","Fit a label classifier (xgboost / threshold / logistic)");
   CMD("classify-featurize","Prebuild the .msfm feature matrix (parallel, reusable)");
 
@@ -123,6 +124,7 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "mrmp-tree")    == 0) return main_mrmp_tree(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-export")  == 0) return main_mrmp_export(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-pool")    == 0) return main_mrmp_pool(argc - 1, argv + 1);
+  if (strcmp(argv[1], "classify-train-tree") == 0) return main_train_tree(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-train")      == 0) return main_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "inspect")    == 0) return main_inspect(argc - 1, argv + 1);
   if (strcmp(argv[1], "bundle")     == 0) return main_bundle(argc - 1, argv + 1);

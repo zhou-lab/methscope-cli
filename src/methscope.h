@@ -160,6 +160,7 @@ int main_build_reference(int argc, char *argv[]); /* CLI `build-reference` (was 
 int main_inspect(int argc, char *argv[]);
 int main_predict(int argc, char *argv[]);
 int main_train(int argc, char *argv[]);
+int main_train_tree(int argc, char *argv[]);
 int main_deconv(int argc, char *argv[]);
 /* Embed labels from a meta.tsv into a raw booster (used by `bundle -l`). */
 void ms_annotate_booster(const char *in_ubj, const char *meta_tsv, const char *out_ubj);
