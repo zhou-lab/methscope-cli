@@ -154,7 +154,6 @@ static inline uint64_t mrmp_pattern_stride(uint32_t n_samples) {
 /* Builds every node of a routing tree; --flat gives one MRMP over every
  * class, which is what this command meant before (a tree of one level). */
 int main_mrmp_build(int argc, char *argv[]);
-int main_mrmp_build_legacy(int argc, char *argv[]);
 /* One 2-class satellite per (thin class, partner), as one chain.
  * Thin == store labels minus the global's, so the split needs no side file. */
 int main_mrmp_build_thin(int argc, char *argv[]);
