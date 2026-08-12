@@ -3023,10 +3023,18 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
 
   if (dry) {   /* what a threshold is actually chosen from: how the partition
                 * moves as it rises, across this node's own observed pairs */
-    fprintf(rep, "%s  candidate thresholds:\n%s    %10s %8s %8s\n", ind, ind,
-            "T", "groups", "largest");
-    for (uint32_t q = 1; q <= 12; ++q) {
-      uint64_t t = sorted[(uint64_t)((q * 0.02) * (double)npair) % npair];
+    /* Across the WHOLE distribution, not its bottom quarter: a deep tree wants
+     * a HIGH threshold -- few groups per split, more levels -- and the first
+     * version of this swept only to the 0.24 quantile, which hid exactly that
+     * regime. */
+    static const double QS[] = {0.02, 0.05, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50,
+                                0.60, 0.70, 0.80, 0.90, 0.95, 0.98};
+    fprintf(rep, "%s  candidate thresholds:\n%s  %6s %10s %8s %8s\n", ind, ind,
+            "pctile", "T", "groups", "largest");
+    for (uint32_t q = 0; q < sizeof QS / sizeof *QS; ++q) {
+      uint64_t at = (uint64_t)(QS[q] * (double)npair);
+      if (at >= npair) at = npair - 1;
+      uint64_t t = sorted[at];
       uint32_t *g2 = xcalloc(n, sizeof(uint32_t), "sweep grouping");
       uint32_t ng2 = tree_partition(seg, n, t, g2);
       uint32_t big = 0;
@@ -3035,7 +3043,8 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
         for (uint32_t k2 = 0; k2 < n; ++k2) c2 += (g2[k2] == a);
         if (c2 > big) big = c2;
       }
-      fprintf(rep, "%s    %10s %8u %8u\n", ind, commafmt_local(t, b1), ng2, big);
+      fprintf(rep, "%s  %5.0f%% %10s %8u %8u\n", ind, 100.0 * QS[q],
+              commafmt_local(t, b1), ng2, big);
       free(g2);
     }
   }
