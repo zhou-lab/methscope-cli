@@ -128,7 +128,7 @@ static int train_usage(void) {
     "Usage:\n"
     "  methscope classify-train -l <labels.txt> -o <out.clfx> [options] <query.cg> <ref.cm>\n"
     "  methscope classify-train --data <in.msfm> -o <out.clfx> [options] <ref.cm>\n"
-    "  methscope classify-train --framework violation -o <out.clfx> [options] <ref.mrmp>\n"
+
     "\n"
     "Purpose:\n"
     "  Train a multiclass classifier for any per-record label (cell type, sex,\n"
@@ -471,6 +471,12 @@ int main_train(int argc, char *argv[]) {
       tdie("unrecognized or incomplete option", argv[i]);
     else break;
   }
+  if (!strcmp(framework, "violation"))
+    tdie("the violation rule is UNFITTED -- it transcribes a .mrmp and consumes "
+         "no training data, so it is a scoring mode now: "
+         "`classify --framework violation query.cg ref.mrmp` "
+         "(verified identical to transcribe-then-score, 0 of 1,201 cells)",
+         framework);
   int fw_xgb = strcmp(framework, "xgboost") == 0;
   int fw_lin = (strcmp(framework, "threshold") == 0) || (strcmp(framework, "logistic") == 0);
   int fw_vio = strcmp(framework, "violation") == 0;

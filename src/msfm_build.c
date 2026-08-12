@@ -386,8 +386,14 @@ ms_matrix_t *ms_matrix_build_threaded(const char *query, const char *mrmp,
   memset(m, 0, sizeof(*m));
   m->n_cells = (int)n_cells; m->n_patterns = (int)ncol;
   m->cell_names = names;                  /* take ownership */
+  /* EVERY column, not ncol-1. The old bound dated from when the last column was
+   * a per-set PNA background that callers dropped; backgrounds went away in
+   * 4100ac9 and this was left behind, so the final name stayed uninitialised
+   * malloc and ms_matrix_free() free()d garbage. Latent until something scored
+   * a .mrmp through this path -- classify --framework violation did, and
+   * segfaulted in teardown after writing a complete, correct answer. */
   m->pattern_names = bmal((size_t)ncol * sizeof(char *), "pattern names");
-  for (uint32_t c = 0; c + 1 < ncol; ++c) {
+  for (uint32_t c = 0; c < ncol; ++c) {
     char b[16]; snprintf(b, sizeof(b), "P%u", c + 1);
     m->pattern_names[c] = strdup(b);
   }

@@ -70,6 +70,15 @@ static int predict_usage(void) {
     "\n"
     "Options:\n"
     "  -o <out.tsv>   Write output to a file instead of stdout.\n"
+    "  --framework violation   Score straight off a .mrmp with the violation\n"
+    "                 rule instead of a fitted model: give <query.cg> <ref.mrmp>.\n"
+    "                 The rule is UNFITTED -- a pure function of the artifact and\n"
+    "                 the three knobs below -- so there is nothing to train and\n"
+    "                 nothing worth storing in between.\n"
+    "  --call-threshold t      violation: beta cutoff for calling a pattern (0.5)\n"
+    "  --pattern-weight w      violation: sqrt|log1p|linear|flat (sqrt)\n"
+    "  --min-patterns n        violation: patterns required on each side (20)\n"
+    "  --top K                 violation: patterns to use, by rank (1000)\n"
     "  --probs        Append one column per class with its predicted probability.\n"
     "  --levels       Append the predicted label's whole taxonomy path\n"
     "                 (compartment, lineage, group, subtype).\n"
@@ -338,11 +347,13 @@ static int predict_tree(const char *query_cg, const char *bundle,
   return 0;
 }
 
+/* Takes the model OBJECT, so it serves both a transcribed bundle and a .mrmp
+ * scored directly -- the violation model is a pure function of the .mrmp plus
+ * three parameters, so there is nothing to fit and nothing worth storing. */
 static int predict_violation(const char *query_cg, const char *ref_mrmp,
                              const char *data_path, unsigned threads,
-                             void *model_buf, size_t model_len,
+                             viomodel_t *vm,
                              const char *out_path, int with_probs, int no_header) {
-  viomodel_t *vm = ms_viomodel_parse(model_buf, model_len);
   uint32_t *levels = NULL;
   ms_matrix_t *m;
   if (data_path) {
@@ -408,12 +419,33 @@ int main_predict(int argc, char *argv[]) {
   int with_probs = 0, with_levels = 0;
   const char *one_level = NULL;
   int no_header = 0;
+  /* violation scored straight off a .mrmp: it is UNFITTED, a pure function of
+   * the artifact and these three numbers, so transcribing it to a bundle first
+   * stored nothing and made changing a parameter a rebuild. */
+  int fw_violation = 0, vio_min_patterns = 20;
+  double vio_threshold = 0.5;
+  const char *vio_weight = "sqrt";
+  uint32_t vio_top = 1000;
   int i = 1;
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-o") == 0 && i + 1 < argc) out_path = argv[++i];
     else if (strcmp(argv[i], "--data") == 0 && i + 1 < argc) data_path = argv[++i];
     else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc)
       threads = (unsigned)strtoul(argv[++i], NULL, 10);
+    else if (strcmp(argv[i], "--framework") == 0 && i + 1 < argc) {
+      if (strcmp(argv[++i], "violation"))
+        pdie("classify --framework takes only 'violation'; a fitted model "
+             "carries its own framework mark", argv[i]);
+      fw_violation = 1;
+    }
+    else if (strcmp(argv[i], "--call-threshold") == 0 && i + 1 < argc)
+      vio_threshold = atof(argv[++i]);
+    else if (strcmp(argv[i], "--pattern-weight") == 0 && i + 1 < argc)
+      vio_weight = argv[++i];
+    else if (strcmp(argv[i], "--min-patterns") == 0 && i + 1 < argc)
+      vio_min_patterns = atoi(argv[++i]);
+    else if (strcmp(argv[i], "--top") == 0 && i + 1 < argc)
+      vio_top = (uint32_t)strtoul(argv[++i], NULL, 10);
     else if (strcmp(argv[i], "--probs") == 0) with_probs = 1;
     else if (strcmp(argv[i], "--levels") == 0) with_levels = 1;
     else if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) one_level = argv[++i];
@@ -438,6 +470,31 @@ int main_predict(int argc, char *argv[]) {
   char *tmp_mrmp = NULL;            /* ms_mrmp_resolve temp (always NULL now; kept for API) */
 
   BoosterHandle booster = NULL;
+
+  /* --framework violation: the second argument is the .mrmp itself, not a
+   * bundle. Nothing is trained, so there is no model file in between. */
+  if (fw_violation) {
+    if (argc - i != 2) return predict_usage();
+    const char *art = argv[i + 1];
+    if (!ms_mrmp_is_artifact(art))
+      pdie("--framework violation needs the MRMPIDX1 artifact (.mrmp); an "
+           "exported .cm has no binstrings to read the rule from", art);
+    viomodel_t *vm = ms_viomodel_from_mrmp(art, vio_top, vio_threshold,
+                                           vio_weight, vio_min_patterns);
+    /* The matrix builders take a runtime .cm, and ms_mrmp_resolve() would give
+     * only the chain's FIRST block -- the rule is pooled across every set, so
+     * materialise the whole chain, exactly as the transcribe step used to. */
+    char ctmp[] = "/tmp/methscope_viomask_XXXXXX.cm";
+    int cfd = mkstemps(ctmp, 3);
+    if (cfd < 0) pdie("cannot create temp mask file", NULL);
+    close(cfd);
+    ms_mrmp_write_mask(art, ctmp, "Pna", (uint32_t)vm->n_feat);
+    int rc = predict_violation(query_cg, ctmp, data_path, threads, vm,
+                               out_path, with_probs, no_header);
+    unlink(ctmp);
+    { char idx[64]; snprintf(idx, sizeof idx, "%s.idx", ctmp); unlink(idx); }
+    return rc;
+  }
 
   if (argc - i == 2) {
     /* bundle form: query.cg model.ubjx (model + mrmp in one file) */
@@ -471,7 +528,8 @@ int main_predict(int argc, char *argv[]) {
     if (strcmp(kind, "violation") == 0) {
       size_t blen; void *bbuf = ms_bundle_section(model_name, "model", &blen);
       int rc = predict_violation(query_cg, ref_mrmp, data_path, threads,
-                                 bbuf, blen, out_path, with_probs, no_header);
+                                 ms_viomodel_parse(bbuf, blen),
+                                 out_path, with_probs, no_header);
       free(bbuf); free(kind);
       return rc;
     }
