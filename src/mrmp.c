@@ -3021,7 +3021,25 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
           commafmt_local(sorted[0], b3), commafmt_local(sorted[npair / 2], b4),
           commafmt_local(min_seg, b5), ng);
 
-  if (dry) {   /* the root's closest pairs are what a threshold is chosen from */
+  if (dry) {   /* what a threshold is actually chosen from: how the partition
+                * moves as it rises, across this node's own observed pairs */
+    fprintf(rep, "%s  candidate thresholds:\n%s    %10s %8s %8s\n", ind, ind,
+            "T", "groups", "largest");
+    for (uint32_t q = 1; q <= 12; ++q) {
+      uint64_t t = sorted[(uint64_t)((q * 0.02) * (double)npair) % npair];
+      uint32_t *g2 = xcalloc(n, sizeof(uint32_t), "sweep grouping");
+      uint32_t ng2 = tree_partition(seg, n, t, g2);
+      uint32_t big = 0;
+      for (uint32_t a = 0; a < ng2; ++a) {
+        uint32_t c2 = 0;
+        for (uint32_t k2 = 0; k2 < n; ++k2) c2 += (g2[k2] == a);
+        if (c2 > big) big = c2;
+      }
+      fprintf(rep, "%s    %10s %8u %8u\n", ind, commafmt_local(t, b1), ng2, big);
+      free(g2);
+    }
+  }
+  if (dry) {
     uint32_t show = n < 12 ? npair < 12 ? (uint32_t)npair : 12 : 12;
     fprintf(rep, "%s  closest pairs:\n", ind);
     for (uint32_t a = 0, k = 0; a < n && k < show; ++a)
@@ -3210,10 +3228,14 @@ int main_mrmp_build(int argc, char *argv[]) {
    * is actually being asked for. No default: the threshold IS the design
    * decision, and a magic number here would be a per-reference guess wearing
    * the costume of a default. */
-  if (!flat && !have_fixed && split_q <= 0.0)
+  /* --dry-run is how the threshold gets CHOSEN, so it cannot require one --
+   * demanding the answer before printing the evidence is the wrong way round,
+   * and the help says as much. Without one it sweeps instead. */
+  if (!flat && !dry && !have_fixed && split_q <= 0.0)
     die("give --min-segregating N to split, or --flat for one MRMP over every "
         "class; --dry-run prints the root's pair distribution to choose from",
         NULL);
+  if (dry && !have_fixed && split_q <= 0.0) { have_fixed = 1; fixed_seg = 0; }
   if (flat) { have_fixed = 1; fixed_seg = UINT64_MAX; }   /* nothing can split */
   const char *store = pos[0], *out = pos[1];
   if (!force && !dry) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
