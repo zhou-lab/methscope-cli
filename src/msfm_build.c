@@ -474,6 +474,47 @@ ms_msfm_layout_t *ms_msfm_layout(const char *chain, uint32_t flags) {
   return l;
 }
 
+int ms_set_is_satellite(const char *name) {
+  return name && strchr(name, MS_SAT_SEP) != NULL;
+}
+
+const char *ms_set_owner(const char *name, char *buf, size_t n) {
+  const char *at = name ? strchr(name, MS_SAT_SEP) : NULL;
+  size_t len = at ? (size_t)(at - name) : 0;
+  if (!at || len == 0 || len + 1 > n) return NULL;
+  memcpy(buf, name, len); buf[len] = '\0';
+  return buf;
+}
+
+ms_colspan_t *ms_msfm_colspan(const ms_msfm_layout_t *l, const char *node) {
+  uint32_t own = UINT32_MAX;
+  for (uint32_t s = 0; s < l->n_sets; ++s)
+    if (!strcmp(l->name[s], node)) { own = s; break; }
+  if (own == UINT32_MAX) return NULL;
+
+  ms_colspan_t *c = bmal(sizeof(*c), "colspan");
+  c->col0 = bmal((size_t)l->n_sets * sizeof(uint32_t), "colspan col0");
+  c->ncol = bmal((size_t)l->n_sets * sizeof(uint32_t), "colspan ncol");
+  /* the node's own slice FIRST, so a booster trained before satellites
+   * existed keeps the same leading columns and stays readable */
+  c->n_seg = 0; c->total = 0;
+  c->col0[c->n_seg] = l->col0[own]; c->ncol[c->n_seg++] = l->ncol[own];
+  c->total += l->ncol[own];
+  char buf[512];
+  for (uint32_t s = 0; s < l->n_sets; ++s) {
+    if (s == own || !ms_set_owner(l->name[s], buf, sizeof buf)) continue;
+    if (strcmp(buf, node)) continue;
+    c->col0[c->n_seg] = l->col0[s]; c->ncol[c->n_seg++] = l->ncol[s];
+    c->total += l->ncol[s];
+  }
+  return c;
+}
+
+void ms_colspan_free(ms_colspan_t *c) {
+  if (!c) return;
+  free(c->col0); free(c->ncol); free(c);
+}
+
 void ms_msfm_layout_free(ms_msfm_layout_t *l) {
   if (!l) return;
   for (uint32_t s = 0; s < l->n_sets; ++s) free(l->name[s]);

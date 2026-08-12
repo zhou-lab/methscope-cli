@@ -159,7 +159,7 @@ static int predict_linear(const char *query_cg, const char *ref_mrmp,
 
 typedef struct {
   char         *name;
-  uint32_t      col0, ncol;      /* its slice of the fused matrix */
+  ms_colspan_t *cs;              /* its slice, plus one per satellite */
   uint32_t      n_class;
   char        **cls;             /* n_class, borrowed from the chain view */
   BoosterHandle bst;
@@ -177,18 +177,23 @@ static uint32_t tree_mode(const char *bundle, tnode_t *nd, uint32_t n) {
                                   MSFM_FLAG_CONTRAST_ONLY, MSFM_FLAG_CONTRAST_ADD };
   for (uint32_t t = 0; t < sizeof TRY / sizeof *TRY; ++t) {
     ms_msfm_layout_t *l = ms_msfm_layout(bundle, TRY[t]);
-    int ok = (l->n_sets == n);
+    ms_colspan_t **cs = calloc(n, sizeof(*cs));
+    if (!cs) pdie("out of memory (tree)", NULL);
+    int ok = 1;
     for (uint32_t k = 0; ok && k < n; ++k) {
       bst_ulong nf = 0;
       XGCHK(XGBoosterGetNumFeature(nd[k].bst, &nf));
-      ok = ((uint32_t)nf == l->ncol[k]);
+      cs[k] = ms_msfm_colspan(l, nd[k].name);
+      ok = cs[k] && ((uint32_t)nf == cs[k]->total);
     }
     if (ok) {
-      for (uint32_t k = 0; k < n; ++k)
-        { nd[k].col0 = l->col0[k]; nd[k].ncol = l->ncol[k]; }
+      for (uint32_t k = 0; k < n; ++k) nd[k].cs = cs[k];
+      free(cs);
       ms_msfm_layout_free(l);
       return TRY[t];
     }
+    for (uint32_t k = 0; k < n; ++k) ms_colspan_free(cs[k]);
+    free(cs);
     ms_msfm_layout_free(l);
   }
   pdie("no feature mode makes this tree's boosters match its chain -- the "
@@ -201,15 +206,19 @@ static void tree_score(tnode_t *nd, const uint16_t *beta, uint32_t ncol_all,
                        const uint32_t *row, uint32_t nrow,
                        char **out_lab, double *out_conf, const char *bundle) {
   if (!nrow) return;
-  float *data = malloc((size_t)nrow * nd->ncol * sizeof(float));
+  const uint32_t W = nd->cs->total;
+  float *data = malloc((size_t)nrow * W * sizeof(float));
   if (!data) pdie("out of memory (tree scoring)", NULL);
-  for (uint32_t r = 0; r < nrow; ++r)
-    for (uint32_t c = 0; c < nd->ncol; ++c) {
-      uint16_t v = beta[(size_t)row[r] * ncol_all + nd->col0 + c];
-      data[(size_t)r * nd->ncol + c] = (v == MSFM_NA) ? NAN : (float)msfm_decode(v);
-    }
+  for (uint32_t r = 0; r < nrow; ++r) {
+    uint32_t c = 0;
+    for (uint32_t g = 0; g < nd->cs->n_seg; ++g)
+      for (uint32_t j = 0; j < nd->cs->ncol[g]; ++j, ++c) {
+        uint16_t v = beta[(size_t)row[r] * ncol_all + nd->cs->col0[g] + j];
+        data[(size_t)r * W + c] = (v == MSFM_NA) ? NAN : (float)msfm_decode(v);
+      }
+  }
   DMatrixHandle dm;
-  XGCHK(XGDMatrixCreateFromMat(data, nrow, nd->ncol, NAN, &dm));
+  XGCHK(XGDMatrixCreateFromMat(data, nrow, W, NAN, &dm));
   bst_ulong olen; const float *o;
   XGCHK(XGBoosterPredict(nd->bst, dm, 0, 0, 0, &olen, &o));
   int K = (int)(olen / nrow);
@@ -228,13 +237,23 @@ static int predict_tree(const char *query_cg, const char *bundle,
                         const char *data_path, unsigned threads,
                         const char *out_path, int no_header) {
   ms_mrmpset_t *ch = ms_mrmpset_open(bundle);
-  const uint32_t n = ch->n_sets;
+  /* Satellites are feature providers, not nodes: they have no booster, no
+   * children and no place in routing. Their columns reach a node through its
+   * colspan, so everything below counts NODES only. */
+  uint32_t n = 0;
+  for (uint32_t s = 0; s < ch->n_sets; ++s)
+    if (!ms_set_is_satellite(ch->name[s])) ++n;
   tnode_t *nd = calloc(n, sizeof(tnode_t));
   mrmp_top_t **top = calloc(n, sizeof(mrmp_top_t *));
-  if (!nd || !top) pdie("out of memory (tree)", NULL);
+  uint32_t *setof = calloc(n, sizeof(uint32_t));
+  if (!nd || !top || !setof) pdie("out of memory (tree)", NULL);
+  for (uint32_t s = 0, k = 0; s < ch->n_sets; ++s) {
+    if (ms_set_is_satellite(ch->name[s])) continue;
+    setof[k++] = s;
+  }
   for (uint32_t k = 0; k < n; ++k) {
-    nd[k].name = ch->name[k];
-    top[k] = ms_mrmp_top_read_at(bundle, ch->block_off[k], 1);
+    nd[k].name = ch->name[setof[k]];
+    top[k] = ms_mrmp_top_read_at(bundle, ch->block_off[setof[k]], 1);
     nd[k].n_class = top[k]->n_samples;
     nd[k].cls = top[k]->labels;
     size_t blen; void *bb = ms_bundle_section(bundle, nd[k].name, &blen);
@@ -367,7 +386,9 @@ static int predict_tree(const char *query_cg, const char *bundle,
     fprintf(fo, "%s\t%s\t%.6f\n", cellname[r], lab[r] ? lab[r] : "NA", conf[r]);
   if (fo != stdout) fclose(fo);
 
-  for (uint32_t k = 0; k < n; ++k) { XGBoosterFree(nd[k].bst); ms_mrmp_top_free(top[k]); }
+  for (uint32_t k = 0; k < n; ++k) { XGBoosterFree(nd[k].bst);
+    ms_colspan_free(nd[k].cs); ms_mrmp_top_free(top[k]); }
+  free(setof);
   free(nd); free(top); free(lab); free(conf);
   if (!mf_open) { free(beta); free(levels); }
   free(cur); free(nxt); free(at);

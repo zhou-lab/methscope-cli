@@ -196,11 +196,18 @@ static int inspect_tree(const char *path) {
    * depend on how the artifact happened to split. */
   inode_t *nd = calloc(n, sizeof(inode_t));
   mrmp_top_t **top = calloc(n, sizeof(mrmp_top_t *));
-  if (!nd || !top) idie("out of memory", path);
+  uint32_t *setof = calloc(n ? n : 1, sizeof(uint32_t));
+  if (!nd || !top || !setof) idie("out of memory", path);
+  /* Satellites are not nodes -- they widen a node's evidence without changing
+   * what it decides -- so they are counted and listed separately below. */
+  uint32_t nn = 0, nsat = 0;
+  for (uint32_t s = 0; s < n; ++s)
+    if (ms_set_is_satellite(ch->name[s])) ++nsat; else setof[nn++] = s;
+  if (!nn) idie("a tree needs at least one node", path);
   uint64_t tot_cpg = 0;
-  for (uint32_t k = 0; k < n; ++k) {
-    top[k] = ms_mrmp_top_read_at(path, ch->block_off[k], UINT32_MAX);
-    nd[k].name = ch->name[k];
+  for (uint32_t k = 0; k < nn; ++k) {
+    top[k] = ms_mrmp_top_read_at(path, ch->block_off[setof[k]], UINT32_MAX);
+    nd[k].name = ch->name[setof[k]];
     nd[k].nc   = top[k]->n_samples;
     nd[k].cls  = top[k]->labels;
     nd[k].npat = top[k]->n_patterns;
@@ -208,28 +215,44 @@ static int inspect_tree(const char *path) {
     for (uint32_t p = 0; p < top[k]->n_patterns; ++p) nd[k].cpg += top[k]->count[p];
     tot_cpg += nd[k].cpg;
   }
-  for (uint32_t k = 0; k < n; ++k) {
+  for (uint32_t k = 0; k < nn; ++k) {
     nd[k].par = -1;
     const char *dot = strrchr(nd[k].name, '.');
     if (!dot) continue;
     size_t plen = (size_t)(dot - nd[k].name);
-    for (uint32_t j = 0; j < n; ++j)
+    for (uint32_t j = 0; j < nn; ++j)
       if (strlen(nd[j].name) == plen && !strncmp(nd[j].name, nd[k].name, plen))
         { nd[k].par = (int)j; break; }
     if (nd[k].par < 0) idie("a node's parent is missing from the chain", nd[k].name);
   }
   uint32_t root = 0, nroot = 0;
-  for (uint32_t k = 0; k < n; ++k) if (nd[k].par < 0) { root = k; ++nroot; }
+  for (uint32_t k = 0; k < nn; ++k) if (nd[k].par < 0) { root = k; ++nroot; }
   if (nroot != 1) idie("a tree needs exactly one root", path);
 
   char b1[32], b2[32];
   uint64_t tot_pat = 0;
-  for (uint32_t k = 0; k < n; ++k) tot_pat += nd[k].npat;
+  for (uint32_t k = 0; k < nn; ++k) tot_pat += nd[k].npat;
   printf("\nTREE  %s\n", path);
-  printf("  %u node%s, %u classes, %s patterns over %s CpGs\n\n",
-         n, n == 1 ? "" : "s",
+  printf("  %u node%s", nn, nn == 1 ? "" : "s");
+  if (nsat) printf(" + %u satellite%s", nsat, nsat == 1 ? "" : "s");
+  printf(", %u classes, %s patterns over %s CpGs\n\n",
          nd[root].nc, commafmt(tot_pat, b1), commafmt(tot_cpg, b2));
-  itree_render(nd, n, root, "", 1);
+  itree_render(nd, nn, root, "", 1);
+  if (nsat) {
+    printf("\n  SATELLITES  extra evidence for a node, not extra nodes: each is\n"
+           "  its own small MRMP whose columns join the named node's booster.\n\n");
+    for (uint32_t s = 0; s < n; ++s) {
+      char ob[512];
+      if (!ms_set_owner(ch->name[s], ob, sizeof ob)) continue;
+      mrmp_top_t *t = ms_mrmp_top_read_at(path, ch->block_off[s], UINT32_MAX);
+      uint64_t cp = 0;
+      for (uint32_t p = 0; p < t->n_patterns; ++p) cp += t->count[p];
+      printf("    %-34s -> %-10s %2u classes %6u patterns %10s CpGs\n",
+             strchr(ch->name[s], MS_SAT_SEP) + 1, ob, t->n_samples,
+             t->n_patterns, commafmt(cp, b1));
+      ms_mrmp_top_free(t);
+    }
+  }
   printf("\n  A class listed under a node is DECIDED there. A child node means cells\n"
          "  calling one of its classes descend and are re-decided on that node's\n"
          "  own evidence. Nothing here is stored: the parent is the name minus its\n"

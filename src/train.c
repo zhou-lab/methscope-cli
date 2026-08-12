@@ -332,19 +332,39 @@ int main_train_tree(int argc, char *argv[]) {
          data_path);
 
   ms_mrmpset_t *ch = ms_mrmpset_open(chain);
-  const uint32_t n = ch->n_sets;
-  fprintf(stderr, "\n[methscope] classify-train-tree\n\n");
-  fprintf(stderr, "  %-12s %d records x %d columns, %u node(s)\n", "data",
+  /* A satellite is not a node: it feeds an existing node's booster and gets no
+   * model of its own. Checking its owner here turns a typo into a refusal
+   * rather than a silently ignored set. */
+  uint32_t *nodeof = malloc((size_t)ch->n_sets * sizeof(uint32_t));
+  if (!nodeof) tdie("out of memory", NULL);
+  uint32_t n = 0, nsat = 0;
+  for (uint32_t s = 0; s < ch->n_sets; ++s) {
+    char ob[512];
+    if (!ms_set_is_satellite(ch->name[s])) { nodeof[n++] = s; continue; }
+    ++nsat;
+    if (!ms_set_owner(ch->name[s], ob, sizeof ob))
+      tdie("malformed satellite name (nothing before '@')", ch->name[s]);
+    uint32_t j = 0;
+    for (; j < ch->n_sets; ++j)
+      if (!ms_set_is_satellite(ch->name[j]) && !strcmp(ch->name[j], ob)) break;
+    if (j == ch->n_sets)
+      tdie("satellite names a node that is not in this chain", ch->name[s]);
+  }
+  fprintf(stderr, "\n[methscope] classify-train\n\n");
+  fprintf(stderr, "  %-12s %d records x %d columns, %u node(s)", "data",
           m->n_cells, m->n_patterns, n);
+  if (nsat) fprintf(stderr, " + %u satellite(s)", nsat);
+  fputc('\n', stderr);
 
   void **bl = calloc(n, sizeof(void *));
   uint64_t *bn = calloc(n, sizeof(uint64_t));
   char **nm = calloc(n, sizeof(char *));
   if (!bl || !bn || !nm) tdie("out of memory", NULL);
 
-  for (uint32_t k = 0; k < n; ++k) {
+  for (uint32_t i = 0; i < n; ++i) {
+    const uint32_t k = nodeof[i];
     mrmp_top_t *t = ms_mrmp_top_read_at(chain, ch->block_off[k], 1);
-    nm[k] = strdup(ch->name[k]);
+    nm[i] = strdup(ch->name[k]);
     /* rows: samples whose label is one of THIS node's classes. The class order
      * is the block's, so the booster's class ids line up with the chain. */
     uint32_t *row = malloc((size_t)m->n_cells * sizeof(uint32_t));
@@ -354,25 +374,34 @@ int main_train_tree(int argc, char *argv[]) {
     for (int r = 0; r < m->n_cells; ++r)
       for (uint32_t c = 0; c < t->n_samples; ++c)
         if (!strcmp(row_lab[r], t->labels[c])) { row[nr] = (uint32_t)r; y[nr++] = (float)c; break; }
-    if (!nr) tdie("no training rows for a node's classes", nm[k]);
-    uint32_t ncol = lay->ncol[k], col0 = lay->col0[k];
+    if (!nr) tdie("no training rows for a node's classes", nm[i]);
+    /* the node's own slice plus each satellite's -- NOT contiguous */
+    ms_colspan_t *cs = ms_msfm_colspan(lay, nm[i]);
+    if (!cs) tdie("no layout for this node", nm[i]);
+    uint32_t ncol = cs->total;
     float *X = malloc((size_t)nr * ncol * sizeof(float));
     if (!X) tdie("out of memory", NULL);
-    for (uint32_t r = 0; r < nr; ++r)
-      for (uint32_t c = 0; c < ncol; ++c)
-        X[(size_t)r * ncol + c] =
-          (float)m->M[(size_t)row[r] * m->n_patterns + col0 + c];
+    for (uint32_t r = 0; r < nr; ++r) {
+      uint32_t c = 0;
+      for (uint32_t g = 0; g < cs->n_seg; ++g)
+        for (uint32_t j = 0; j < cs->ncol[g]; ++j, ++c)
+          X[(size_t)r * ncol + c] =
+            (float)m->M[(size_t)row[r] * m->n_patterns + cs->col0[g] + j];
+    }
     int nrd = nrounds > 0 ? nrounds : (int)(sqrt((double)nr) + 0.5);
     if (nrd < 1) nrd = 1;
     BoosterHandle b = train_one(X, y, nr, ncol, (int)t->n_samples, nrd,
-                                nthread, &tn, nm[k]);
+                                nthread, &tn, nm[i]);
     ms_booster_set_meta(b, t->labels, (int)t->n_samples);
     if (flags & MSFM_FLAG_BIN_FLAT)     ms_booster_set_binarize(b, "0.5");
     else if (flags & MSFM_FLAG_BIN_PAT) ms_booster_set_binarize(b, "pattern");
     {  /* the exact columns, by name -- classify selects by LAYOUT, but the
         * names keep a node's model self-describing if it is pulled out */
       char **fn = malloc((size_t)ncol * sizeof(char *));
-      for (uint32_t c = 0; c < ncol; ++c) fn[c] = m->pattern_names[col0 + c];
+      uint32_t c = 0;
+      for (uint32_t g = 0; g < cs->n_seg; ++g)
+        for (uint32_t j = 0; j < cs->ncol[g]; ++j)
+          fn[c++] = m->pattern_names[cs->col0[g] + j];
       ms_booster_set_features(b, fn, (int)ncol);
       free(fn);
     }
@@ -384,19 +413,19 @@ int main_train_tree(int argc, char *argv[]) {
       FILE *f = fopen(tmp, "rb");
       if (!f) tdie("cannot read temporary model", tmp);
       fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
-      bl[k] = malloc((size_t)sz); bn[k] = (uint64_t)sz;
-      if (!bl[k] || fread(bl[k], 1, (size_t)sz, f) != (size_t)sz)
+      bl[i] = malloc((size_t)sz); bn[i] = (uint64_t)sz;
+      if (!bl[i] || fread(bl[i], 1, (size_t)sz, f) != (size_t)sz)
         tdie("short read on temporary model", tmp);
       fclose(f); unlink(tmp); }
     XGBoosterFree(b);
-    free(X); free(row); free(y);
+    free(X); free(row); free(y); ms_colspan_free(cs);
     ms_mrmp_top_free(t);
   }
   ms_bundle_pack_tree(out, chain, n, nm, bl, bn);
   fprintf(stderr, "\n  %-12s %u node(s) + the chain -> %s\n", "wrote", n, out);
   fprintf(stderr, "  %-12s methscope classify query.cg %s\n", "score with", out);
   for (uint32_t k = 0; k < n; ++k) { free(nm[k]); free(bl[k]); }
-  free(nm); free(bl); free(bn);
+  free(nm); free(bl); free(bn); free(nodeof);
   ms_msfm_layout_free(lay); ms_mrmpset_free(ch);
   unlink(chain); free(chain);
   return 0;

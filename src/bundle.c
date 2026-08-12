@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include "bundle.h"
+#include "methscope.h"
+#include "msfm.h"
 #include "mrmp.h"
 #include "methscope.h"    /* ms_annotate_booster (for bundle -l) */
 #include "index.h"        /* get_fname_index -- the resolve temp has a sibling .idx */
@@ -431,13 +433,18 @@ int main_bundle(int argc, char *argv[]) {
      * position: a mismatched order would otherwise pair a node's booster with
      * another node's columns and score confidently on the wrong features. */
     ms_mrmpset_t *ch = ms_mrmpset_open(mrmp);
-    uint32_t n = ch->n_sets;
+    /* Satellites carry no booster -- they widen a node's evidence, they do not
+     * decide anything -- so they are skipped here rather than demanded. */
+    uint32_t n = 0;
+    for (uint32_t s2 = 0; s2 < ch->n_sets; ++s2)
+      if (!ms_set_is_satellite(ch->name[s2])) ++n;
     char **nm = calloc(n, sizeof(char *));
     void **bl = calloc(n, sizeof(void *));
     uint64_t *bn = calloc(n, sizeof(uint64_t));
     if (!nm || !bl || !bn) bdie("out of memory", "tree bundle");
-    for (uint32_t s2 = 0; s2 < n; ++s2) {
-      nm[s2] = strdup(ch->name[s2]);
+    for (uint32_t s3 = 0, s2 = 0; s3 < ch->n_sets; ++s3) {
+      if (ms_set_is_satellite(ch->name[s3])) continue;
+      nm[s2] = strdup(ch->name[s3]);
       for (int a = 0; a < n_inner; ++a) {
         ms_mrmpset_t *one = ms_mrmpset_open(inner_list[a]);
         int hit = one->n_sets == 1 && !strcmp(one->name[0], nm[s2]);
@@ -449,6 +456,7 @@ int main_bundle(int argc, char *argv[]) {
         break;
       }
       if (!bl[s2]) bdie("no per-node model supplied for chain set", nm[s2]);
+      ++s2;
     }
     ms_bundle_pack_tree(out, mrmp, n, nm, bl, bn);
     fprintf(stderr, "[methscope] bundle: tree of %u node(s) -> %s\n", n, out);

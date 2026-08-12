@@ -231,6 +231,45 @@ char *ms_msfm_chain(const char *msfm);
 ms_msfm_layout_t *ms_msfm_layout(const char *chain, uint32_t flags);
 void ms_msfm_layout_free(ms_msfm_layout_t *l);
 
+/* SATELLITES. A set whose name contains '@' feeds an existing node's booster
+ * with extra columns instead of being a node of its own: the text before '@'
+ * names the node, the rest is a free tag, so
+ *
+ *     root.0.0@CGE-Vip|PAL-Inh
+ *
+ * is a satellite of root.0.0. The separator cannot be '.', which is already
+ * the parent operator ("a node's parent is its name minus the last dotted
+ * component") -- root.0.0.sat would BE a child, and a child must partition its
+ * parent's classes for routing to stay well defined. A satellite deliberately
+ * does not: it holds 2 classes of a 33-class node and adds one contrast.
+ *
+ * Why they exist: a node's own patterns must hold across every class it
+ * carries, so a wide node's filter is a conjunction and starves the pairs that
+ * need help most. Measured on a 33-class leaf, the contrast MGE-Sst/PAL-Inh
+ * had 10 CpGs on the side a rank column needs; rebuilt as its own 2-class set
+ * it has 3,034. The node keeps deciding all 33 classes -- only its evidence
+ * widens. */
+#define MS_SAT_SEP '@'
+int ms_set_is_satellite(const char *name);
+/* The node a satellite feeds, into buf. Returns buf, or NULL if not a
+ * satellite or the name is malformed (empty owner). */
+const char *ms_set_owner(const char *name, char *buf, size_t n);
+
+/* A node's columns in the fused matrix: its own slice plus one per satellite,
+ * which are NOT contiguous, so every consumer must gather over segments. */
+typedef struct {
+  uint32_t  n_seg;
+  uint32_t  total;               /* summed width; the booster's feature count */
+  uint32_t *col0;
+  uint32_t *ncol;
+} ms_colspan_t;
+
+/* Segments for `node`, its own slice first. NULL if the layout has no such
+ * set. Satellites naming a node that does not exist are a load-time error
+ * elsewhere, not silently dropped here. */
+ms_colspan_t *ms_msfm_colspan(const ms_msfm_layout_t *l, const char *node);
+void ms_colspan_free(ms_colspan_t *c);
+
 void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
                            const uint64_t *mrmp_base, const uint64_t *mrmp_len,
                            const uint32_t *patterns, uint32_t n_sets,

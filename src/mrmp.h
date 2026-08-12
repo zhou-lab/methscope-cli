@@ -141,6 +141,30 @@ typedef struct {
 
 #define MRMP_TRITS_PER_WORD 40u   /* 3^40 < 2^64 <= 3^41 */
 
+/* TRIT ORDER ON DISK, stated because it is not guessable and a wrong guess is
+ * silent -- it permutes classes and every downstream number stays plausible.
+ *
+ * Word w covers classes [w*40, min(len, w*40+40)), and within that slice the
+ * digits run RIGHT TO LEFT: the word's least-significant trit is the LAST class
+ * of the slice, not the first. The reversal is per WORD, and the word boundary
+ * restarts it. Writing class c's digit therefore means:
+ *
+ *   w   = c / 40                     lo = w * 40
+ *   n   = min(len - lo, 40)          the classes this word holds
+ *   pos = lo + n - 1 - (c - lo)      where c lands in the printed string
+ *   digit index within the word = c - lo, weight 3^(n-1-(pos-lo))
+ *
+ * Worked: len = 41 gives word 0 = classes 0..39 reversed among themselves and
+ * word 1 = class 40 alone. So reversing the whole 41-character string -- the
+ * obvious reading, and correct for len <= 40 -- shifts every class by one.
+ *
+ * A reader outside this binary should not reimplement it: `mrmp-export
+ * --patterns` writes binstring<TAB>P<rank><TAB>count and already knows the
+ * layout. Reimplementing it cost real analysis time on a 41-class reference,
+ * where a hand decoder agreed with the tool for a 21-class block and disagreed
+ * for the 41-class one, producing a partition that looked like a bug in the
+ * partitioner. */
+
 /* uint64 words a pattern of n_samples occupies (>= 1, so 0 samples is benign). */
 static inline uint32_t mrmp_key_words(uint32_t n_samples) {
   return n_samples ? (n_samples + MRMP_TRITS_PER_WORD - 1) / MRMP_TRITS_PER_WORD : 1u;
