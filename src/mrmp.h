@@ -159,6 +159,10 @@ int main_mrmp_build_thin(int argc, char *argv[]);
  * already covers, as one chain. Overlapping pairs, NOT a partition:
  * a class appears in as many sets as it has close neighbours. */
 int main_mrmp_build_neighbor(int argc, char *argv[]);
+/* Every node of a routing tree in one pass: each node an MRMP over its own
+ * class subset, children = the groups that node's patterns cannot separate.
+ * Parent is encoded in the set name ("root.0.1"), since the header is full. */
+int main_mrmp_tree(int argc, char *argv[]);
 int main_mrmp_export(int argc, char *argv[]);
 int main_mrmp_inspect(int argc, char *argv[]);
 /* Pool sets into one chain AND cut to a shared column budget. Concatenation

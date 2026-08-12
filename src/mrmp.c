@@ -3266,3 +3266,457 @@ int main_mrmpset_inspect(const char *path) {
   ms_mrmpset_free(s);
   return 0;
 }
+
+/* ------------------------------------------------------------------ mrmp-tree
+ *
+ * One command builds EVERY node of a routing tree, each node an MRMP over its
+ * own class subset. It replaces mrmp-build + mrmp-build-neighbor + mrmp-pool
+ * for this shape: the tree IS the set collection, and a node's children are the
+ * groups its own patterns cannot tell apart.
+ *
+ * Why per-node rebuild rather than partitioning one global's patterns: a
+ * pattern must be consistent across EVERY class in its set, so each class
+ * dropped relaxes the constraint and admits more CpGs. Measured on this
+ * reference, the colon/small-intestine pair carries 21,146 segregating CpGs
+ * inside the 33-class global and 102,694 as its own 2-class set -- ~5x the
+ * evidence from nothing but removing the other 31 classes. The recursion GAINS
+ * evidence as it descends, which is the opposite of a decision tree, where a
+ * child always sees less data than its parent.
+ *
+ * The parent pointer lives in the SET NAME -- "root", "root.0", "root.0.1" --
+ * so a node's parent is its name minus the last dotted component. The 128-byte
+ * header has no room left (see mrmp.h), and a name costs nothing, survives
+ * `cat`, and already prints in `inspect`.
+ *
+ * The split rule is single-linkage on the segregating-CpG graph. Two classes
+ * that the node separates by <= --min-segregating CpGs MUST end up in the same
+ * child, so the groups are the connected components of that graph. This is not
+ * a heuristic: routing is HARD, a misroute is unrecoverable downstream, and
+ * "these two are separated by more than N CpGs" is exactly the statement that
+ * routing between them is reliable. Connected components also make the shape
+ * independent of pattern order -- the tree is a function of (reference,
+ * selection rule, min-segregating) and nothing else.
+ *
+ * Group separation is the MINIMUM over cross-group class pairs rather than the
+ * count of patterns that split the whole groups apart. The weakest pair is what
+ * actually breaks routing, and taking the minimum keeps the criterion
+ * consistent with the component construction it feeds. */
+
+typedef struct {
+  void    **img;
+  uint64_t *len;
+  char    **name;
+  uint32_t  n, cap;
+} treeout_t;
+
+static void tree_push(treeout_t *t, void *img, uint64_t len, const char *name) {
+  if (t->n == t->cap) {
+    t->cap = t->cap ? t->cap * 2 : 64;
+    t->img  = realloc(t->img,  (size_t)t->cap * sizeof(void *));
+    t->len  = realloc(t->len,  (size_t)t->cap * sizeof(uint64_t));
+    t->name = realloc(t->name, (size_t)t->cap * sizeof(char *));
+    if (!t->img || !t->len || !t->name) die("out of memory (tree)", NULL);
+  }
+  t->img[t->n] = img; t->len[t->n] = len;
+  t->name[t->n] = strdup(name); ++t->n;
+}
+
+/* Segregating CpGs for every class pair of a freshly built block, read straight
+ * out of its in-memory image -- the block is a standalone MRMPIDX1, so this is
+ * the same walk ms_mrmp_top_read() does on a file, minus the file.
+ *
+ * seg[a*ns+b] sums the CpGs of patterns calling a '0' and b '1' or the reverse,
+ * matching segregating_cpgs() in mrmp-build-neighbor exactly: a '2' (no call)
+ * never counts, because a pattern that abstains on a class carries no evidence
+ * about it. */
+static uint64_t *tree_pair_seg(const void *img) {
+  const mrmp_header_t *h = (const mrmp_header_t *)img;
+  const uint32_t ns = h->n_samples, nw = mrmp_key_words(ns);
+  const uint64_t stride = mrmp_pattern_stride(ns), npat = h->n_candidates;
+  const char *base = (const char *)img + h->patterns_offset;
+  uint64_t *seg = xcalloc((size_t)ns * ns, sizeof(uint64_t), "pair seg");
+  char *bs = xcalloc((size_t)ns + 1, 1, "binstring");
+  uint32_t *z = xcalloc(ns, sizeof(uint32_t), "zero side");
+  uint32_t *o = xcalloc(ns, sizeof(uint32_t), "one side");
+  for (uint64_t p = 0; p < npat; ++p) {
+    const char *rec = base + p * stride;
+    key_to_string((const uint64_t *)(const void *)rec, ns, bs);
+    uint64_t cnt; memcpy(&cnt, rec + (uint64_t)nw * sizeof(uint64_t), sizeof cnt);
+    if (!cnt) continue;
+    uint32_t nz = 0, no = 0;
+    for (uint32_t s = 0; s < ns; ++s) {
+      if (bs[s] == '0') z[nz++] = s; else if (bs[s] == '1') o[no++] = s;
+    }
+    /* only the cross product carries a contrast, so a homogeneous pattern
+     * (nz or no zero) costs nothing here */
+    for (uint32_t i = 0; i < nz; ++i)
+      for (uint32_t j = 0; j < no; ++j) {
+        seg[(uint64_t)z[i] * ns + o[j]] += cnt;
+        seg[(uint64_t)o[j] * ns + z[i]] += cnt;
+      }
+  }
+  free(bs); free(z); free(o);
+  return seg;
+}
+
+/* Connected components of {a--b : seg(a,b) <= min_seg}: classes the node cannot
+ * reliably tell apart must ride to the same child together. Returns the group
+ * count and fills grp[] with a 0-based group id per class, in first-appearance
+ * order so the numbering is stable. */
+static uint32_t tree_partition(const uint64_t *seg, uint32_t ns,
+                               uint64_t min_seg, uint32_t *grp) {
+  uint32_t *par = xcalloc(ns, sizeof(uint32_t), "union-find");
+  for (uint32_t s = 0; s < ns; ++s) par[s] = s;
+  for (uint32_t a = 0; a < ns; ++a)
+    for (uint32_t b = a + 1; b < ns; ++b) {
+      if (seg[(uint64_t)a * ns + b] > min_seg) continue;
+      uint32_t ra = a, rb = b;
+      while (par[ra] != ra) ra = par[ra] = par[par[ra]];
+      while (par[rb] != rb) rb = par[rb] = par[par[rb]];
+      if (ra != rb) par[ra > rb ? ra : rb] = ra < rb ? ra : rb;
+    }
+  uint32_t ng = 0;
+  for (uint32_t s = 0; s < ns; ++s) grp[s] = UINT32_MAX;
+  for (uint32_t s = 0; s < ns; ++s) {
+    uint32_t r = s;
+    while (par[r] != r) r = par[r];
+    if (grp[r] == UINT32_MAX) grp[r] = ng++;
+    grp[s] = grp[r];
+  }
+  free(par);
+  return ng;
+}
+
+/* Weakest cross-group pair, i.e. the separation the routing between two
+ * children actually rests on. */
+static uint64_t tree_group_gap(const uint64_t *seg, uint32_t ns,
+                               const uint32_t *grp, uint32_t ga, uint32_t gb) {
+  uint64_t lo = UINT64_MAX;
+  for (uint32_t a = 0; a < ns; ++a) {
+    if (grp[a] != ga) continue;
+    for (uint32_t b = 0; b < ns; ++b) {
+      if (grp[b] != gb) continue;
+      uint64_t v = seg[(uint64_t)a * ns + b];
+      if (v < lo) lo = v;
+    }
+  }
+  return lo == UINT64_MAX ? 0 : lo;
+}
+
+static int u64cmp(const void *a, const void *b) {
+  uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+  return x < y ? -1 : x > y;
+}
+
+/* The off-diagonal of seg[], sorted ascending; caller frees. */
+static uint64_t *tree_pair_sorted(const uint64_t *seg, uint32_t ns, uint64_t *n) {
+  *n = (uint64_t)ns * (ns - 1) / 2;
+  uint64_t *v = xcalloc(*n ? *n : 1, sizeof(uint64_t), "pair list"), k = 0;
+  for (uint32_t a = 0; a < ns; ++a)
+    for (uint32_t b = a + 1; b < ns; ++b) v[k++] = seg[(uint64_t)a * ns + b];
+  qsort(v, (size_t)*n, sizeof(uint64_t), u64cmp);
+  return v;
+}
+
+/* An ABSOLUTE CpG threshold is not portable across selection rules: the same
+ * colon/small-intestine pair is 21,146 segregating CpGs under mrmp-build's
+ * inline --qfilter and 7,624 under the per-node union rule, because the two
+ * keep different numbers of CpGs in total. So the default threshold is a
+ * QUANTILE of this node's own pairwise distribution, which rescales itself, and
+ * --min-segregating overrides it with a count when a fixed one is wanted. */
+static uint64_t tree_threshold(const uint64_t *sorted, uint64_t npair,
+                               double q, uint64_t fixed, int have_fixed) {
+  if (have_fixed) return fixed;
+  if (!npair) return 0;
+  uint64_t i = (uint64_t)(q * (double)npair);
+  if (i >= npair) i = npair - 1;
+  return sorted[i];
+}
+
+/* Build this node's MRMP over its own classes, then recurse into the groups it
+ * cannot separate. Depth-first, so the chain reads parent before child. */
+static void tree_build(const char *store, char *const *slab, const int64_t *voff,
+                       const uint32_t *idx, uint32_t n, const mrmp_header_t *gh,
+                       const ms_select_opt_t *sel, const char *name,
+                       double split_q, uint64_t fixed_seg, int have_fixed,
+                       uint32_t depth, uint32_t max_depth, int dry,
+                       int tty, treeout_t *out, FILE *rep) {
+  char **lab = xcalloc(n, sizeof(char *), "node labels");
+  int64_t *vo = xcalloc(n, sizeof(int64_t), "node offsets");
+  for (uint32_t k = 0; k < n; ++k) { lab[k] = slab[idx[k]]; vo[k] = voff[idx[k]]; }
+
+  char ind[80]; uint32_t w = depth * 2 < 72 ? depth * 2 : 72;
+  memset(ind, ' ', w); ind[w] = '\0';
+
+  subset_block_t sb;
+  { char m[192]; snprintf(m, sizeof m, "[%s] %u classes", name, n);
+    spin_start(tty, m); }
+  build_subset_block(store, n, lab, vo, gh, sel, name, &sb);
+  spin_stop();
+  tree_push(out, sb.img, sb.bytes, name);
+
+  char b1[32], b2[32], b3[32], b4[32], b5[32];
+  if (n < 2 || depth >= max_depth) {
+    fprintf(rep, "%s%s%s  n=%-3u %7s pat %9s CpGs\n", tty ? "\r\033[K" : "",
+            ind, name, n, commafmt_local(sb.n_pat, b1),
+            commafmt_local(sb.n_kept, b2));
+    free(lab); free(vo); return;
+  }
+
+  uint64_t *seg = tree_pair_seg(sb.img);
+  uint64_t npair = 0, *sorted = tree_pair_sorted(seg, n, &npair);
+  uint64_t min_seg = tree_threshold(sorted, npair, split_q, fixed_seg, have_fixed);
+  uint32_t *grp = xcalloc(n, sizeof(uint32_t), "grouping");
+  uint32_t ng = tree_partition(seg, n, min_seg, grp);
+
+  /* The threshold only means something against the spread it was drawn from, so
+   * the node reports both. */
+  fprintf(rep, "%s%s%s  n=%-3u %7s pat %9s CpGs   pair seg min %s med %s"
+          "   split > %s -> %u group(s)\n", tty ? "\r\033[K" : "", ind, name, n,
+          commafmt_local(sb.n_pat, b1), commafmt_local(sb.n_kept, b2),
+          commafmt_local(sorted[0], b3), commafmt_local(sorted[npair / 2], b4),
+          commafmt_local(min_seg, b5), ng);
+
+  if (dry) {   /* the root's closest pairs are what a threshold is chosen from */
+    uint32_t show = n < 12 ? npair < 12 ? (uint32_t)npair : 12 : 12;
+    fprintf(rep, "%s  closest pairs:\n", ind);
+    for (uint32_t a = 0, k = 0; a < n && k < show; ++a)
+      for (uint32_t b = a + 1; b < n && k < show; ++b)
+        if (seg[(uint64_t)a * n + b] <= sorted[show - 1]) {
+          fprintf(rep, "%s    %-26s %-26s %9s\n", ind, lab[a], lab[b],
+                  commafmt_local(seg[(uint64_t)a * n + b], b1));
+          ++k;
+        }
+  }
+
+  if (ng < 2) {   /* nothing here separates them: an irreducible multi-class leaf */
+    fprintf(rep, "%s  ! unsplittable:", ind);
+    for (uint32_t k = 0; k < n; ++k) fprintf(rep, " %s", lab[k]);
+    fprintf(rep, "\n");
+    free(sorted); free(seg); free(grp); free(lab); free(vo); return;
+  }
+  for (uint32_t g = 0; g < ng; ++g) {
+    uint32_t *sub = xcalloc(n, sizeof(uint32_t), "child idx"), m = 0;
+    for (uint32_t k = 0; k < n; ++k) if (grp[k] == g) sub[m++] = idx[k];
+    uint64_t gap = UINT64_MAX;
+    for (uint32_t h = 0; h < ng; ++h)
+      if (h != g) { uint64_t v = tree_group_gap(seg, n, grp, g, h);
+                    if (v < gap) gap = v; }
+    /* A singleton is already decided by this node's own call; giving it a child
+     * MRMP would be a 1-class set, which has no contrast to describe. */
+    if (m == 1) {
+      fprintf(rep, "%s  - %-40s gap %s\n", ind, slab[sub[0]],
+              commafmt_local(gap == UINT64_MAX ? 0 : gap, b1));
+      free(sub); continue;
+    }
+    fprintf(rep, "%s  + %u classes, gap %s\n", ind, m,
+            commafmt_local(gap == UINT64_MAX ? 0 : gap, b1));
+    fflush(rep);
+    if (dry) { free(sub); continue; }
+    char cn[256]; snprintf(cn, sizeof cn, "%s.%u", name, g);
+    tree_build(store, slab, voff, sub, m, gh, sel, cn, split_q, fixed_seg,
+               have_fixed, depth + 1, max_depth, dry, tty, out, rep);
+    free(sub);
+  }
+  free(sorted); free(seg); free(grp); free(lab); free(vo);
+}
+
+int main_mrmp_tree(int argc, char *argv[]) {
+  g_cmd = "mrmp-tree";
+  if (argc == 1) { char *h[2]; h[0] = argv[0]; h[1] = (char *)"-h";
+                   (void)main_mrmp_tree(2, h); return 1; }
+  const char *pos[2] = {NULL, NULL}, *treefile = NULL, *nodedir = NULL;
+  int npos = 0, force = 0, dry = 0, have_fixed = 0;
+  uint64_t fixed_seg = 0; uint32_t max_depth = 16;
+  double split_q = 0.0;              /* only if --split-quantile asks for it */
+  ms_select_opt_t sel; ms_select_defaults(&sel);
+  sel.quiet = 1;                     /* one line per node, not per selection */
+  mrmp_header_t gh; memset(&gh, 0, sizeof gh);
+  gh.mincov = MRMP_DEF_MINCOV;       gh.beta_threshold = MRMP_DEF_BETA_THRESH;
+  gh.max_ambig_frac = MRMP_DEF_MAX_AMBIG; gh.min_major_fold = MRMP_DEF_MIN_FOLD;
+  for (int i = 1; i < argc; ++i) {
+    const char *a = argv[i];
+    if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
+      ms_help(stderr,
+        "Usage: methscope mrmp-tree [options] REF.cg OUT.mrmp\n\n"
+        "  Builds EVERY node of a routing tree in one pass. Each node is an\n"
+        "  MRMP over its own class subset; a node's children are the groups of\n"
+        "  classes its own patterns cannot tell apart. Replaces mrmp-build +\n"
+        "  the satellite builders + mrmp-pool for this shape.\n\n"
+        "  Per-node rebuild is the point: a pattern must hold across every\n"
+        "  class in its set, so dropping classes admits more CpGs. Colon vs\n"
+        "  small intestine carries 21,146 segregating CpGs inside a 33-class\n"
+        "  global and 102,694 as its own 2-class set. The recursion GAINS\n"
+        "  evidence as it descends.\n\n"
+        "  The parent lives in the set NAME -- root, root.0, root.0.1 -- so a\n"
+        "  node's parent is its name minus the last component. The 128-byte\n"
+        "  header has no room for a pointer, and a name survives cat.\n\n"
+        "  Options\n"
+        "    --min-segregating N   the split threshold, in CpGs (REQUIRED)\n"
+        "          Two classes separated by <= N segregating CpGs go to the\n"
+        "          SAME child; groups are the connected components of that\n"
+        "          graph. ABSOLUTE, not relative, because what a cell can\n"
+        "          observe is an absolute number of CpGs -- a threshold that\n"
+        "          rescaled itself per node would move the bar exactly as the\n"
+        "          recursion earns the budget to clear it.\n"
+        "          A node that cannot split at N is not a failure: its group\n"
+        "          becomes a child, rebuilt over fewer classes, whose larger\n"
+        "          CpG budget is what clears N one level down. That is the\n"
+        "          point of the recursion. The one dead end is a root that\n"
+        "          yields a SINGLE group -- its child would be itself -- so N\n"
+        "          must leave the root's graph disconnected.\n"
+        "    --split-quantile Q    set N per node as the Q-quantile of that\n"
+        "          node's own pair distribution instead. Rescales itself, which\n"
+        "          is usually the wrong thing; kept for exploring an unfamiliar\n"
+        "          reference, where --dry-run prints the spread to pick N from.\n"
+        "    --max-depth N         recursion limit (default 16)\n"
+        "    --dry-run             build the ROOT only, print its closest pairs\n"
+        "                          and the groups it would make, write nothing\n"
+        "    --qfilter LO,HI       keep a CpG when every expected-0 class is\n"
+        "                          <= LO and every expected-1 class is >= HI\n"
+        "    --delta-mean-top N    per binstring, cap at the N largest class\n"
+        "                          gaps among the q-filter's passers (0 = no cap).\n"
+        "                          Stringency is only affordable with the CpG\n"
+        "                          budget to pay for it, so this is the budget\n"
+        "                          knob that makes a tight --qfilter usable.\n"
+        "    --p01-min X           P(01) floor (default 0.60, the default rule)\n"
+        "    --mincov N            min per-class coverage (default 1)\n"
+        "    --node-dir DIR        also write DIR/<node>.mrmp, one per node, so the\n"
+        "                          tree drives with plain classify-featurize /\n"
+        "                          classify-train (a block is a standalone .mrmp)\n"
+        "    --tree FILE           write the tree shape here as well as stderr\n"
+        "    --force               overwrite an existing output\n");
+      return 0;
+    }
+    else if (!strcmp(a, "--min-segregating") && i + 1 < argc) {
+      fixed_seg = parse_u64(argv[++i], a); have_fixed = 1;
+    }
+    else if (!strcmp(a, "--split-quantile") && i + 1 < argc) {
+      split_q = atof(argv[++i]);
+      if (!(split_q > 0.0 && split_q < 1.0))
+        die("--split-quantile needs 0 < Q < 1", argv[i]);
+      have_fixed = 0;
+    }
+    else if (!strcmp(a, "--dry-run")) dry = 1;
+    else if (!strcmp(a, "--max-depth") && i + 1 < argc)
+      max_depth = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--mincov") && i + 1 < argc)
+      gh.mincov = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--tree") && i + 1 < argc) treefile = argv[++i];
+    else if (!strcmp(a, "--node-dir") && i + 1 < argc) nodedir = argv[++i];
+    else if (!strcmp(a, "--p01-min") && i + 1 < argc) {
+      sel.p01_min = (float)atof(argv[++i]); sel.p01_on = 1;
+      if (!(sel.p01_min >= 0.0f && sel.p01_min <= 1.0f))
+        die("--p01-min needs 0 <= X <= 1", argv[i]);
+    }
+    else if (!strcmp(a, "--p01-top") && i + 1 < argc) {
+      sel.p01_top = (uint32_t)parse_u64(argv[++i], a); sel.p01_on = 1;
+    }
+    else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc) {
+      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a); sel.p01_on = 0;
+    }
+    else if (!strcmp(a, "--qfilter") && i + 1 < argc) {
+      const char *v = argv[++i]; char *end = NULL;
+      float lo = strtof(v, &end);
+      if (!end || *end != ',') die("--qfilter wants LO,HI", v);
+      float hi = strtof(end + 1, NULL);
+      if (!(lo >= 0.0f && hi <= 1.0f && lo < hi))
+        die("--qfilter needs 0 <= LO < HI <= 1", v);
+      sel.qfilter_lo = lo; sel.qfilter_hi = hi;
+      /* The legacy rule had a SECOND leg, "strict", running the identical
+       * comparison at its own thresholds and unioning the result in. Two
+       * spellings of one predicate: LO,HI 0.10,0.90 through either leg selects
+       * the same CpGs (verified -- 21,224 both ways, identical to 3 decimals on
+       * every Bian site). Keeping both meant the effective filter was the
+       * LOOSER of two numbers, silently, while the tighter one appeared to be
+       * in force. One threshold, and --delta-mean-top for the budget. */
+      sel.strict_lo = -1.0f; sel.strict_hi = -1.0f;
+      sel.p01_on = 0;                /* asking for the old rule selects it */
+    }
+    else if (!strcmp(a, "--force")) force = 1;
+    else if (a[0] == '-') die("unrecognized or incomplete option", a);
+    else if (npos < 2) pos[npos++] = a;
+    else die("too many arguments", a);
+  }
+  if (npos != 2) die("need REF.cg and OUT.mrmp (see mrmp-tree -h)", NULL);
+  /* No default: the threshold is the whole design decision, and a magic number
+   * here would be a per-reference guess wearing the costume of a default. */
+  if (!have_fixed && split_q <= 0.0)
+    die("give --min-segregating N (or --split-quantile Q); --dry-run prints "
+        "the root's pair distribution to choose from", NULL);
+  const char *store = pos[0], *out = pos[1];
+  if (!force && !dry) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
+
+  uint32_t nstore = 0; int64_t *voff = NULL;
+  char **slab = read_store_index(store, &nstore, &voff);
+  if (nstore < 2) die("reference holds fewer than two classes", store);
+  uint32_t *idx = xcalloc(nstore, sizeof(uint32_t), "root idx");
+  for (uint32_t k = 0; k < nstore; ++k) idx[k] = k;
+
+  const int tty = isatty(STDERR_FILENO);
+  FILE *rep = stderr;
+  if (treefile) { rep = fopen(treefile, "w");
+                  if (!rep) die("cannot write tree file", treefile); }
+  treeout_t t; memset(&t, 0, sizeof t);
+  if (have_fixed)
+    fprintf(stderr, "[methscope] %s: %u classes, split above %" PRIu64
+            " segregating CpGs%s\n", g_cmd, nstore, fixed_seg,
+            dry ? " (dry run)" : "");
+  else
+    fprintf(stderr, "[methscope] %s: %u classes, split above the %.3g quantile"
+            " of each node's own pairs%s\n", g_cmd, nstore, split_q,
+            dry ? " (dry run)" : "");
+  tree_build(store, slab, voff, idx, nstore, &gh, &sel, "root", split_q,
+             fixed_seg, have_fixed, 0, max_depth, dry,
+             rep == stderr ? tty : 0, &t, rep);
+  if (rep != stderr) fclose(rep);
+  if (dry) return 0;
+
+  ms_mrmp_chain_write(out, t.n, (const void *const *)t.img, t.len);
+  /* Also one file per node. A block is a byte-identical standalone MRMPIDX1, so
+   * this needs no re-encode -- and it is what lets classify-featurize /
+   * classify-train drive the tree per node with no new subcommand. */
+  if (nodedir) for (uint32_t k = 0; k < t.n; ++k) {
+    char pth[PATH_MAX];
+    if (snprintf(pth, sizeof pth, "%s/%s.mrmp", nodedir, t.name[k]) >= (int)sizeof pth)
+      die("node path too long", t.name[k]);
+    FILE *nf = fopen(pth, "wb");
+    if (!nf) die("cannot write node artifact", pth);
+    if (fwrite(t.img[k], 1, (size_t)t.len[k], nf) != t.len[k])
+      die("short write on node artifact", pth);
+    fclose(nf);
+  }
+  /* The manifest is what a driver reads: which classes a node covers, and hence
+   * which child a parent's call routes to. Parent is the name minus the last
+   * dotted component, so the tree reconstructs from this file alone. */
+  if (nodedir) {
+    char pth[PATH_MAX];
+    if (snprintf(pth, sizeof pth, "%s/nodes.tsv", nodedir) >= (int)sizeof pth)
+      die("node directory path too long", nodedir);
+    FILE *nf = fopen(pth, "w");
+    if (!nf) die("cannot write node manifest", pth);
+    fprintf(nf, "node\tparent\tn_class\tn_pattern\tclasses\n");
+    for (uint32_t k = 0; k < t.n; ++k) {
+      const mrmp_header_t *h = (const mrmp_header_t *)t.img[k];
+      const char *dot = strrchr(t.name[k], '.');
+      fprintf(nf, "%s\t%.*s\t%u\t%" PRIu64 "\t", t.name[k],
+              dot ? (int)(dot - t.name[k]) : 2, dot ? t.name[k] : "NA",
+              h->n_samples, h->n_candidates);
+      const char *nm = (const char *)t.img[k] + h->names_offset;
+      for (uint32_t j = 0; j < h->n_samples; ++j) {
+        fprintf(nf, "%s%s", j ? "," : "", nm); nm += strlen(nm) + 1;
+      }
+      fputc('\n', nf);
+    }
+    fclose(nf);
+  }
+  { char b1[32]; uint64_t tot = 0;
+    for (uint32_t k = 0; k < t.n; ++k) tot += t.len[k];
+    fprintf(stderr, "  %u node(s), %s bytes -> %s\n", t.n,
+            commafmt_local(tot, b1), out); }
+  for (uint32_t k = 0; k < t.n; ++k) { free(t.img[k]); free(t.name[k]); }
+  free(t.img); free(t.len); free(t.name); free(idx);
+  for (uint32_t k = 0; k < nstore; ++k) free(slab[k]);
+  free(slab); free(voff);
+  return 0;
+}

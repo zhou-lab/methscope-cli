@@ -110,6 +110,18 @@ typedef struct {
   const uint32_t *cpg_off;     /* n_cpg + 1 */
   const uint16_t *cpg_col;     /* global output column per membership */
   const uint32_t *set_end;     /* n_sets: one past a set's last pattern column */
+  /* Output map: column j of the emitted matrix comes from internal column
+   * em_a[j], or is the CONTRAST em_a[j] vs em_b[j] when em_b[j] >= 0. Lets a
+   * 2-class satellite emit one relative feature in place of (or beside) its two
+   * absolute ones without disturbing the scatter, which still accumulates every
+   * pattern. */
+  const int32_t  *em_a, *em_b;
+  /* A RANK column cannot be named by one source pair: it is a mean over the
+   * patterns calling its class '1' against a mean over those calling it '0'.
+   * em_a[j] < 0 marks it, and its sources live in rk_idx[rk_off[j] ..
+   * rk_off[j+1]), the first rk_n1[j] of them being the '1' side. */
+  const uint32_t *rk_off, *rk_n1, *rk_idx;
+  uint32_t        ncol_out;
   /* Per-column binarisation cut, or NULL to leave betas continuous.
    *
    * A pattern's beta is thresholded against ITS OWN midpoint -- the point
@@ -233,7 +245,7 @@ static void *worker(void *arg) {
       TOCK(t_scatter);
 
       uint64_t row = (uint64_t)rep * J->n_cells + cell;
-      uint16_t *out = J->beta + row * J->ncol;
+      uint16_t *out = J->beta + row * J->ncol_out;
       /* Thin evidence is recorded as MISSING, not as a confident beta. A beta
        * from one CpG can only be 0 or 1, so after the 0.5 threshold it is always
        * a maximally-confident call and never a borderline one -- and it carries
@@ -242,12 +254,60 @@ static void *worker(void *arg) {
        * i.e. rest on one or two measurements. Dropping them needs no format
        * change: every reader already treats MSFM_NA as unobserved. */
       TICK();
-      for (uint32_t g = 0; g < J->ncol; ++g) {
-        if (cnt[g] < J->min_cpgs) { out[g] = MSFM_NA; continue; }
+      for (uint32_t j = 0; j < J->ncol_out; ++j) {
+        if (J->em_a[j] < 0) {                      /* RANK column */
+          const uint32_t s0i = J->rk_off[j], n1 = J->rk_n1[j], e = J->rk_off[j + 1];
+          /* Pooled over CpGs, not averaged over pattern means. A pattern's CpGs
+           * are shattered: the median pattern of the 33-class human root holds
+           * TWO CpGs (mean 88, carried by a few huge one-vs-rest patterns), so
+           * averaging pattern means gives a 1-CpG pattern the same weight as a
+           * 500-CpG one. Measured: a cell with 124,636 covered CpGs resolved
+           * B.Cell vs T.Cell.CD8 on ONE of the B-side's 109 patterns, whose
+           * single read made the mean exactly 0.000 and flipped the contrast.
+           * Pooling uses every observed CpG on the side as one estimate, so the
+           * side's weight is its evidence. */
+          double a1 = 0, a0 = 0; uint32_t c1 = 0, c0 = 0;
+          for (uint32_t k = s0i; k < s0i + n1; ++k) {
+            uint32_t g2 = J->rk_idx[k];
+            a1 += sum[g2]; c1 += cnt[g2];
+          }
+          for (uint32_t k = s0i + n1; k < e; ++k) {
+            uint32_t g2 = J->rk_idx[k];
+            a0 += sum[g2]; c0 += cnt[g2];
+          }
+          /* min_cpgs now gates the SIDE, which is what it should have meant all
+           * along here: the question is whether the side has evidence, not
+           * whether some individual pattern does. */
+          if (c1 < J->min_cpgs || c0 < J->min_cpgs) { out[j] = MSFM_NA; continue; }
+          /* Both sides must be observed or there is no comparison to make. That
+           * is a REAL abstention, not a shortfall: the thin side sets the floor,
+           * and on the human root the B.Cell-favouring half of the B.Cell vs
+           * Endothel.(Vascular) contrast carries 3,114 CpGs against the other
+           * side's 16,448, so a cell under ~10k covered CpGs expects no hit on
+           * it at all. */
+          double m1 = a1 / c1, m0 = a0 / c0;
+          if (m1 == m0) { out[j] = MSFM_NA; continue; }   /* no direction */
+          /* Binarised: the SIGN is the shift-invariant claim. Continuous: the
+           * gap itself, mapped from [-1,1] onto the stored [0,1]. */
+          out[j] = J->col_thresh ? msfm_encode(m1 > m0 ? 1.0 : 0.0)
+                                 : msfm_encode(0.5 * (m1 - m0) + 0.5);
+          continue;
+        }
+        const uint32_t g = (uint32_t)J->em_a[j];
+        if (J->em_b[j] >= 0) {                     /* CONTRAST column */
+          const uint32_t g2 = (uint32_t)J->em_b[j];
+          if (cnt[g] < J->min_cpgs || cnt[g2] < J->min_cpgs) { out[j] = MSFM_NA; continue; }
+          double b1 = sum[g] / (double)cnt[g], b2 = sum[g2] / (double)cnt[g2];
+          /* Ties carry no direction, exactly as at the 0.5 cut. */
+          if (b1 == b2) { out[j] = MSFM_NA; continue; }
+          out[j] = msfm_encode(b1 > b2 ? 1.0 : 0.0);
+          continue;
+        }
+        if (cnt[g] < J->min_cpgs) { out[j] = MSFM_NA; continue; }
         double b = sum[g] / (double)cnt[g];
         if (J->col_thresh) {
           float t = J->col_thresh[g];
-          if (t != t) { out[g] = MSFM_NA; continue; }   /* unusable pattern */
+          if (t != t) { out[j] = MSFM_NA; continue; }   /* unusable pattern */
           if (t >= 0.0f) {
             /* Landing exactly on the cut is not evidence for either side, and
              * `b > t` used to resolve it to 0 -- silently, and always against
@@ -260,11 +320,11 @@ static void *worker(void *arg) {
              * NA is both honest and better handled: xgboost routes missing down
              * a learned default direction per node, so the model works out which
              * way a tie should fall instead of us hardcoding it wrong. */
-            if (b == (double)t) { out[g] = MSFM_NA; continue; }
+            if (b == (double)t) { out[j] = MSFM_NA; continue; }
             b = (b > (double)t) ? 1.0 : 0.0;
           }
         }
-        out[g] = msfm_encode(b);
+        out[j] = msfm_encode(b);
       }
       J->levels[row] = want;
       TOCK(t_emit);
@@ -354,8 +414,9 @@ void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t pattern
                            uint32_t *ncol_out) {
   const char *one[1] = {mrmp};
   uint32_t np[1] = {patterns};
+  /* One set is never a 2-class satellite pair worth contrasting; pass 0. */
   ms_msfm_build_sampled_multi(query, one, NULL, NULL, np, 1, rep_sample, n_reps, binarize,
-                              min_cpgs, seed, threads, binarize_feat,
+                              min_cpgs, seed, threads, binarize_feat, 0, 0,
                               beta_out, levels_out,
                               names_out, n_cells_out, ncol_out, NULL);
 }
@@ -370,6 +431,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
                            const uint32_t *rep_sample, uint32_t n_reps,
                            int binarize, uint32_t min_cpgs,
                            uint64_t seed, unsigned threads, int binarize_feat,
+                           int contrast, int rank,
                            uint16_t **beta_out, uint32_t **levels_out,
                            char ***names_out, uint32_t *n_cells_out,
                            uint32_t *ncol_out, uint32_t *set_col0_out) {
@@ -546,6 +608,107 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   if (ncol > UINT16_MAX) bdie("fused pattern count exceeds uint16", mrmp);
   }
 
+  /* Output map. A set with exactly 2 patterns is a satellite: its patterns have
+   * opposite polarity, so their contrast is the pair's whole question asked
+   * relatively. contrast==2 replaces the two absolute columns, ==1 keeps them
+   * and appends the contrast, ==0 is the plain layout. */
+  /* A rank column per class per set is an unknown count until each set's
+   * n_samples is read, so the emit arrays grow rather than guess a cap. */
+  uint64_t em_cap = (uint64_t)ncol + n_sets + 64;
+  int32_t *em_a = bmal((size_t)em_cap * sizeof(int32_t), "emit src a");
+  int32_t *em_b = bmal((size_t)em_cap * sizeof(int32_t), "emit src b");
+  uint32_t *rk_off = bmal((size_t)(em_cap + 1) * sizeof(uint32_t), "rank offsets");
+  uint32_t *rk_n1  = bmal((size_t)em_cap * sizeof(uint32_t), "rank 1-side");
+  uint32_t *rk_idx = NULL; uint64_t rk_cap = 0, rk_n = 0;
+  #define EM_ROOM(need) do { \
+    if ((uint64_t)n_emit + (need) > em_cap) { \
+      while ((uint64_t)n_emit + (need) > em_cap) em_cap *= 2; \
+      em_a = realloc(em_a, (size_t)em_cap * sizeof(int32_t)); \
+      em_b = realloc(em_b, (size_t)em_cap * sizeof(int32_t)); \
+      rk_off = realloc(rk_off, (size_t)(em_cap + 1) * sizeof(uint32_t)); \
+      rk_n1 = realloc(rk_n1, (size_t)em_cap * sizeof(uint32_t)); \
+      if (!em_a || !em_b || !rk_off || !rk_n1) bdie("out of memory (emit map)", NULL); \
+    } } while (0)
+  uint32_t n_emit = 0, n_contrast = 0, n_rank = 0;
+  for (uint32_t si = 0; si < n_sets; ++si) {
+    const uint32_t lo = set_col0[si], hi = set_end[si];
+    const int is_pair = (hi - lo) == 2;
+    if (rank) {
+      /* Binstrings say which classes a pattern calls 1 and which 0, so rank
+       * features need the .mrmp itself -- a .cm carries only the per-CpG
+       * labelling and cannot answer this. */
+      if (!ms_mrmp_is_artifact(mrmps[si]))
+        bdie("--rank-features needs a .mrmp (a .cm carries no binstrings)", mrmps[si]);
+      mrmp_top_t *t = ms_mrmp_top_read_at(mrmps[si], mrmp_base ? mrmp_base[si] : 0,
+                                          UINT32_MAX);
+      const uint32_t np = (hi - lo) < t->n_patterns ? (hi - lo) : t->n_patterns;
+      EM_ROOM((uint64_t)(rank == 1 ? (hi - lo) : 0) + 64);
+      if (rank == 1)
+        for (uint32_t g = lo; g < hi; ++g) { rk_off[n_emit] = (uint32_t)rk_n;
+          rk_n1[n_emit] = 0; em_a[n_emit] = (int32_t)g; em_b[n_emit++] = -1; }
+      /* PAIRWISE, not per-class. "Mean over patterns calling c 1" is not a
+       * statement about c: the patterns are overwhelmingly one-vs-rest, so for
+       * any c most of them call c '1' while really being about some OTHER class
+       * being '0' -- on the 33-class human root, 3,077 patterns call B.Cell '1'
+       * and only 576 call it '0'. Those 3,077 read high for every cell whatever
+       * it is, so a per-class column says "yes" for all 33 classes and carries
+       * no signal at all (measured: 100% of observed values came out 1, and the
+       * model collapsed onto a single label).
+       *
+       * The contrast has to name BOTH sides: patterns calling a '1' AND b '0',
+       * against those calling a '0' AND b '1'. Then the two sides have opposite
+       * polarity by construction and a global shift cancels. At k=2 this is
+       * exactly --satellite-contrast, which is the property that says the
+       * generalisation is the right one. */
+      for (uint32_t ca = 0; ca < t->n_samples; ++ca)
+      for (uint32_t cb = ca + 1; cb < t->n_samples; ++cb) {
+        uint32_t n1 = 0, n0 = 0;
+        for (uint32_t p = 0; p < np; ++p) {
+          char x = t->binstring[p][ca], y = t->binstring[p][cb];
+          if (x == '1' && y == '0') ++n1; else if (x == '0' && y == '1') ++n0;
+        }
+        /* A pair this set never separates has no contrast to report. */
+        if (!n1 || !n0) continue;
+        EM_ROOM(1);
+        if (rk_n + n1 + n0 > rk_cap) {
+          rk_cap = (rk_cap ? rk_cap * 2 : 4096);
+          while (rk_cap < rk_n + n1 + n0) rk_cap *= 2;
+          rk_idx = realloc(rk_idx, (size_t)rk_cap * sizeof(uint32_t));
+          if (!rk_idx) bdie("out of memory (rank sources)", NULL);
+        }
+        rk_off[n_emit] = (uint32_t)rk_n; rk_n1[n_emit] = n1;
+        for (uint32_t p = 0; p < np; ++p)
+          if (t->binstring[p][ca] == '1' && t->binstring[p][cb] == '0')
+            rk_idx[rk_n++] = lo + p;
+        for (uint32_t p = 0; p < np; ++p)
+          if (t->binstring[p][ca] == '0' && t->binstring[p][cb] == '1')
+            rk_idx[rk_n++] = lo + p;
+        em_a[n_emit] = -1; em_b[n_emit++] = -1;     /* -1 in em_a marks RANK */
+        ++n_rank;
+      }
+      ms_mrmp_top_free(t);
+      continue;
+    }
+    if (!(contrast && is_pair)) {
+      for (uint32_t g = lo; g < hi; ++g) { em_a[n_emit] = (int32_t)g; em_b[n_emit++] = -1; }
+      continue;
+    }
+    if (contrast == 1)
+      for (uint32_t g = lo; g < hi; ++g) { em_a[n_emit] = (int32_t)g; em_b[n_emit++] = -1; }
+    em_a[n_emit] = (int32_t)lo; em_b[n_emit++] = (int32_t)(lo + 1);
+    ++n_contrast;
+  }
+  rk_off[n_emit] = (uint32_t)rk_n;
+  #undef EM_ROOM
+  if (contrast)
+    fprintf(stderr, "  %-14s %u satellite contrast column(s), %s\n", "contrast",
+            n_contrast, contrast == 2 ? "replacing their patterns"
+                                      : "alongside their patterns");
+  if (rank)
+    fprintf(stderr, "  %-14s %u per-class rank column(s), %s\n", "rank",
+            n_rank, rank == 2 ? "replacing their patterns"
+                              : "alongside their patterns");
+
   /* prefix-sum the per-CpG counts into offsets, then fill */
   uint32_t *cpg_off = bmal((size_t)(n_cpg + 1) * sizeof(uint32_t), "cpg offsets");
   uint64_t acc = 0;
@@ -600,7 +763,11 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   }
 
   uint64_t n_rows = (uint64_t)n_reps * n_cells;
-  uint16_t *beta = bmal(n_rows * ncol * sizeof(uint16_t), "beta matrix");
+  /* n_emit, not ncol: the scatter accumulates every pattern internally, but the
+   * emitted row is the OUTPUT map, which is shorter when a contrast replaces a
+   * satellite's two columns. Sizing this by ncol wrote rows at one stride and
+   * read them at another. */
+  uint16_t *beta = bmal(n_rows * n_emit * sizeof(uint16_t), "beta matrix");
   uint32_t *levels = bmal(n_rows * sizeof(uint32_t), "levels");
 
   job_t J = {0};
@@ -608,6 +775,8 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   J.col_thresh = col_thresh;
   J.cpg_off = cpg_off; J.cpg_col = cpg_col;
   J.set_end = set_end; J.set_col0 = set_col0;
+  J.em_a = em_a; J.em_b = em_b; J.ncol_out = n_emit;
+  J.rk_off = rk_off; J.rk_n1 = rk_n1; J.rk_idx = rk_idx;
   J.n_sets = n_sets;
   J.ncol = ncol; J.rep_sample = rep_sample;
   J.n_reps = n_reps; J.binarize = binarize; J.seed = seed;
@@ -641,8 +810,9 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
 
   free((void *)J.offset); free(tid);
   free(cpg_off); free(cpg_col); free(set_end); free(col_thresh);
+  free(em_a); free(em_b); free(rk_off); free(rk_n1); free(rk_idx);
   if (set_col0_out) memcpy(set_col0_out, set_col0, n_sets * sizeof(uint32_t));
   free(set_col0);
   *beta_out = beta; *levels_out = levels; *names_out = names;
-  *n_cells_out = n_cells; *ncol_out = ncol;
+  *n_cells_out = n_cells; *ncol_out = n_emit;
 }

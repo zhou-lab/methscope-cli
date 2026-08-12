@@ -186,11 +186,15 @@ void ms_msfm_report(const char *path) {
    * separators, blank-line groups. */
   char cb[32], cb2[32], cb3[32];
   printf("\nMSFM  %s\n", path);
-  { const char *coding =
+  { const char *sat = (h->flags & MSFM_FLAG_RANK_ONLY)     ? ", per-class rank only"
+                    : (h->flags & MSFM_FLAG_RANK_ADD)      ? ", per-class rank added"
+                    : (h->flags & MSFM_FLAG_CONTRAST_ONLY) ? ", satellite contrast only"
+                    : (h->flags & MSFM_FLAG_CONTRAST_ADD)  ? ", satellite contrast added" : "";
+    const char *coding =
       (h->flags & MSFM_FLAG_BIN_FLAT) ? "patterns binarised at 0.5"
     : (h->flags & MSFM_FLAG_BIN_PAT)  ? "patterns cut at per-pattern midpoints"
                                       : "continuous pattern betas";
-    printf("  %-14s MSFMAT1 v%u, %s\n", "format", h->version, coding); }
+    printf("  %-14s MSFMAT1 v%u, %s%s\n", "format", h->version, coding, sat); }
   printf("\n");
   printf("  %-14s %s\n", "records", commafmt_msfm(h->n_records, cb));
   printf("  %-14s %s\n", "patterns", commafmt_msfm(h->n_patterns, cb));
@@ -573,6 +577,30 @@ static int usage(void) {
     "                 beta does not once a global shift, mitotic or otherwise,\n"
     "                 moves every value at once.\n"
     "                 continuous either way; they are not a contrast.\n"
+    "  --rank-features off|add|replace   (default off)\n"
+    "                 One column per class PAIR of a set: the mean over the\n"
+    "                 patterns calling a 1 and b 0, against the mean over those\n"
+    "                 calling a 0 and b 1. Asks \"is this cell more a than b\"\n"
+    "                 -- relative,\n"
+    "                 so a global shift enters both means and cancels. This is\n"
+    "                 --satellite-contrast generalised past k=2, and it needs a\n"
+    "                 .mrmp: a .cm carries no binstrings to read the sides from.\n"
+    "                 A class the set never contrasts gets no column, and a cell\n"
+    "                 observing nothing on either side gets NA -- a real\n"
+    "                 abstention, since the THINNER side sets the floor.\n"
+    "                 replace: k rank columns instead of the set's patterns;\n"
+    "                 add: both.\n"
+    "  --satellite-contrast off|add|replace   (default off)\n"
+    "                 A 2-class satellite's two patterns have opposite polarity,\n"
+    "                 so \"is P1 above P2\" asks the pair's question RELATIVELY --\n"
+    "                 anything shifting both patterns together cancels, which is\n"
+    "                 the violation rule's argmin cancellation as one feature.\n"
+    "                 replace: emit the contrast INSTEAD of the two patterns.\n"
+    "                 add: emit it alongside them -- but note the model then has\n"
+    "                 no reason to prefer it, since in training the absolute\n"
+    "                 columns work just as well; that is why replace is the one\n"
+    "                 that removes the fragility rather than offering an\n"
+    "                 alternative to it.\n"
     "  --thresh-pattern\n"
     "                 Cut at each pattern's OWN midpoint (stored in the .mrmp)\n"
     "                 rather than 0.5. Separates a close pair better, since\n"
@@ -707,6 +735,8 @@ int main_classify_featurize(int argc, char *argv[]) {
   int binarize = 0, legacy = 0;
   /* 1 = cut at 0.5 (default), 2 = per-pattern midpoints, 0 = leave continuous */
   int binarize_feat = 1;
+  int contrast = 0;                 /* 0 off, 1 alongside, 2 replacing */
+  int rank = 0;                     /* same three modes, generalised to any k */
   int merge = 0, i = 1;
   uint32_t min_cpgs = 0;   /* --counts N: below N measured CpGs -> NA */
   for (; i < argc; ++i) {
@@ -722,6 +752,20 @@ int main_classify_featurize(int argc, char *argv[]) {
       min_cpgs = (uint32_t)strtoul(argv[++i], NULL, 10);
     else if (!strcmp(argv[i], "--continuous-features")) binarize_feat = 0;
     else if (!strcmp(argv[i], "--thresh-pattern")) binarize_feat = 2;
+    else if (!strcmp(argv[i], "--rank-features") && i + 1 < argc) {
+      const char *v = argv[++i];
+      if      (!strcmp(v, "off"))     rank = 0;
+      else if (!strcmp(v, "add"))     rank = 1;
+      else if (!strcmp(v, "replace")) rank = 2;
+      else fdie("--rank-features wants off|add|replace", v);
+    }
+    else if (!strcmp(argv[i], "--satellite-contrast") && i + 1 < argc) {
+      const char *v = argv[++i];
+      if      (!strcmp(v, "off"))     contrast = 0;
+      else if (!strcmp(v, "add"))     contrast = 1;
+      else if (!strcmp(v, "replace")) contrast = 2;
+      else fdie("--satellite-contrast wants off|add|replace", v);
+    }
     else if (!strcmp(argv[i], "--legacy-summarize")) legacy = 1;
     else if (!strcmp(argv[i], "--merge")) merge = 1;
     else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(); return 0; }
@@ -777,9 +821,21 @@ int main_classify_featurize(int argc, char *argv[]) {
     uint16_t *beta; uint32_t *levels; char **names; uint32_t n_cells, ncol;
     uint32_t n_sets_out = 0, *col0_out = NULL; char **set_names = NULL;
     if (n_sets == 1) {
-      ms_msfm_build_sampled(query, ref, patterns, rep_sample, n_reps, binarize,
-                            min_cpgs, seed, threads, binarize_feat,
-                            &beta, &levels, &names, &n_cells, &ncol);
+      /* ONE set goes through the same multi-set builder, which for n_sets == 1
+       * lays the columns out identically (see its header) -- the old dedicated
+       * single-mask call was a fast path that quietly lacked what the multi path
+       * had grown. Two features went missing on a one-block chain that worked on
+       * a two-block one: the block's own pattern count (so a single-set .mrmp,
+       * which is what every mrmp-tree node is, was rejected for "needs an
+       * explicit pattern count"), and --satellite-contrast, which was accepted
+       * and then ignored. Both are the SAME bug, and one call site cannot grow a
+       * third instance of it. --patterns still overrides the block's count. */
+      uint32_t np0[1]; np0[0] = patterns ? patterns : (mpat ? mpat[0] : 0);
+      uint32_t col0_1[1];
+      ms_msfm_build_sampled_multi(query, refs, mbase, mlen, np0, 1, rep_sample,
+                                  n_reps, binarize, min_cpgs, seed, threads,
+                                  binarize_feat, contrast, rank,
+                                  &beta, &levels, &names, &n_cells, &ncol, col0_1);
     } else {
       /* Several MRMP sets in ONE pass over the query. Each cell is inflated
        * once and scored against every set, so N sets cost N scatter-adds per
@@ -800,6 +856,7 @@ int main_classify_featurize(int argc, char *argv[]) {
       uint32_t *col0 = xmal(n_sets * sizeof(uint32_t), "set offsets");
       ms_msfm_build_sampled_multi(query, refs, mbase, mlen, np, n_sets, rep_sample, n_reps,
                                   binarize, min_cpgs, seed, threads, binarize_feat,
+                                  contrast, rank,
                                   &beta, &levels, &names, &n_cells, &ncol, col0);
       /* The per-set start offsets used to be dumped here -- 100 numbers on one
        * line, for a layout `inspect` reports properly. */
@@ -814,6 +871,10 @@ int main_classify_featurize(int argc, char *argv[]) {
      * encoding and the on-disk flag are separate vocabularies. */
     uint32_t fflags = binarize_feat == 1 ? MSFM_FLAG_BIN_FLAT
                     : binarize_feat == 2 ? MSFM_FLAG_BIN_PAT : 0u;
+    if (contrast == 1) fflags |= MSFM_FLAG_CONTRAST_ADD;
+    if (contrast == 2) fflags |= MSFM_FLAG_CONTRAST_ONLY;
+    if (rank == 1)     fflags |= MSFM_FLAG_RANK_ADD;
+    if (rank == 2)     fflags |= MSFM_FLAG_RANK_ONLY;
     write_msfm_raw(out, beta, levels, names, n_cells, n_reps, ncol, lab,
                    rep_sample, n_sets_out, col0_out, set_names, fflags);
     if (set_names) { for (uint32_t s = 0; s < n_sets_out; ++s) free(set_names[s]); free(set_names); }

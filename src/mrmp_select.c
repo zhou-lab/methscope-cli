@@ -99,7 +99,13 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
   const int use_p01 = o->p01_on;
   const int use_strict =
       !use_p01 && (o->strict_lo >= 0.0f && o->strict_hi >= 0.0f);
-  if (!use_p01 && !o->delta_mean_top && !use_strict) return NULL;  /* disabled */
+  /* The q-filter is a RULE, not merely a gate on the top-N leg. It used to be
+   * the latter: with the strict leg off and no cap, every leg was inactive and
+   * the selector returned NULL -- no selection -- so `--qfilter 0.1,0.9` kept
+   * all 1,214,550 CpGs of a 2-class node instead of its 21,224. Only P(01) had
+   * an uncapped form. Every rule now has one, so there is no longer a
+   * combination of options that means "select nothing"; the disable check that
+   * used to sit here could only fire for the case it got wrong. */
 
   /* per-class relative-depth targets: min(frac * own mean, cap) */
   double *target = NULL;
@@ -211,9 +217,10 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
    * rather than one global sort of 21.9M keys. */
   const uint32_t top = use_p01 ? o->p01_top : o->delta_mean_top;
   uint64_t n_floor = 0;
-  if (use_p01 && !top) {
-    /* Uncapped, the default: P(01) >= --p01-min IS the rule, so admission is
-     * the selection and there is nothing left to rank. */
+  if (!top) {
+    /* Uncapped: admission IS the selection, so there is nothing left to rank.
+     * True of P(01) by design (P(01) >= --p01-min is the rule) and of an
+     * uncapped q-filter for the same reason. */
     for (uint64_t i = 0; i < n_cpg; ++i)
       if (qok[i]) { keep[i] = 1; ++n_floor; }
   } else if (top) {

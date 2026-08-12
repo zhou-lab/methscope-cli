@@ -54,6 +54,30 @@
  * which is also what every artifact written before 2026-08-09 implies. */
 #define MSFM_FLAG_BIN_FLAT  1u   /* pattern columns cut at a flat 0.5 */
 #define MSFM_FLAG_BIN_PAT   2u   /* cut at per-pattern midpoints (--thresh-pattern) */
+/* Satellite CONTRAST columns. A 2-class set's two patterns have opposite
+ * polarity, so "is P1 above P2" answers the same question as "is P1 above 0.5"
+ * -- but relatively, so anything shifting both patterns together cancels. That
+ * is the violation rule's argmin cancellation, expressed as one feature.
+ *
+ * Measured on Bian colorectal carcinoma, where global hypomethylation
+ * compresses both patterns toward 0.5 (P1 0.845 -> 0.537, P2 0.100 -> 0.429):
+ * the flat cut calls colon on 55.3% of left-colon cells, the paired contrast on
+ * 87.7%, and on adjacent-normal cells the two agree exactly (95.4%). The
+ * contrast costs nothing in distribution and holds up out of it. */
+#define MSFM_FLAG_CONTRAST_ADD  4u   /* satellites emit P1, P2 AND the contrast */
+#define MSFM_FLAG_CONTRAST_ONLY 8u   /* satellites emit the contrast INSTEAD */
+/* Rank features: one column PER CLASS of a set, holding "this cell's evidence
+ * for class c outranks its evidence against c" -- the mean over the set's
+ * patterns calling c '1' against the mean over those calling c '0'. It is the
+ * 2-class contrast generalised to any k, and it survives a global shift for the
+ * same reason: the shift enters both means and cancels in the difference.
+ *
+ * Measured on 2,616 Gaiti CLL cells against the 33-class human root: the
+ * patterns expecting B.Cell '1' sit at 0.777 and those expecting B.Cell '0' at
+ * 0.135, so the order says B.Cell in 98.9% of cells with both sides observed --
+ * against 90.8% for the same cells' binarised absolute calls. */
+#define MSFM_FLAG_RANK_ADD      16u  /* per-class rank columns ALONGSIDE patterns */
+#define MSFM_FLAG_RANK_ONLY     32u  /* per-class rank columns INSTEAD of them */
 /* Ties (beta exactly on the cut) are MSFM_NA under both; see msfm_build.c. */
 
 static inline uint16_t msfm_encode(double beta) {
@@ -168,6 +192,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
                            const uint32_t *rep_sample, uint32_t n_reps,
                            int binarize, uint32_t min_cpgs,
                            uint64_t seed, unsigned threads, int binarize_feat,
+                           int contrast, int rank,
                            uint16_t **beta_out, uint32_t **levels_out,
                            char ***names_out, uint32_t *n_cells_out,
                            uint32_t *ncol_out, uint32_t *set_col0_out);
