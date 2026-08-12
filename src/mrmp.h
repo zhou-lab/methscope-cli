@@ -151,7 +151,10 @@ static inline uint64_t mrmp_pattern_stride(uint32_t n_samples) {
   return (uint64_t)mrmp_key_words(n_samples) * sizeof(uint64_t) + sizeof(uint64_t);
 }
 
+/* Builds every node of a routing tree; --flat gives one MRMP over every
+ * class, which is what this command meant before (a tree of one level). */
 int main_mrmp_build(int argc, char *argv[]);
+int main_mrmp_build_legacy(int argc, char *argv[]);
 /* One 2-class satellite per (thin class, partner), as one chain.
  * Thin == store labels minus the global's, so the split needs no side file. */
 int main_mrmp_build_thin(int argc, char *argv[]);
@@ -159,10 +162,6 @@ int main_mrmp_build_thin(int argc, char *argv[]);
  * already covers, as one chain. Overlapping pairs, NOT a partition:
  * a class appears in as many sets as it has close neighbours. */
 int main_mrmp_build_neighbor(int argc, char *argv[]);
-/* Every node of a routing tree in one pass: each node an MRMP over its own
- * class subset, children = the groups that node's patterns cannot separate.
- * Parent is encoded in the set name ("root.0.1"), since the header is full. */
-int main_mrmp_tree(int argc, char *argv[]);
 int main_mrmp_export(int argc, char *argv[]);
 int main_mrmp_inspect(int argc, char *argv[]);
 /* Pool sets into one chain AND cut to a shared column budget. Concatenation

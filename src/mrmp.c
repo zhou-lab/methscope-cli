@@ -383,7 +383,12 @@ static void bgzf_inflate_buf(const uint8_t *src, uint64_t slen,
 static uint8_t *memb_compress(const uint32_t *memb, uint64_t n_cpg,
                               uint64_t n_cand, uint64_t *out_n);
 
-int main_mrmp_build(int argc, char *argv[]) {
+/* SUPERSEDED by the tree builder below, which reproduces this byte for byte
+ * apart from content_checksum (the two hash different intermediate CpG key
+ * streams -- this one filters inline during resolve, that one resolves then
+ * selects). Kept only until the next release removes it; nothing dispatches
+ * here. Use `mrmp-build --flat`. */
+int main_mrmp_build_legacy(int argc, char *argv[]) {
   g_cmd = "mrmp-build";
   /* No arguments at all is a question, not an error: print the help rather
    * than a one-line complaint that tells the reader to go ask for it. */
@@ -3267,7 +3272,7 @@ int main_mrmpset_inspect(const char *path) {
   return 0;
 }
 
-/* ------------------------------------------------------------------ mrmp-tree
+/* ----------------------------------------------------------------- mrmp-build
  *
  * One command builds EVERY node of a routing tree, each node an MRMP over its
  * own class subset. It replaces mrmp-build + mrmp-build-neighbor + mrmp-pool
@@ -3490,9 +3495,13 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
   }
 
   if (ng < 2) {   /* nothing here separates them: an irreducible multi-class leaf */
-    fprintf(rep, "%s  ! unsplittable:", ind);
-    for (uint32_t k = 0; k < n; ++k) fprintf(rep, " %s", lab[k]);
-    fprintf(rep, "\n");
+    /* Under --flat this is the ANSWER, not a finding, so do not report 33
+     * classes as a failure to split. min_seg == UINT64_MAX only happens there. */
+    if (min_seg != UINT64_MAX) {
+      fprintf(rep, "%s  ! unsplittable:", ind);
+      for (uint32_t k = 0; k < n; ++k) fprintf(rep, " %s", lab[k]);
+      fprintf(rep, "\n");
+    }
     free(sorted); free(seg); free(grp); free(lab); free(vo); return;
   }
   for (uint32_t g = 0; g < ng; ++g) {
@@ -3521,12 +3530,12 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
   free(sorted); free(seg); free(grp); free(lab); free(vo);
 }
 
-int main_mrmp_tree(int argc, char *argv[]) {
-  g_cmd = "mrmp-tree";
+int main_mrmp_build(int argc, char *argv[]) {
+  g_cmd = "mrmp-build";
   if (argc == 1) { char *h[2]; h[0] = argv[0]; h[1] = (char *)"-h";
-                   (void)main_mrmp_tree(2, h); return 1; }
-  const char *pos[2] = {NULL, NULL}, *nodedir = NULL;
-  int npos = 0, force = 0, dry = 0, have_fixed = 0;
+                   (void)main_mrmp_build(2, h); return 1; }
+  const char *pos[2] = {NULL, NULL}, *nodedir = NULL, *setname = "root";
+  int npos = 0, force = 0, dry = 0, have_fixed = 0, flat = 0;
   uint64_t fixed_seg = 0; uint32_t max_depth = 16;
   double split_q = 0.0;              /* only if --split-quantile asks for it */
   ms_select_opt_t sel; ms_select_defaults(&sel);
@@ -3538,7 +3547,7 @@ int main_mrmp_tree(int argc, char *argv[]) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       ms_help(stderr,
-        "Usage: methscope mrmp-tree [options] REF.cg OUT.mrmp\n\n"
+        "Usage: methscope mrmp-build [options] REF.cg OUT.mrmp\n\n"
         "  Builds EVERY node of a routing tree in one pass. Each node is an\n"
         "  MRMP over its own class subset; a node's children are the groups of\n"
         "  classes its own patterns cannot tell apart. Replaces mrmp-build +\n"
@@ -3599,6 +3608,23 @@ int main_mrmp_tree(int argc, char *argv[]) {
       have_fixed = 0;
     }
     else if (!strcmp(a, "--dry-run")) dry = 1;
+    /* One MRMP over every class, no routing. What mrmp-build meant before it
+     * became the tree builder, kept because a flat global is still the right
+     * artifact for deconvolution and for a reference too shallow to split. */
+    else if (!strcmp(a, "--flat")) flat = 1;
+    else if (!strcmp(a, "--name") && i + 1 < argc) setname = argv[++i];
+    else if (!strcmp(a, "--beta-threshold") && i + 1 < argc)
+      gh.beta_threshold = (float)atof(argv[++i]);
+    else if (!strcmp(a, "--max-ambig-frac") && i + 1 < argc)
+      gh.max_ambig_frac = (float)atof(argv[++i]);
+    else if (!strcmp(a, "--min-major-fold") && i + 1 < argc)
+      gh.min_major_fold = (float)atof(argv[++i]);
+    else if (!strcmp(a, "--max-frac-na") && i + 1 < argc)
+      sel.max_frac_na = (float)atof(argv[++i]);
+    else if (!strcmp(a, "--min-cg-depth") && i + 1 < argc)
+      sel.min_cg_depth = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--include-all-0")) sel.inc_all0 = 1;
+    else if (!strcmp(a, "--include-all-1")) sel.inc_all1 = 1;
     else if (!strcmp(a, "--max-depth") && i + 1 < argc)
       max_depth = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--mincov") && i + 1 < argc)
@@ -3638,12 +3664,18 @@ int main_mrmp_tree(int argc, char *argv[]) {
     else if (npos < 2) pos[npos++] = a;
     else die("too many arguments", a);
   }
-  if (npos != 2) die("need REF.cg and OUT.mrmp (see mrmp-tree -h)", NULL);
+  if (npos != 2) die("need REF.cg and OUT.mrmp (see mrmp-build -h)", NULL);
   /* No default: the threshold is the whole design decision, and a magic number
    * here would be a per-reference guess wearing the costume of a default. */
-  if (!have_fixed && split_q <= 0.0)
-    die("give --min-segregating N (or --split-quantile Q); --dry-run prints "
-        "the root's pair distribution to choose from", NULL);
+  /* --flat is the escape hatch, so the threshold is only required when a tree
+   * is actually being asked for. No default: the threshold IS the design
+   * decision, and a magic number here would be a per-reference guess wearing
+   * the costume of a default. */
+  if (!flat && !have_fixed && split_q <= 0.0)
+    die("give --min-segregating N to split, or --flat for one MRMP over every "
+        "class; --dry-run prints the root's pair distribution to choose from",
+        NULL);
+  if (flat) { have_fixed = 1; fixed_seg = UINT64_MAX; }   /* nothing can split */
   const char *store = pos[0], *out = pos[1];
   if (!force && !dry) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
 
@@ -3660,7 +3692,10 @@ int main_mrmp_tree(int argc, char *argv[]) {
    * artifact already answers, free to drift. */
   FILE *rep = stderr;
   treeout_t t; memset(&t, 0, sizeof t);
-  if (have_fixed)
+  if (flat)
+    fprintf(stderr, "[methscope] %s: %u classes, one MRMP over all of them "
+            "(--flat: a tree of one level)\n", g_cmd, nstore);
+  else if (have_fixed)
     fprintf(stderr, "[methscope] %s: %u classes, split above %" PRIu64
             " segregating CpGs%s\n", g_cmd, nstore, fixed_seg,
             dry ? " (dry run)" : "");
@@ -3668,7 +3703,7 @@ int main_mrmp_tree(int argc, char *argv[]) {
     fprintf(stderr, "[methscope] %s: %u classes, split above the %.3g quantile"
             " of each node's own pairs%s\n", g_cmd, nstore, split_q,
             dry ? " (dry run)" : "");
-  tree_build(store, slab, voff, idx, nstore, &gh, &sel, "root", split_q,
+  tree_build(store, slab, voff, idx, nstore, &gh, &sel, setname, split_q,
              fixed_seg, have_fixed, 0, max_depth, dry,
              rep == stderr ? tty : 0, &t, rep);
   if (dry) return 0;

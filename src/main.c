@@ -39,10 +39,9 @@ static int usage(void) {
           B, R, D, R);
 
   fprintf(stderr, "\n%sMRMP construction%s %s— the feature foundation%s\n", B, R, D, R);
-  CMD("mrmp-build",   "Construct the MRMP artifact from a discretized reference .cg");
+  CMD("mrmp-build",   "Build the MRMP routing tree (--flat for one flat set)");
   CMD("mrmp-build-thin","One 2-class satellite per (thin class, nearest partner)");
   CMD("mrmp-build-neighbor","One 2-class satellite per (class, near neighbour)");
-  CMD("mrmp-tree",    "Build every node of a routing tree over the class subsets");
   CMD("mrmp-export",  "Emit the runtime .cm mask (and pattern / count tables)");
   CMD("mrmp-pool",    "Combine MRMP sets and cut them to a shared column budget");
 
@@ -121,7 +120,7 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "mrmp-build")   == 0) return main_mrmp_build(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-build-thin") == 0) return main_mrmp_build_thin(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-build-neighbor") == 0) return main_mrmp_build_neighbor(argc - 1, argv + 1);
-  if (strcmp(argv[1], "mrmp-tree")    == 0) return main_mrmp_tree(argc - 1, argv + 1);
+  if (strcmp(argv[1], "mrmp-tree")    == 0) return main_mrmp_build(argc - 1, argv + 1);  /* old name */
   if (strcmp(argv[1], "mrmp-export")  == 0) return main_mrmp_export(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-pool")    == 0) return main_mrmp_pool(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-train-tree") == 0) return main_train_tree(argc - 1, argv + 1);

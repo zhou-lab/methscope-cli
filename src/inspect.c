@@ -191,7 +191,9 @@ static void itree_render(const inode_t *nd, uint32_t n, uint32_t k,
 static int inspect_tree(const char *path) {
   ms_mrmpset_t *ch = ms_mrmpset_open(path);
   const uint32_t n = ch->n_sets;
-  if (n < 2) idie("not a tree: the artifact holds a single set", path);
+  /* A flat build is a tree of one level, so it renders the same way -- one
+   * node, every class decided there. Refusing it would make the output format
+   * depend on how the artifact happened to split. */
   inode_t *nd = calloc(n, sizeof(inode_t));
   mrmp_top_t **top = calloc(n, sizeof(mrmp_top_t *));
   if (!nd || !top) idie("out of memory", path);
@@ -224,8 +226,9 @@ static int inspect_tree(const char *path) {
   uint64_t tot_pat = 0;
   for (uint32_t k = 0; k < n; ++k) tot_pat += nd[k].npat;
   printf("\nTREE  %s\n", path);
-  printf("  %u nodes, %u classes, %s patterns over %s CpGs\n\n",
-         n, nd[root].nc, commafmt(tot_pat, b1), commafmt(tot_cpg, b2));
+  printf("  %u node%s, %u classes, %s patterns over %s CpGs\n\n",
+         n, n == 1 ? "" : "s",
+         nd[root].nc, commafmt(tot_pat, b1), commafmt(tot_cpg, b2));
   itree_render(nd, n, root, "", 1);
   printf("\n  A class listed under a node is DECIDED there. A child node means cells\n"
          "  calling one of its classes descend and are re-decided on that node's\n"
