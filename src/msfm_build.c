@@ -421,6 +421,59 @@ void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t pattern
                               names_out, n_cells_out, ncol_out, NULL);
 }
 
+/* Columns a single set contributes under a given feature mode. The rules are
+ * the emit map's, stated once: rank replaces or supplements the pattern
+ * columns with one per SEPARABLE class pair, contrast collapses a 2-class
+ * set's two patterns to one, otherwise a column per pattern. */
+static uint32_t set_ncol(const mrmp_top_t *t, uint32_t npat, uint32_t flags) {
+  if (flags & (MSFM_FLAG_RANK_ONLY | MSFM_FLAG_RANK_ADD)) {
+    uint32_t n = 0;
+    for (uint32_t a = 0; a < t->n_samples; ++a)
+      for (uint32_t b = a + 1; b < t->n_samples; ++b) {
+        uint32_t n1 = 0, n0 = 0;
+        for (uint32_t p = 0; p < npat; ++p) {
+          char x = t->binstring[p][a], y = t->binstring[p][b];
+          if (x == '1' && y == '0') ++n1; else if (x == '0' && y == '1') ++n0;
+        }
+        /* a pair this set never separates has no contrast to report */
+        if (n1 && n0) ++n;
+      }
+    return (flags & MSFM_FLAG_RANK_ADD) ? npat + n : n;
+  }
+  if (npat == 2) {
+    if (flags & MSFM_FLAG_CONTRAST_ONLY) return 1;
+    if (flags & MSFM_FLAG_CONTRAST_ADD)  return 3;
+  }
+  return npat;
+}
+
+ms_msfm_layout_t *ms_msfm_layout(const char *chain, uint32_t flags) {
+  ms_mrmpset_t *ch = ms_mrmpset_open(chain);
+  ms_msfm_layout_t *l = bmal(sizeof(*l), "layout");
+  l->n_sets = ch->n_sets;
+  l->name = bmal((size_t)l->n_sets * sizeof(char *), "layout names");
+  l->col0 = bmal((size_t)l->n_sets * sizeof(uint32_t), "layout col0");
+  l->ncol = bmal((size_t)l->n_sets * sizeof(uint32_t), "layout ncol");
+  uint32_t at = 0;
+  for (uint32_t s = 0; s < l->n_sets; ++s) {
+    mrmp_top_t *t = ms_mrmp_top_read_at(chain, ch->block_off[s], UINT32_MAX);
+    l->name[s] = strdup(ch->name[s]);
+    l->col0[s] = at;
+    l->ncol[s] = set_ncol(t, t->n_patterns, flags);
+    at += l->ncol[s];
+    ms_mrmp_top_free(t);
+  }
+  l->total = at;
+  ms_mrmpset_free(ch);
+  return l;
+}
+
+void ms_msfm_layout_free(ms_msfm_layout_t *l) {
+  if (!l) return;
+  for (uint32_t s = 0; s < l->n_sets; ++s) free(l->name[s]);
+  free(l->name); free(l->col0); free(l->ncol); free(l);
+}
+
 /* N MRMP sets, one pass over the query. Column layout is set-major: set s owns
  * [set_col0[s], set_col0[s] + patterns_s], the last of those being its PNA.
  * With n_sets == 1 the layout and the arithmetic are identical to the old
@@ -630,7 +683,13 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
       if (!em_a || !em_b || !rk_off || !rk_n1) bdie("out of memory (emit map)", NULL); \
     } } while (0)
   uint32_t n_emit = 0, n_contrast = 0, n_rank = 0;
+  /* set_col0[] is the base in INTERNAL pattern space; the emit map maps that to
+   * output columns, and a rank set emits a different count than it holds
+   * patterns. Track the OUTPUT base separately -- comparing the two spaces is
+   * what the first version of the check below did, and it fired immediately. */
+  uint32_t *out_col0 = bmal((size_t)n_sets * sizeof(uint32_t), "out col0");
   for (uint32_t si = 0; si < n_sets; ++si) {
+    out_col0[si] = n_emit;
     const uint32_t lo = set_col0[si], hi = set_end[si];
     const int is_pair = (hi - lo) == 2;
     if (rank) {
@@ -700,6 +759,32 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   }
   rk_off[n_emit] = (uint32_t)rk_n;
   #undef EM_ROOM
+  /* The emit map above and ms_msfm_layout() are two readings of one rule, and
+   * every consumer that selects a node's columns trusts the latter. Check they
+   * agree here rather than discover it as a silently wrong column range. Only
+   * for a chain: a loose .cm list has no block to read a layout from. */
+  if (mrmp_base && ms_mrmp_is_artifact(mrmps[0])) {
+    uint32_t fl = 0;
+    if (contrast == 1) fl |= MSFM_FLAG_CONTRAST_ADD;
+    if (contrast == 2) fl |= MSFM_FLAG_CONTRAST_ONLY;
+    if (rank == 1)     fl |= MSFM_FLAG_RANK_ADD;
+    if (rank == 2)     fl |= MSFM_FLAG_RANK_ONLY;
+    ms_msfm_layout_t *lay = ms_msfm_layout(mrmps[0], fl);
+    if (lay->total != n_emit) {
+      char m[192];
+      snprintf(m, sizeof m, "layout says %u columns, featurizer emitted %u",
+               lay->total, n_emit);
+      bdie(m, mrmps[0]);
+    }
+    for (uint32_t s = 0; s < n_sets && s < lay->n_sets; ++s)
+      if (lay->col0[s] != out_col0[s]) {
+        char m[192];
+        snprintf(m, sizeof m, "set %u starts at column %u by layout, %u by the "
+                 "featurizer", s, lay->col0[s], out_col0[s]);
+        bdie(m, mrmps[0]);
+      }
+    ms_msfm_layout_free(lay);
+  }
   if (contrast)
     fprintf(stderr, "  %-14s %u satellite contrast column(s), %s\n", "contrast",
             n_contrast, contrast == 2 ? "replacing their patterns"
@@ -810,7 +895,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
 
   free((void *)J.offset); free(tid);
   free(cpg_off); free(cpg_col); free(set_end); free(col_thresh);
-  free(em_a); free(em_b); free(rk_off); free(rk_n1); free(rk_idx);
+  free(em_a); free(em_b); free(rk_off); free(rk_n1); free(rk_idx); free(out_col0);
   if (set_col0_out) memcpy(set_col0_out, set_col0, n_sets * sizeof(uint32_t));
   free(set_col0);
   *beta_out = beta; *levels_out = levels; *names_out = names;

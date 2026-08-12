@@ -186,6 +186,34 @@ void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t pattern
  * CpGs they share, and those are precisely the informative ones.
  *
  * set_col0_out (optional) receives the first column of each set. */
+/* Where each set's columns live in a fused .msfm.
+ *
+ * (chain + flags) determines the column layout exactly -- set-major in chain
+ * order, block pattern-rank within a set, and under --rank-features one column
+ * per SEPARABLE class pair. Nothing else is needed, so nothing else is stored.
+ *
+ * This is the ONE place that rule lives. ms_msfm_build_sampled_multi() asserts
+ * its own emitted count against it, because two implementations of one rule is
+ * the failure this codebase keeps hitting: an n_sets == 1 fast path that never
+ * grew what the multi-set path did, two filter legs running the identical
+ * comparison at different thresholds, and an analysis assuming column 0 was the
+ * A-high pattern. All three were silent.
+ *
+ * Chain inputs only: --patterns caps the FIRST set of a loose .cm list, which
+ * this cannot see. From a chain every block reports its own count. */
+typedef struct {
+  uint32_t   n_sets;
+  char     **name;      /* n_sets, owned */
+  uint32_t  *col0;      /* first column of each set */
+  uint32_t  *ncol;      /* columns it owns */
+  uint32_t   total;     /* == sum(ncol) == the matrix width */
+} ms_msfm_layout_t;
+
+/* `flags` are MSFM_FLAG_* as recorded in a written artifact's header, so a
+ * layout can be recovered from (chain, header) with no other context. */
+ms_msfm_layout_t *ms_msfm_layout(const char *chain, uint32_t flags);
+void ms_msfm_layout_free(ms_msfm_layout_t *l);
+
 void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
                            const uint64_t *mrmp_base, const uint64_t *mrmp_len,
                            const uint32_t *patterns, uint32_t n_sets,
