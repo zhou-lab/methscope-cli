@@ -161,6 +161,34 @@ int main_inspect(int argc, char *argv[]) {
 bundle_report:;
 
   char  *kind = ms_bundle_kind(path);               /* NULL if unmarked */
+  /* A TREE bundle has no single "model": it holds one booster section per node,
+   * named for the node, over a chain prefix. Report the tree instead of dying
+   * on the missing section. */
+  if (kind && !strcmp(kind, "tree")) {
+    int nsec = 0;
+    ms_bundle_entry_t *secs = ms_bundle_list(path, &nsec);
+    ms_mrmpset_t *ch = ms_mrmpset_open(path);
+    printf("\nTREE  %s\n", path);
+    printf("  %-14s %u node(s) over a %u-set chain\n", "format", nsec - 2, ch->n_sets);
+    printf("\n  %-12s %8s %9s %10s  %s\n", "node", "classes", "booster",
+           "patterns", "parent");
+    for (uint32_t k = 0; k < ch->n_sets; ++k) {
+      ms_bundle_entry_t e; uint64_t blen = 0;
+      if (ms_bundle_find(path, ch->name[k], &e)) blen = e.length;
+      mrmp_top_t *t = ms_mrmp_top_read_at(path, ch->block_off[k], UINT32_MAX);
+      const char *dot = strrchr(ch->name[k], '.');
+      char par[64]; snprintf(par, sizeof par, "%.*s",
+                             dot ? (int)(dot - ch->name[k]) : 2,
+                             dot ? ch->name[k] : "--");
+      char b1[32], b2[32];
+      printf("  %-12s %8u %9s %10s  %s\n", ch->name[k], t->n_samples,
+             commafmt(blen, b1), commafmt(t->n_patterns, b2), par);
+      ms_mrmp_top_free(t);
+    }
+    printf("\n  Score with: methscope classify query.cg %s\n\n", path);
+    ms_mrmpset_free(ch); free(secs); free(kind);
+    return 0;
+  }
   ms_bundle_entry_t me;
   if (!ms_bundle_find(path, "model", &me)) idie("model section not found", path);
   unsigned char prefix[sizeof(ms_updec2_header_t)] = {0};

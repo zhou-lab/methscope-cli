@@ -97,6 +97,13 @@ void ms_bundle_pack(const char *out, const char *kind, const char *model_path,
 /* Read the framework mark (the "kind" section) as a malloc'd NUL-terminated
  * string, or NULL if the bundle has no kind section. (`predict` requires a kind
  * and rejects an unmarked bundle; upscale/deconv dispatch by subcommand.) */
+/* Write a TREE bundle: chain as the prefix, one booster section per node named
+ * for that node. `booster[k]` are the inner model bytes, e.g. the "model"
+ * section lifted out of each per-node .clfx. */
+void ms_bundle_pack_tree(const char *out, const char *chain_path,
+                         uint32_t n_nodes, char *const *node_name,
+                         void *const *booster, const uint64_t *booster_len);
+
 char *ms_bundle_kind(const char *path);
 
 /* 1 if `path` carries a bundled-model extension: ".clfx" (classifier),

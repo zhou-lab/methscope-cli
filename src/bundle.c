@@ -251,6 +251,12 @@ static int bundle_usage(void) {
     "                  CpGs the model imputes. With it, `upscale` writes a full-genome\n"
     "                  .cg; without it, a dense block .cg.\n"
     "  -o <out>        output bundle path (required).\n"
+    "  --tree          bundle a routing TREE: -m is the mrmp CHAIN and the\n"
+    "                  positional arguments are the per-node .clfx files, in\n"
+    "                  any order. Each is matched to a chain set BY NAME, and\n"
+    "                  only its booster is taken -- node->classes comes from\n"
+    "                  the chain, so nothing is duplicated. Scored with\n"
+    "                  `classify query.cg tree.clfx`.\n"
     "  -h              Show this help message.\n"
     "\n");
   return 1;
@@ -295,6 +301,64 @@ void ms_bundle_pack(const char *out, const char *kind, const char *model_path,
   if (fp != stdout && fclose(fp)) bdie("write error", out);
 }
 
+/* A TREE bundle: the chain as the file prefix, then one booster section per
+ * node, named for the node.
+ *
+ * The chain is the prefix rather than any one node's MRMP because that is what
+ * a shared featurize wants, and because blocks stay individually addressable
+ * inside it -- ms_mrmp_top_read_at() and the featurizer already take
+ * (path, base, len) -- so scoring one path lazily is still possible. Storing
+ * the seven per-node .clfx files whole would have duplicated the chain and
+ * needed a bundle reader that works on memory rather than a path; the boosters
+ * alone lose nothing, since node->classes comes from the chain's own blocks.
+ *
+ * Section names are the node names, which is what makes the sections
+ * addressable without a table of contents. NAMELEN caps that at 15 characters
+ * -- "root.5.13" fits, a tree deeper than about six levels would not, so it is
+ * checked rather than truncated into a name collision. */
+void ms_bundle_pack_tree(const char *out, const char *chain_path,
+                         uint32_t n_nodes, char *const *node_name,
+                         void *const *booster, const uint64_t *booster_len) {
+  const char *kind = "tree";
+  uint64_t rlen = path_bytes(chain_path);
+  int nsec = 2 + (int)n_nodes;                 /* mrmp + kind + one per node */
+  uint64_t container_off = rlen;
+  uint64_t hdr = CONTAINER_HDR_BYTES + (uint64_t)nsec * sizeof(entry_t);
+  for (uint32_t k = 0; k < n_nodes; ++k) {
+    if (strlen(node_name[k]) >= NAMELEN)
+      bdie("node name too long for a bundle section (max 15 chars)", node_name[k]);
+    for (uint32_t j = 0; j < k; ++j)
+      if (!strcmp(node_name[k], node_name[j]))
+        bdie("duplicate node name", node_name[k]);
+  }
+  FILE *fp = fopen(out, "wb");
+  if (!fp) bdie("cannot open output", out);
+  stream_path(fp, chain_path, rlen, out);
+  if (fwrite(MS_BUNDLE_MAGIC, 1, 8, fp) != 8) bdie("write error", out);
+  uint32_t nn = (uint32_t)nsec;
+  if (fwrite(&nn, sizeof(nn), 1, fp) != 1) bdie("write error", out);
+  uint64_t off = container_off + hdr;
+  entry_t e;
+  memset(&e, 0, sizeof(e)); strncpy(e.name, "mrmp", NAMELEN - 1);
+  e.offset = 0; e.length = rlen;
+  if (fwrite(&e, sizeof(e), 1, fp) != 1) bdie("write error", out);
+  memset(&e, 0, sizeof(e)); strncpy(e.name, "kind", NAMELEN - 1);
+  e.offset = off; e.length = strlen(kind); off += e.length;
+  if (fwrite(&e, sizeof(e), 1, fp) != 1) bdie("write error", out);
+  for (uint32_t k = 0; k < n_nodes; ++k) {
+    memset(&e, 0, sizeof(e)); strncpy(e.name, node_name[k], NAMELEN - 1);
+    e.offset = off; e.length = booster_len[k]; off += booster_len[k];
+    if (fwrite(&e, sizeof(e), 1, fp) != 1) bdie("write error", out);
+  }
+  if (fwrite(kind, 1, strlen(kind), fp) != strlen(kind)) bdie("write error", out);
+  for (uint32_t k = 0; k < n_nodes; ++k)
+    if (booster_len[k] &&
+        fwrite(booster[k], 1, (size_t)booster_len[k], fp) != booster_len[k])
+      bdie("write error", out);
+  if (fwrite(&container_off, sizeof(container_off), 1, fp) != 1) bdie("write error", out);
+  if (fclose(fp)) bdie("write error", out);
+}
+
 char *ms_bundle_kind(const char *path) {
   size_t len; void *buf = ms_bundle_section_opt(path, "kind", &len);
   if (!buf) return NULL;
@@ -325,6 +389,8 @@ int ms_path_is_bundle_ext(const char *path) {
 
 int main_bundle(int argc, char *argv[]) {
   const char *mrmp = NULL, *out = NULL, *outcpg = NULL, *kind = NULL, *meta = NULL;
+  int tree = 0, n_inner = 0;
+  char **inner_list = NULL;
   int i = 1;
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-m") == 0 && i+1 < argc) mrmp   = argv[++i];
@@ -332,6 +398,7 @@ int main_bundle(int argc, char *argv[]) {
     else if (strcmp(argv[i], "-l") == 0 && i+1 < argc) meta   = argv[++i];
     else if (strcmp(argv[i], "-O") == 0 && i+1 < argc) outcpg = argv[++i];
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out    = argv[++i];
+    else if (strcmp(argv[i], "--tree") == 0) tree = 1;
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       bundle_usage(); return 0;
     }
@@ -339,11 +406,16 @@ int main_bundle(int argc, char *argv[]) {
       bdie("unrecognized or incomplete option", argv[i]);
     else break;
   }
-  if (!mrmp || !out || argc - i != 1) return bundle_usage();
-  const char *model = argv[i];
+  if (!mrmp || !out) return bundle_usage();
+  if (tree) { inner_list = argv + i; n_inner = argc - i; }
+  if (!tree && argc - i != 1) return bundle_usage();
+  const char *model = tree ? NULL : argv[i];
 
   /* -l: embed labels into the (raw) booster first, then bundle the annotated copy. */
   const char *inner = model;
+  if (tree && (meta || outcpg || kind))
+    bdie("--tree takes only -m and -o; the kind mark is 'tree' and per-node "
+         "labels already travel inside each booster", out);
   char *tmp_ubj = NULL;
   if (meta) {
     char tmpl[] = "/tmp/methscope_ann_XXXXXX.ubj";
@@ -354,6 +426,37 @@ int main_bundle(int argc, char *argv[]) {
     tmp_ubj = strdup(tmpl); inner = tmp_ubj;
   }
 
+  if (tree) {
+    /* Match each per-node .clfx to a chain block BY NAME rather than by
+     * position: a mismatched order would otherwise pair a node's booster with
+     * another node's columns and score confidently on the wrong features. */
+    ms_mrmpset_t *ch = ms_mrmpset_open(mrmp);
+    uint32_t n = ch->n_sets;
+    char **nm = calloc(n, sizeof(char *));
+    void **bl = calloc(n, sizeof(void *));
+    uint64_t *bn = calloc(n, sizeof(uint64_t));
+    if (!nm || !bl || !bn) bdie("out of memory", "tree bundle");
+    for (uint32_t s2 = 0; s2 < n; ++s2) {
+      nm[s2] = strdup(ch->name[s2]);
+      for (int a = 0; a < n_inner; ++a) {
+        ms_mrmpset_t *one = ms_mrmpset_open(inner_list[a]);
+        int hit = one->n_sets == 1 && !strcmp(one->name[0], nm[s2]);
+        ms_mrmpset_free(one);
+        if (!hit) continue;
+        size_t bl2;
+        bl[s2] = ms_bundle_section(inner_list[a], "model", &bl2);
+        bn[s2] = bl2;
+        break;
+      }
+      if (!bl[s2]) bdie("no per-node model supplied for chain set", nm[s2]);
+    }
+    ms_bundle_pack_tree(out, mrmp, n, nm, bl, bn);
+    fprintf(stderr, "[methscope] bundle: tree of %u node(s) -> %s\n", n, out);
+    for (uint32_t s2 = 0; s2 < n; ++s2) { free(nm[s2]); free(bl[s2]); }
+    free(nm); free(bl); free(bn);
+    ms_mrmpset_free(ch);
+    return 0;
+  }
   ms_bundle_pack(out, kind, inner, mrmp, outcpg);   /* kind mark (NULL = omit) */
   if (tmp_ubj) { unlink(tmp_ubj); free(tmp_ubj); }
   if (outcpg)
