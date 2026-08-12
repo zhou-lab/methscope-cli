@@ -14,7 +14,8 @@
 #include "methscope.h"
 #include "bmeta.h"
 #include "bundle.h"
-#include "msfm.h"    /* ms_msfm_to_matrix -- the --data feature path */
+#include "msfm.h"
+#include "mrmp.h"    /* ms_msfm_to_matrix -- the --data feature path */
 #include "index.h"   /* get_fname_index -- --threads needs the .cg index */
 #include <xgboost/c_api.h>
 
@@ -132,6 +133,211 @@ static int predict_linear(const char *query_cg, const char *ref_mrmp,
  * path this accepts --data and --threads, because it consumes plain betas
  * exactly as the booster does -- which is also how the C and reference
  * implementations get validated against one identical feature matrix. */
+/* ------------------------------------------------------------------- tree ---
+ * Score a routing tree: featurize the query ONCE against the whole chain, then
+ * walk root -> child, each node deciding only the cells its parent sent it.
+ *
+ * One featurize, not one per level. A node's columns are bit-identical computed
+ * in-chain and alone (verified on 1,201 Bian cells against the 7-node human
+ * tree, 0 rows differing), and decompression dominates the cost, so the driver
+ * this replaces was paying for a second pass plus a multi-GB `yame subset` copy
+ * at every level to get the same numbers.
+ *
+ * Columns come from ms_msfm_layout(), never from the booster's feature NAMES.
+ * Names would appear to work and be silently wrong: a node's booster stores
+ * P1..Pk, and in a fused matrix those match the first k columns, which belong
+ * to the ROOT. */
+
+typedef struct {
+  char         *name;
+  uint32_t      col0, ncol;      /* its slice of the fused matrix */
+  uint32_t      n_class;
+  char        **cls;             /* n_class, borrowed from the chain view */
+  BoosterHandle bst;
+  char        **lab;             /* K labels, class-index order */
+  int           K;
+  int           parent;          /* index, -1 for the root */
+} tnode_t;
+
+/* The featurize mode is not recorded anywhere, so recover it: only one mode
+ * makes every node's layout width equal its booster's feature count. Trying
+ * them is also a check -- a bundle whose boosters disagree with every mode is
+ * mispaired with its chain, which is exactly what must not score silently. */
+static uint32_t tree_mode(const char *bundle, tnode_t *nd, uint32_t n) {
+  static const uint32_t TRY[] = { MSFM_FLAG_RANK_ONLY, 0u, MSFM_FLAG_RANK_ADD,
+                                  MSFM_FLAG_CONTRAST_ONLY, MSFM_FLAG_CONTRAST_ADD };
+  for (uint32_t t = 0; t < sizeof TRY / sizeof *TRY; ++t) {
+    ms_msfm_layout_t *l = ms_msfm_layout(bundle, TRY[t]);
+    int ok = (l->n_sets == n);
+    for (uint32_t k = 0; ok && k < n; ++k) {
+      bst_ulong nf = 0;
+      XGCHK(XGBoosterGetNumFeature(nd[k].bst, &nf));
+      ok = ((uint32_t)nf == l->ncol[k]);
+    }
+    if (ok) {
+      for (uint32_t k = 0; k < n; ++k)
+        { nd[k].col0 = l->col0[k]; nd[k].ncol = l->ncol[k]; }
+      ms_msfm_layout_free(l);
+      return TRY[t];
+    }
+    ms_msfm_layout_free(l);
+  }
+  pdie("no feature mode makes this tree's boosters match its chain -- the "
+       "bundle's models and mrmp disagree", bundle);
+  return 0;
+}
+
+/* argmax of one node's booster over the rows given, into out_lab/out_conf. */
+static void tree_score(tnode_t *nd, const uint16_t *beta, uint32_t ncol_all,
+                       const uint32_t *row, uint32_t nrow,
+                       char **out_lab, double *out_conf, const char *bundle) {
+  if (!nrow) return;
+  float *data = malloc((size_t)nrow * nd->ncol * sizeof(float));
+  if (!data) pdie("out of memory (tree scoring)", NULL);
+  for (uint32_t r = 0; r < nrow; ++r)
+    for (uint32_t c = 0; c < nd->ncol; ++c) {
+      uint16_t v = beta[(size_t)row[r] * ncol_all + nd->col0 + c];
+      data[(size_t)r * nd->ncol + c] = (v == MSFM_NA) ? NAN : (float)msfm_decode(v);
+    }
+  DMatrixHandle dm;
+  XGCHK(XGDMatrixCreateFromMat(data, nrow, nd->ncol, NAN, &dm));
+  bst_ulong olen; const float *o;
+  XGCHK(XGBoosterPredict(nd->bst, dm, 0, 0, 0, &olen, &o));
+  int K = (int)(olen / nrow);
+  if (K < 1 || olen != (bst_ulong)nrow * K) pdie("unexpected prediction length", bundle);
+  for (uint32_t r = 0; r < nrow; ++r) {
+    int best = 0;
+    for (int c = 1; c < K; ++c) if (o[(size_t)r * K + c] > o[(size_t)r * K + best]) best = c;
+    out_lab[row[r]]  = (nd->lab && best < nd->K) ? nd->lab[best] : nd->cls[best];
+    out_conf[row[r]] = o[(size_t)r * K + best];
+  }
+  XGDMatrixFree(dm);
+  free(data);
+}
+
+static int predict_tree(const char *query_cg, const char *bundle,
+                        unsigned threads, const char *out_path, int no_header) {
+  ms_mrmpset_t *ch = ms_mrmpset_open(bundle);
+  const uint32_t n = ch->n_sets;
+  tnode_t *nd = calloc(n, sizeof(tnode_t));
+  mrmp_top_t **top = calloc(n, sizeof(mrmp_top_t *));
+  if (!nd || !top) pdie("out of memory (tree)", NULL);
+  for (uint32_t k = 0; k < n; ++k) {
+    nd[k].name = ch->name[k];
+    top[k] = ms_mrmp_top_read_at(bundle, ch->block_off[k], 1);
+    nd[k].n_class = top[k]->n_samples;
+    nd[k].cls = top[k]->labels;
+    size_t blen; void *bb = ms_bundle_section(bundle, nd[k].name, &blen);
+    XGCHK(XGBoosterCreate(NULL, 0, &nd[k].bst));
+    XGCHK(XGBoosterLoadModelFromBuffer(nd[k].bst, bb, blen));
+    free(bb);
+    nd[k].lab = ms_booster_get_labels(nd[k].bst, &nd[k].K);
+  }
+  /* Parent from the NAME, minus its last dotted component -- the tree's only
+   * structural record, since the 128-byte MRMP header has no room for a
+   * pointer. Checked rather than assumed: a missing parent, overlapping
+   * siblings or a child straying outside its parent's classes would each route
+   * cells somewhere unrecoverable. */
+  for (uint32_t k = 0; k < n; ++k) {
+    nd[k].parent = -1;
+    const char *dot = strrchr(nd[k].name, '.');
+    if (!dot) continue;
+    size_t plen = (size_t)(dot - nd[k].name);
+    for (uint32_t j = 0; j < n; ++j)
+      if (strlen(nd[j].name) == plen && !strncmp(nd[j].name, nd[k].name, plen))
+        { nd[k].parent = (int)j; break; }
+    if (nd[k].parent < 0) pdie("node's parent is missing from the bundle", nd[k].name);
+    for (uint32_t c = 0; c < nd[k].n_class; ++c) {
+      uint32_t p = (uint32_t)nd[k].parent, seen = 0;
+      for (uint32_t d = 0; d < nd[p].n_class; ++d)
+        seen |= !strcmp(nd[p].cls[d], nd[k].cls[c]);
+      if (!seen) pdie("node has a class its parent does not", nd[k].cls[c]);
+    }
+  }
+  for (uint32_t a = 0; a < n; ++a)
+    for (uint32_t b = a + 1; b < n; ++b) {
+      if (nd[a].parent != nd[b].parent) continue;
+      for (uint32_t x = 0; x < nd[a].n_class; ++x)
+        for (uint32_t y = 0; y < nd[b].n_class; ++y)
+          if (!strcmp(nd[a].cls[x], nd[b].cls[y]))
+            pdie("sibling nodes share a class, so routing is ambiguous", nd[a].cls[x]);
+    }
+  uint32_t root = 0;
+  { int found = 0;
+    for (uint32_t k = 0; k < n; ++k) if (nd[k].parent < 0) { root = k; ++found; }
+    if (found != 1) pdie("tree must have exactly one root", bundle); }
+
+  const uint32_t mode = tree_mode(bundle, nd, n);
+
+  /* one pass over the query, every node's columns for every cell */
+  uint32_t one = 0, ncells = 0, ncol = 0, *levels = NULL;
+  uint16_t *beta = NULL; char **cellname = NULL;
+  uint64_t *base = malloc(n * sizeof(uint64_t)), *blen2 = malloc(n * sizeof(uint64_t));
+  uint32_t *np = malloc(n * sizeof(uint32_t));
+  if (!base || !blen2 || !np) pdie("out of memory (tree)", NULL);
+  const char **rr = malloc(n * sizeof(char *));
+  for (uint32_t k = 0; k < n; ++k) {
+    rr[k] = bundle; base[k] = ch->block_off[k]; blen2[k] = ch->block_bytes[k];
+    mrmp_top_t *t = ms_mrmp_top_read_at(bundle, ch->block_off[k], UINT32_MAX);
+    np[k] = t->n_patterns; ms_mrmp_top_free(t);
+  }
+  uint32_t *col0 = malloc(n * sizeof(uint32_t));
+  ms_msfm_build_sampled_multi(query_cg, rr, base, blen2, np, n, &one, 1,
+                              1 /* -b */, 0, 20260812, threads, 1 /* 0.5 cut */,
+                              (mode & MSFM_FLAG_CONTRAST_ONLY) ? 2 :
+                              (mode & MSFM_FLAG_CONTRAST_ADD)  ? 1 : 0,
+                              (mode & MSFM_FLAG_RANK_ONLY) ? 2 :
+                              (mode & MSFM_FLAG_RANK_ADD)  ? 1 : 0,
+                              &beta, &levels, &cellname, &ncells, &ncol, col0);
+
+  char  **lab  = calloc(ncells, sizeof(char *));
+  double *conf = calloc(ncells, sizeof(double));
+  uint32_t *cur = malloc((size_t)ncells * sizeof(uint32_t));
+  uint32_t *nxt = malloc((size_t)ncells * sizeof(uint32_t));
+  if (!lab || !conf || !cur || !nxt) pdie("out of memory (tree)", NULL);
+
+  /* Hard routing: a node decides, the cell descends to the child holding that
+   * call, and a cell whose call no child covers is finished. Breadth-first by
+   * node so each booster runs once over all the cells that reached it. */
+  uint32_t *at = calloc(ncells, sizeof(uint32_t));
+  for (uint32_t r = 0; r < ncells; ++r) at[r] = root;
+  for (uint32_t pass = 0; pass < n; ++pass) {
+    int moved = 0;
+    for (uint32_t k = 0; k < n; ++k) {
+      uint32_t m2 = 0;
+      for (uint32_t r = 0; r < ncells; ++r) if (at[r] == k && !lab[r]) cur[m2++] = r;
+      if (!m2) continue;
+      tree_score(&nd[k], beta, ncol, cur, m2, lab, conf, bundle);
+      for (uint32_t j = 0; j < m2; ++j) {
+        uint32_t r = cur[j]; int dest = -1;
+        for (uint32_t c = 0; c < n && dest < 0; ++c) {
+          if (nd[c].parent != (int)k) continue;
+          for (uint32_t x = 0; x < nd[c].n_class; ++x)
+            if (!strcmp(nd[c].cls[x], lab[r])) { dest = (int)c; break; }
+        }
+        if (dest >= 0) { at[r] = (uint32_t)dest; lab[r] = NULL; moved = 1; }
+      }
+    }
+    if (!moved) break;
+  }
+
+  FILE *fo = out_path ? fopen(out_path, "w") : stdout;
+  if (!fo) pdie("cannot open output", out_path);
+  if (!no_header) fprintf(fo, "cell\tprediction_label\tconfidence\n");
+  for (uint32_t r = 0; r < ncells; ++r)
+    fprintf(fo, "%s\t%s\t%.6f\n", cellname[r], lab[r] ? lab[r] : "NA", conf[r]);
+  if (fo != stdout) fclose(fo);
+
+  for (uint32_t k = 0; k < n; ++k) { XGBoosterFree(nd[k].bst); ms_mrmp_top_free(top[k]); }
+  free(nd); free(top); free(beta); free(levels); free(lab); free(conf);
+  free(cur); free(nxt); free(at); free(base); free(blen2); free(np);
+  free((void *)rr); free(col0);
+  for (uint32_t r = 0; r < ncells; ++r) free(cellname[r]);
+  free(cellname);
+  ms_mrmpset_free(ch);
+  return 0;
+}
+
 static int predict_violation(const char *query_cg, const char *ref_mrmp,
                              const char *data_path, unsigned threads,
                              void *model_buf, size_t model_len,
@@ -252,6 +458,14 @@ int main_predict(int argc, char *argv[]) {
       size_t blen; void *bbuf = ms_bundle_section(model_name, "model", &blen);
       int rc = predict_linear(query_cg, ref_mrmp, bbuf, blen, out_path, with_probs, no_header);
       free(bbuf); free(kind);
+      return rc;
+    }
+    if (strcmp(kind, "tree") == 0) {
+      if (data_path)
+        pdie("--data is not supported for a tree: it featurizes the whole chain "
+             "itself, in one pass", model_name);
+      int rc = predict_tree(query_cg, model_name, threads, out_path, no_header);
+      free(kind);
       return rc;
     }
     if (strcmp(kind, "violation") == 0) {
