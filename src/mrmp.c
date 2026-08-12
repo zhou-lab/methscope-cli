@@ -1085,6 +1085,7 @@ int main_mrmp_export(int argc, char *argv[]) {
         "Usage: methscope mrmp-export [options] IN.mrmp OUT.cm\n\n"
         "  IN               a .mrmp: one set, or a chain of several\n"
         "  OUT.cm           per-CpG P1..PK/Pna labels as a YAME format-2 mask\n"
+        "  OUT.cm           OPTIONAL when --patterns/--counts is given\n"
         "  OUT.cm           a multi-set input writes ONE .cm holding every set as\n"
         "                   a record, plus OUT.cm.idx naming them -- YAME's own\n"
         "                   store convention, so `yame subset -s <set>` works.\n\n"
@@ -1094,8 +1095,8 @@ int main_mrmp_export(int argc, char *argv[]) {
         "  sets to yame and should speak yame's idiom rather than ours.\n\n"
         "  --set NAME       export just this set of a container, to OUT.cm\n"
         "  --top K          rank cut for the mask and --patterns (default 1000)\n"
-        "  --patterns TSV   also write top-K patterns: string<tab>P<rank><tab>count\n"
-        "  --counts TSV     also write every pattern (incl. PNA): count<tab>string\n"
+        "  --patterns TSV   top-K patterns: string<tab>P<rank><tab>count (- = stdout)\n"
+        "  --counts TSV     every pattern (incl. PNA): count<tab>string (- = stdout)\n"
         "  --pna-label NAME background label in the mask (default Pna)\n");
       return 0;
     } else if (!strcmp(a, "--set") && i + 1 < argc) set_name = argv[++i];
@@ -1107,8 +1108,14 @@ int main_mrmp_export(int argc, char *argv[]) {
     else if (npos < 2) pos[npos++] = a;
     else die("too many arguments", a);
   }
-  if (npos != 2) die("need IN.mrmp and OUT.cm (see mrmp-export -h)", NULL);
-  const char *path = pos[0], *mask = pos[1];
+  /* OUT.cm is required only when a mask is actually wanted. --patterns and
+   * --counts are the way to read a set's binstrings from outside the binary
+   * (see the trit-order note in mrmp.h -- decoding keys by hand is a trap), and
+   * demanding an unwanted OUT.cm made every such call pass /dev/null. */
+  if (npos < 1) die("need IN.mrmp (see mrmp-export -h)", NULL);
+  if (npos < 2 && !patterns && !counts)
+    die("need OUT.cm, or --patterns/--counts (see mrmp-export -h)", NULL);
+  const char *path = pos[0], *mask = npos > 1 ? pos[1] : NULL;
 
   /* One set or many is the same format now, so the arity decides: a multi-set
    * chain with no --set goes to a directory, a single-set file to one .cm. */
@@ -1116,6 +1123,7 @@ int main_mrmp_export(int argc, char *argv[]) {
   if (s->n_sets > 1 && !set_name) {
     if (patterns || counts)
       die("--patterns/--counts describe ONE set; add --set NAME", path);
+    if (!mask) die("a whole chain needs OUT.cm; --set NAME reads one set", path);
     ms_mrmpset_free(s);
     return export_container(path, mask, pna_label, top_k, "mrmp-export");
   }
@@ -1134,19 +1142,19 @@ int main_mrmp_export(int argc, char *argv[]) {
   char *buf = xcalloc(ns + 1, 1, "string buffer");
 
   if (patterns) {
-    FILE *f = fopen(patterns, "w");
+    FILE *f = !strcmp(patterns, "-") ? stdout : fopen(patterns, "w");
     if (!f) die("cannot create --patterns", patterns);
     uint64_t lim = top_k < h->n_candidates ? top_k : h->n_candidates;
     for (uint64_t p = 0; p < lim; ++p) {
       key_to_string(pat_key(&r, p), ns, buf);
       fprintf(f, "%s\tP%" PRIu64 "\t%" PRIu64 "\n", buf, p + 1, pat_count(&r, p));
     }
-    if (fclose(f)) die("error closing --patterns", patterns);
+    if (f != stdout && fclose(f)) die("error closing --patterns", patterns);
   }
 
   if (counts) {
     /* Every candidate in rank order, then the PNA sentinel. */
-    FILE *f = fopen(counts, "w");
+    FILE *f = !strcmp(counts, "-") ? stdout : fopen(counts, "w");
     if (!f) die("cannot create --counts", counts);
     for (uint64_t p = 0; p < h->n_candidates; ++p) {
       key_to_string(pat_key(&r, p), ns, buf);
@@ -1160,7 +1168,7 @@ int main_mrmp_export(int argc, char *argv[]) {
     key_to_string(pna, ns, buf);
     free(pna);
     fprintf(f, "%" PRIu64 "\t%s\n", h->pna_cpg, buf);
-    if (fclose(f)) die("error closing --counts", counts);
+    if (f != stdout && fclose(f)) die("error closing --counts", counts);
   }
 
   if (mask) ms_mrmp_write_mask_at(path, base, blk_bytes, mask, pna_label, top_k);
