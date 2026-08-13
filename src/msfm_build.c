@@ -821,6 +821,18 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
     ms_mrmpset_free(cs);
   }
   if (whole_chain) {
+    /* --thresh-pattern cuts a PATTERN's beta at its own midpoint, and
+     * --rank-features replace leaves no pattern column to cut: every one is
+     * replaced by a pooled rank column, which is a ratio and is never
+     * thresholded. Measured: the flag changed the header from 33 to 34 and 0
+     * of 17,899,090 betas, so a run asking for it got exactly the run that
+     * did not. Say so rather than accept it silently. */
+    if (binarize_feat == 2 && rank == 2)
+      fprintf(stderr, "  %-12s --thresh-pattern has no effect with "
+              "--rank-features replace:\n  %-12s every pattern column is "
+              "replaced by a rank column, and a rank\n  %-12s column is a "
+              "pooled ratio, not a thresholded pattern call.\n",
+              "note", "", "");
     uint32_t fl = 0;
     if (contrast == 1) fl |= MSFM_FLAG_CONTRAST_ADD;
     if (contrast == 2) fl |= MSFM_FLAG_CONTRAST_ONLY;
