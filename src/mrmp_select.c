@@ -20,8 +20,11 @@
 
 void ms_select_defaults(ms_select_opt_t *o) {
   o->qfilter_lo = 0.25f; o->qfilter_hi = 0.60f;
-  o->strict_lo  = 0.10f; o->strict_hi  = 0.80f;
-  o->delta_mean_top = 1000;
+  /* 20000, not the old 1000: the budget is per BINSTRING, and a 2-class
+   * satellite holds two of them, so 1000 capped a focused set at 2,000 CpGs --
+   * far below what the same pair carries once its filter is a 2-way rather
+   * than a 41-way conjunction. Every set built since has passed 20000. */
+  o->delta_mean_top = 20000;
   o->min_cg_depth = 0;
   o->max_frac_na = 0.0f;
   o->depth_floor_frac = 0.0f;      /* off; satellites turn it on */
@@ -97,8 +100,6 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
   /* --p01-top replaces the whole rule, so the strict union leg goes with it:
    * the point of P(01) is one number deciding both admission and rank. */
   const int use_p01 = o->p01_on;
-  const int use_strict =
-      !use_p01 && (o->strict_lo >= 0.0f && o->strict_hi >= 0.0f);
   /* The q-filter is a RULE, not merely a gate on the top-N leg. It used to be
    * the latter: with the strict leg off and no cap, every leg was inactive and
    * the selector returned NULL -- no selection -- so `--qfilter 0.1,0.9` kept
@@ -186,7 +187,7 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
   uint8_t *qok = xc(n_cpg, 1, "qok");
   float *rank = xc(n_cpg, sizeof(float), "rank statistic");
   double p01_sum = 0.0;
-  uint64_t n_strict = 0, n_admit = 0;
+  uint64_t n_admit = 0;
   for (uint64_t i = 0; i < n_cpg; ++i) {
     /* Same relaxation as mrmp-build's --qfilter: an empty side is normally no
      * contrast and therefore skipped, but --include-all-0/-1 ask for exactly
@@ -204,9 +205,6 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
     }
     rank[i] = sum1[i] / n1[i] - sum0[i] / n0[i];
     if (max0[i] <= o->qfilter_lo && min1[i] >= o->qfilter_hi) qok[i] = 1;
-    if (use_strict && max0[i] <= o->strict_lo && min1[i] >= o->strict_hi) {
-      keep[i] = 1; ++n_strict;                     /* self-sizing leg */
-    }
   }
   free(min1); free(max0); free(sum1); free(sum0);
   free(n1); free(n0); free(npres); free(floor_ok); free(mincv);
@@ -262,9 +260,9 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
             n_admit ? p01_sum / (double)n_admit : 0.0);
   }
   else
-    fprintf(stderr, "  select: %" PRIu64 " CpGs kept (%" PRIu64 " strict, %"
-            PRIu64 " added by the top-%u floor)\n",
-            tot, n_strict, n_floor, o->delta_mean_top);
+    fprintf(stderr, "  select: %" PRIu64 " CpGs kept (%" PRIu64 " passed the "
+            "q-filter, top-%u per binstring)\n", tot, n_floor,
+            o->delta_mean_top);
   if (n_kept) *n_kept = tot;
   return keep;
 }

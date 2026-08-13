@@ -2071,24 +2071,22 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
         "        classes and only dilutes the mean.\n\n"
         "  --qfilter LO,HI           (default 0.25,0.6)\n"
         "        As mrmp-build. Forms the FLOOR leg of the selection rule.\n\n"
-        "  --qfilter-strict LO,HI    (default 0.1,0.8)\n"
         "        Tighter gate forming the SELF-SIZING leg: every CpG passing it\n"
         "        is kept regardless of budget, so a pair with genuinely clean\n"
         "        positions contributes all of them. Its yield is steeply\n"
         "        depth-dependent by design -- the same pair gave 6,453 CpGs at\n"
         "        reference depth 7.9 and 204 at 4.54 -- which is exactly why it\n"
         "        cannot be used alone.\n\n"
-        "  --delta-mean-top N        (default 1000)\n"
+        "  --delta-mean-top N        (default 20000)\n"
         "        PER BINSTRING, keep the N highest by delta_mean among --qfilter\n"
         "        passers. The floor leg: it guarantees a pattern is never\n"
-        "        starved when --qfilter-strict returns almost nothing.\n"
         "        delta_mean (mean gap between the expected-1 and expected-0\n"
         "        groups) rather than delta_beta (worst-case margin) because\n"
         "        --qfilter already bounds the worst case; the two scored within\n"
         "        0.007 of each other on held-out margin. Identical for 2\n"
         "        classes, diverging only at 3+.\n\n"
         "  --p01-min X               (DEFAULT rule, at 0.60)\n"
-        "        The rule in force unless --qfilter, --qfilter-strict or\n"
+        "        The rule in force unless --qfilter or\n"
         "        --delta-mean-top is given, any of which reverts to the legacy\n"
         "        rule above. Keep every CpG\n"
         "        whose P(01) is at least X. That is the probability a future\n"
@@ -2154,15 +2152,13 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
       sel.depth_floor_frac = (float)atof(argv[++i]);
     else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
       sel.depth_floor_cap = (uint32_t)parse_u64(argv[++i], a);
-    else if ((!strcmp(a, "--qfilter") || !strcmp(a, "--qfilter-strict"))
-             && i + 1 < argc) {
-      int strict = a[9] != '\0';
+    else if (!strcmp(a, "--qfilter") && i + 1 < argc) {
       const char *v = argv[++i]; char *end = NULL;
       float lo = strtof(v, &end);
       if (!end || *end != ',') die("wants LO,HI", a);
       float hi = strtof(end + 1, NULL);
       if (!(lo >= 0.0f && hi <= 1.0f && lo < hi)) die("needs 0 <= LO < HI <= 1", a);
-      if (strict) { sel.strict_lo = lo; sel.strict_hi = hi; }
+
       else        { sel.qfilter_lo = lo; sel.qfilter_hi = hi; }
       sel.p01_on = 0;                 /* asking for the old rule selects it */
     }
@@ -2532,7 +2528,6 @@ int main_mrmp_build_neighbor(int argc, char *argv[]) {
         "  --p01-min X               (default 0.60) the selection rule; 0 off\n"
         "  --p01-top N               (default 0 = uncapped) optional budget\n"
         "  --qfilter LO,HI           legacy rule; giving it selects the legacy\n"
-        "  --qfilter-strict LO,HI    legacy self-sizing leg\n"
         "  --delta-mean-top N        legacy per-binstring rank\n"
         "  --depth-floor-frac F      (default 1.0) relative to each class mean\n"
         "  --depth-floor-cap N       (default 20) cap on the above\n\n"
@@ -2563,15 +2558,13 @@ int main_mrmp_build_neighbor(int argc, char *argv[]) {
       sel.depth_floor_frac = (float)atof(argv[++i]);
     else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
       sel.depth_floor_cap = (uint32_t)parse_u64(argv[++i], a);
-    else if ((!strcmp(a, "--qfilter") || !strcmp(a, "--qfilter-strict"))
-             && i + 1 < argc) {
-      int strict = a[9] != '\0';
+    else if (!strcmp(a, "--qfilter") && i + 1 < argc) {
       const char *v = argv[++i]; char *end = NULL;
       float lo = strtof(v, &end);
       if (!end || *end != ',') die("wants LO,HI", a);
       float hi = strtof(end + 1, NULL);
       if (!(lo >= 0.0f && hi <= 1.0f && lo < hi)) die("needs 0 <= LO < HI <= 1", a);
-      if (strict) { sel.strict_lo = lo; sel.strict_hi = hi; }
+
       else        { sel.qfilter_lo = lo; sel.qfilter_hi = hi; }
       sel.p01_on = 0;                 /* asking for the old rule selects it */
     }
@@ -3175,7 +3168,9 @@ int main_mrmp_build(int argc, char *argv[]) {
         "    --qfilter LO,HI       keep a CpG when every expected-0 class is\n"
         "                          <= LO and every expected-1 class is >= HI\n"
         "    --delta-mean-top N    per binstring, cap at the N largest class\n"
-        "                          gaps among the q-filter's passers (0 = no cap).\n"
+        "                          gaps among the q-filter's passers (default\n"
+        "                          20000, 0 = no cap). Per BINSTRING, so a\n"
+        "                          2-class satellite gets up to 2N CpGs.\n"
         "                          Stringency is only affordable with the CpG\n"
         "                          budget to pay for it, so this is the budget\n"
         "                          knob that makes a tight --qfilter usable.\n"
@@ -3257,14 +3252,6 @@ int main_mrmp_build(int argc, char *argv[]) {
       if (!(lo >= 0.0f && hi <= 1.0f && lo < hi))
         die("--qfilter needs 0 <= LO < HI <= 1", v);
       sel.qfilter_lo = lo; sel.qfilter_hi = hi;
-      /* The legacy rule had a SECOND leg, "strict", running the identical
-       * comparison at its own thresholds and unioning the result in. Two
-       * spellings of one predicate: LO,HI 0.10,0.90 through either leg selects
-       * the same CpGs (verified -- 21,224 both ways, identical to 3 decimals on
-       * every Bian site). Keeping both meant the effective filter was the
-       * LOOSER of two numbers, silently, while the tighter one appeared to be
-       * in force. One threshold, and --delta-mean-top for the budget. */
-      sel.strict_lo = -1.0f; sel.strict_hi = -1.0f;
       sel.p01_on = 0;                /* asking for the old rule selects it */
     }
     else if (!strcmp(a, "--force")) force = 1;

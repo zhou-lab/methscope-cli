@@ -8,7 +8,7 @@
  *
  * THE DEFAULT RULE IS P(01) >= 0.60, documented in its own section below. The
  * q-filter rule described first is the legacy one, still selectable with
- * --qfilter / --qfilter-strict / --delta-mean-top, and kept because it is what
+ * --qfilter / --delta-mean-top, and kept because it is what
  * every artifact before 2026-08-09 was built with.
  *
  *     legacy: keep = q_filter_strict  UNION  (q_filter AND top-N by delta_mean)
@@ -115,7 +115,6 @@
 
 typedef struct {
   float    qfilter_lo, qfilter_hi;   /* expected-0 ceiling, expected-1 floor */
-  float    strict_lo, strict_hi;     /* the self-sizing leg; <0 disables it */
   uint32_t delta_mean_top;           /* per binstring; 0 disables the floor leg */
   uint32_t min_cg_depth;             /* absolute, required of EVERY class */
   float    max_frac_na;              /* fraction of classes allowed absent */
