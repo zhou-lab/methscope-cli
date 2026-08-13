@@ -3109,7 +3109,7 @@ int main_mrmp_build(int argc, char *argv[]) {
   if (argc == 1) { char *h[2]; h[0] = argv[0]; h[1] = (char *)"-h";
                    (void)main_mrmp_build(2, h); return 1; }
   const char *pos[2] = {NULL, NULL}, *nodedir = NULL, *setname = "root";
-  int npos = 0, force = 0, dry = 0, have_fixed = 0, flat = 0;
+  int npos = 0, force = 0, dry = 0, have_fixed = 0, flat = 0, floor_set = 0;
   uint64_t fixed_seg = 0; uint32_t max_depth = 16;
   double split_q = 0.0;              /* only if --split-quantile asks for it */
   ms_select_opt_t sel; ms_select_defaults(&sel);
@@ -3181,6 +3181,19 @@ int main_mrmp_build(int argc, char *argv[]) {
         "                          knob that makes a tight --qfilter usable.\n"
         "    --p01-min X           P(01) floor (default 0.60, the default rule)\n"
         "    --mincov N            min per-class coverage (default 1)\n"
+        "    --depth-floor-frac F  per-class RELATIVE depth floor: a CpG is\n"
+        "          dropped unless every class covers it at min(F * that class's\n"
+        "          OWN genome-wide mean depth, --depth-floor-cap). Default 1.0\n"
+        "          under --flat (a satellite, matching the builder it replaced)\n"
+        "          and 0 (off) for a tree, whose wide class set makes a joint\n"
+        "          floor expensive. Relative because an absolute floor cannot\n"
+        "          serve both ends of the range -- here depth 5.7 to 131, where\n"
+        "          10 deletes the thin classes and never binds on the deep ones.\n"
+        "          This is the protection against selecting on the same cells\n"
+        "          that define the beta: the reference's most extreme values sit\n"
+        "          where its depth is thinnest, and those are the CpGs that do\n"
+        "          not reproduce on held-out cells.\n"
+        "    --depth-floor-cap N   ceiling on that target (default 20)\n"
         "    --node-dir DIR        also write DIR/<node>.mrmp, one per node, so the\n"
         "                          tree drives with plain classify-featurize /\n"
         "                          classify-train (a block is a standalone .mrmp)\n"
@@ -3203,6 +3216,10 @@ int main_mrmp_build(int argc, char *argv[]) {
      * became the tree builder, kept because a flat global is still the right
      * artifact for deconvolution and for a reference too shallow to split. */
     else if (!strcmp(a, "--flat")) flat = 1;
+    else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
+      { sel.depth_floor_frac = (float)atof(argv[++i]); floor_set = 1; }
+    else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
+      sel.depth_floor_cap = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--name") && i + 1 < argc) setname = argv[++i];
     else if (!strcmp(a, "--beta-threshold") && i + 1 < argc)
       gh.beta_threshold = (float)atof(argv[++i]);
@@ -3271,6 +3288,15 @@ int main_mrmp_build(int argc, char *argv[]) {
         NULL);
   if (dry && !have_fixed && split_q <= 0.0) { have_fixed = 1; fixed_seg = 0; }
   if (flat) { have_fixed = 1; fixed_seg = UINT64_MAX; }   /* nothing can split */
+  /* A --flat build IS a satellite, and mrmp-build-neighbor -- the builder it
+   * replaced -- always ran the relative depth floor. Dropping it silently was
+   * a regression: with no floor, a 2-class set selects CpGs at whatever depth
+   * the reference happens to have, and the reference's most extreme values sit
+   * exactly where its depth is thinnest. Measured on the mouse leaf, held-out
+   * PAL-Inh read 0.422 on a contrast its reference put at 0.043, one-sided,
+   * while its deep partner LSX-Inh held. The floor is RELATIVE because an
+   * absolute one cannot serve a vocabulary spanning depth 5.7 to 131. */
+  if (flat && !floor_set) sel.depth_floor_frac = 1.0f;
   const char *store = pos[0], *out = pos[1];
   if (!force && !dry) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
 
