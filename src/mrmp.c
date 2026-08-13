@@ -3102,7 +3102,7 @@ int main_mrmp_build(int argc, char *argv[]) {
   if (argc == 1) { char *h[2]; h[0] = argv[0]; h[1] = (char *)"-h";
                    (void)main_mrmp_build(2, h); return 1; }
   const char *pos[2] = {NULL, NULL}, *nodedir = NULL, *setname = "root";
-  int npos = 0, force = 0, dry = 0, have_fixed = 0, flat = 0, floor_set = 0;
+  int npos = 0, force = 0, dry = 0, have_fixed = 0, flat = 0;
   uint64_t fixed_seg = 0; uint32_t max_depth = 16;
   double split_q = 0.0;              /* only if --split-quantile asks for it */
   ms_select_opt_t sel; ms_select_defaults(&sel);
@@ -3178,10 +3178,11 @@ int main_mrmp_build(int argc, char *argv[]) {
         "    --mincov N            min per-class coverage (default 1)\n"
         "    --depth-floor-frac F  per-class RELATIVE depth floor: a CpG is\n"
         "          dropped unless every class covers it at min(F * that class's\n"
-        "          OWN genome-wide mean depth, --depth-floor-cap). Default 1.0\n"
-        "          under --flat (a satellite, matching the builder it replaced)\n"
-        "          and 0 (off) for a tree, whose wide class set makes a joint\n"
-        "          floor expensive. Relative because an absolute floor cannot\n"
+        "          OWN genome-wide mean depth, --depth-floor-cap). Default 0,\n"
+        "          off: it pays only under a TIGHT --qfilter, which selects the\n"
+        "          extreme and thinly-supported CpGs this floor removes. At\n"
+        "          0.15,0.75 it is the fix; at 0.30,0.70 it only deletes\n"
+        "          evidence. Relative because an absolute floor cannot\n"
         "          serve both ends of the range -- here depth 5.7 to 131, where\n"
         "          10 deletes the thin classes and never binds on the deep ones.\n"
         "          This is the protection against selecting on the same cells\n"
@@ -3212,7 +3213,7 @@ int main_mrmp_build(int argc, char *argv[]) {
      * artifact for deconvolution and for a reference too shallow to split. */
     else if (!strcmp(a, "--flat")) flat = 1;
     else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
-      { sel.depth_floor_frac = (float)atof(argv[++i]); floor_set = 1; }
+      sel.depth_floor_frac = (float)atof(argv[++i]);
     else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
       sel.depth_floor_cap = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--name") && i + 1 < argc) setname = argv[++i];
@@ -3275,15 +3276,15 @@ int main_mrmp_build(int argc, char *argv[]) {
         NULL);
   if (dry && !have_fixed && split_q <= 0.0) { have_fixed = 1; fixed_seg = 0; }
   if (flat) { have_fixed = 1; fixed_seg = UINT64_MAX; }   /* nothing can split */
-  /* A --flat build IS a satellite, and mrmp-build-neighbor -- the builder it
-   * replaced -- always ran the relative depth floor. Dropping it silently was
-   * a regression: with no floor, a 2-class set selects CpGs at whatever depth
-   * the reference happens to have, and the reference's most extreme values sit
-   * exactly where its depth is thinnest. Measured on the mouse leaf, held-out
-   * PAL-Inh read 0.422 on a contrast its reference put at 0.043, one-sided,
-   * while its deep partner LSX-Inh held. The floor is RELATIVE because an
-   * absolute one cannot serve a vocabulary spanning depth 5.7 to 131. */
-  if (flat && !floor_set) sel.depth_floor_frac = 1.0f;
+  /* The floor stays OFF by default, including under --flat. It was briefly
+   * defaulted on here, because mrmp-build-neighbor ran it and --flat replaced
+   * that builder -- but measurement says the protection is band-specific, not
+   * builder-specific. At --qfilter 0.15,0.75 held-out PAL-Inh read 0.422 on a
+   * contrast its reference put at 0.043, and the floor was the right answer.
+   * At 0.30,0.70 the same pair reads 0.080 against 0.078: the looser band
+   * never selects the extreme, thinly-supported CpGs in the first place, so
+   * the floor only deletes evidence -- 35% of that pair's thin side, for 52
+   * errors against 47 on the mouse fold. Turn it on with a tight band. */
   const char *store = pos[0], *out = pos[1];
   if (!force && !dry) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
 
