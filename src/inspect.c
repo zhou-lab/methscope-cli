@@ -133,7 +133,13 @@ static void print_labels(char *const *labels, int K) {
  * three cohorts (6,025 cells, 0 disagreements), which is why mrmp-tree no
  * longer writes a tree file: it would be a second copy of something the
  * artifact already answers. */
-typedef struct { char *name; uint32_t nc, npat; uint64_t cpg; char **cls; int par; } inode_t;
+/* One structure, two edge kinds. A HARD child takes cells: it must partition
+ * its parent's classes, and it owns a booster. A SOFT child (a satellite)
+ * takes none -- it lends its columns to the parent's booster and has no model
+ * of its own -- so soft siblings may OVERLAP, which is the whole point: in the
+ * mouse leaf PAL-Inh is a member of 20 of them, impossible under a partition. */
+typedef struct { char *name; uint32_t nc, npat; uint64_t cpg; char **cls;
+                 int par; int soft; } inode_t;
 
 static void itree_render(const inode_t *nd, uint32_t n, uint32_t k,
                          const char *pre, int last) {
@@ -152,39 +158,49 @@ static void itree_render(const inode_t *nd, uint32_t n, uint32_t k,
          nd[k].nc, commafmt(nd[k].npat, b1), commafmt(nd[k].cpg, b2));
   char sub[512];
   snprintf(sub, sizeof sub, "%s%s", pre, top ? "  " : (last ? "    " : "|   "));
-  /* one line per class: the routing map, which is the whole point */
+  uint32_t nhard = 0, nsoft = 0;
+  for (uint32_t j = 0; j < n; ++j)
+    if (nd[j].par == (int)k) { if (nd[j].soft) ++nsoft; else ++nhard; }
+  /* A class is decided HERE unless a HARD child takes it. A soft child takes
+   * no cells, so it never removes a class from this node's own list -- its
+   * members are still decided here, just on wider evidence. */
   uint32_t shown = 0;
   for (uint32_t c = 0; c < nd[k].nc; ++c) {
-    int dest = -1;
-    for (uint32_t j = 0; j < n && dest < 0; ++j) {
-      if (nd[j].par != (int)k) continue;
-      for (uint32_t x = 0; x < nd[j].nc; ++x)
-        if (!strcmp(nd[j].cls[x], nd[k].cls[c])) { dest = (int)j; break; }
+    int taken = 0;
+    for (uint32_t j = 0; j < n && !taken; ++j) {
+      if (nd[j].par != (int)k || nd[j].soft) continue;
+      for (uint32_t x = 0; x < nd[j].nc && !taken; ++x)
+        taken = !strcmp(nd[j].cls[x], nd[k].cls[c]);
     }
-    if (dest >= 0) continue;                 /* covered by a child, shown below */
-    ++shown;
+    if (!taken) ++shown;
   }
-  uint32_t seen = 0;
-  uint32_t nkid = 0;
-  for (uint32_t j = 0; j < n; ++j) if (nd[j].par == (int)k) ++nkid;
+  uint32_t item = 0, total = shown + nhard + nsoft;
   for (uint32_t c = 0; c < nd[k].nc; ++c) {
-    int dest = -1;
-    for (uint32_t j = 0; j < n && dest < 0; ++j) {
-      if (nd[j].par != (int)k) continue;
-      for (uint32_t x = 0; x < nd[j].nc; ++x)
-        if (!strcmp(nd[j].cls[x], nd[k].cls[c])) { dest = (int)j; break; }
+    int taken = 0;
+    for (uint32_t j = 0; j < n && !taken; ++j) {
+      if (nd[j].par != (int)k || nd[j].soft) continue;
+      for (uint32_t x = 0; x < nd[j].nc && !taken; ++x)
+        taken = !strcmp(nd[j].cls[x], nd[k].cls[c]);
     }
-    if (dest >= 0) continue;
-    ++seen;
+    if (taken) continue;
     /* Just the name. "decided here" on every row was noise -- it is what a
      * leaf line MEANS, and the legend says so once. */
-    printf("%s%s%s\n", sub,
-           (seen == shown && !nkid) ? "`-- " : "|-- ", nd[k].cls[c]);
+    printf("%s%s%s\n", sub, ++item == total ? "`-- " : "|-- ", nd[k].cls[c]);
   }
-  uint32_t kseen = 0;
   for (uint32_t j = 0; j < n; ++j) {
-    if (nd[j].par != (int)k) continue;
-    itree_render(nd, n, j, sub, ++kseen == nkid);
+    if (nd[j].par != (int)k || nd[j].soft) continue;
+    itree_render(nd, n, j, sub, ++item == total);
+  }
+  /* Soft children last: they are leaves by construction (a satellite has no
+   * booster and nothing descends from it), so they need no recursion. */
+  for (uint32_t j = 0; j < n; ++j) {
+    if (nd[j].par != (int)k || !nd[j].soft) continue;
+    const char *tag = strchr(nd[j].name, MS_SAT_SEP);
+    int uw = (int)strlen(sub) + 4;
+    int ww = 26 - uw; if (ww < 8) ww = 8;
+    printf("%s%s%-*s %2u classes  %7s patterns  %9s CpGs  soft\n", sub,
+           ++item == total ? "`~~ " : "|~~ ", ww, tag ? tag + 1 : nd[j].name,
+           nd[j].nc, commafmt(nd[j].npat, b1), commafmt(nd[j].cpg, b2));
   }
 }
 
@@ -198,12 +214,14 @@ static int inspect_tree(const char *path) {
   mrmp_top_t **top = calloc(n, sizeof(mrmp_top_t *));
   uint32_t *setof = calloc(n ? n : 1, sizeof(uint32_t));
   if (!nd || !top || !setof) idie("out of memory", path);
-  /* Satellites are not nodes -- they widen a node's evidence without changing
-   * what it decides -- so they are counted and listed separately below. */
+  /* Hard sets first so a soft child's parent index always already exists. */
   uint32_t nn = 0, nsat = 0;
   for (uint32_t s = 0; s < n; ++s)
-    if (ms_set_is_satellite(ch->name[s])) ++nsat; else setof[nn++] = s;
-  if (!nn) idie("a tree needs at least one node", path);
+    if (!ms_set_is_satellite(ch->name[s])) setof[nn++] = s;
+  const uint32_t n_hard = nn;
+  for (uint32_t s = 0; s < n; ++s)
+    if (ms_set_is_satellite(ch->name[s])) { setof[nn++] = s; ++nsat; }
+  if (!n_hard) idie("a tree needs at least one node", path);
   uint64_t tot_cpg = 0;
   for (uint32_t k = 0; k < nn; ++k) {
     top[k] = ms_mrmp_top_read_at(path, ch->block_off[setof[k]], UINT32_MAX);
@@ -216,14 +234,33 @@ static int inspect_tree(const char *path) {
     tot_cpg += nd[k].cpg;
   }
   for (uint32_t k = 0; k < nn; ++k) {
+    char ob[512];
     nd[k].par = -1;
-    const char *dot = strrchr(nd[k].name, '.');
-    if (!dot) continue;
-    size_t plen = (size_t)(dot - nd[k].name);
-    for (uint32_t j = 0; j < nn; ++j)
-      if (strlen(nd[j].name) == plen && !strncmp(nd[j].name, nd[k].name, plen))
-        { nd[k].par = (int)j; break; }
-    if (nd[k].par < 0) idie("a node's parent is missing from the chain", nd[k].name);
+    if (ms_set_owner(nd[k].name, ob, sizeof ob)) {     /* a SOFT child */
+      nd[k].soft = 1;
+      for (uint32_t j = 0; j < n_hard; ++j)
+        if (!strcmp(nd[j].name, ob)) { nd[k].par = (int)j; break; }
+      if (nd[k].par < 0)
+        idie("a satellite names a node not in the chain", nd[k].name);
+    } else {                                            /* a HARD child */
+      const char *dot = strrchr(nd[k].name, '.');
+      if (!dot) continue;
+      size_t plen = (size_t)(dot - nd[k].name);
+      for (uint32_t j = 0; j < n_hard; ++j)
+        if (strlen(nd[j].name) == plen && !strncmp(nd[j].name, nd[k].name, plen))
+          { nd[k].par = (int)j; break; }
+      if (nd[k].par < 0)
+        idie("a node's parent is missing from the chain", nd[k].name);
+    }
+    /* Both kinds must be a SUBSET of the parent; only hard children must also
+     * be disjoint from their siblings, and that is checked where routing is
+     * built, not here. A soft child overlapping its siblings is correct. */
+    for (uint32_t c = 0; c < nd[k].nc; ++c) {
+      uint32_t p = (uint32_t)nd[k].par, seen = 0;
+      for (uint32_t d = 0; d < nd[p].nc && !seen; ++d)
+        seen = !strcmp(nd[p].cls[d], nd[k].cls[c]);
+      if (!seen) idie("a child has a class its parent does not", nd[k].cls[c]);
+    }
   }
   uint32_t root = 0, nroot = 0;
   for (uint32_t k = 0; k < nn; ++k) if (nd[k].par < 0) { root = k; ++nroot; }
@@ -233,32 +270,21 @@ static int inspect_tree(const char *path) {
   uint64_t tot_pat = 0;
   for (uint32_t k = 0; k < nn; ++k) tot_pat += nd[k].npat;
   printf("\nTREE  %s\n", path);
-  printf("  %u node%s", nn, nn == 1 ? "" : "s");
-  if (nsat) printf(" + %u satellite%s", nsat, nsat == 1 ? "" : "s");
+  printf("  %u node%s", n_hard, n_hard == 1 ? "" : "s");
+  if (nsat) printf(" + %u soft", nsat);
   printf(", %u classes, %s patterns over %s CpGs\n\n",
          nd[root].nc, commafmt(tot_pat, b1), commafmt(tot_cpg, b2));
   itree_render(nd, nn, root, "", 1);
-  if (nsat) {
-    printf("\n  SATELLITES  extra evidence for a node, not extra nodes: each is\n"
-           "  its own small MRMP whose columns join the named node's booster.\n\n");
-    for (uint32_t s = 0; s < n; ++s) {
-      char ob[512];
-      if (!ms_set_owner(ch->name[s], ob, sizeof ob)) continue;
-      mrmp_top_t *t = ms_mrmp_top_read_at(path, ch->block_off[s], UINT32_MAX);
-      uint64_t cp = 0;
-      for (uint32_t p = 0; p < t->n_patterns; ++p) cp += t->count[p];
-      printf("    %-34s -> %-10s %2u classes %6u patterns %10s CpGs\n",
-             strchr(ch->name[s], MS_SAT_SEP) + 1, ob, t->n_samples,
-             t->n_patterns, commafmt(cp, b1));
-      ms_mrmp_top_free(t);
-    }
-  }
-  printf("\n  A class listed under a node is DECIDED there. A child node means cells\n"
-         "  calling one of its classes descend and are re-decided on that node's\n"
-         "  own evidence. Nothing here is stored: the parent is the name minus its\n"
-         "  last component, the classes are the block's own sample names.\n\n");
-  for (uint32_t k = 0; k < n; ++k) ms_mrmp_top_free(top[k]);
-  free(nd); free(top); ms_mrmpset_free(ch);
+
+  printf("\n  A class listed under a node is DECIDED there. A HARD child (|--) takes\n"
+         "  those cells and re-decides them on its own evidence. A SOFT child\n"
+         "  (|~~) takes no cells: it lends its columns to this node's booster, so\n"
+         "  soft siblings may OVERLAP where hard ones may not. Nothing here is\n"
+         "  stored -- a hard parent is the name minus its last dotted component,\n"
+         "  a soft one is the name before '@'.\n");
+  putchar('\n');
+  for (uint32_t k = 0; k < nn; ++k) ms_mrmp_top_free(top[k]);
+  free(nd); free(top); free(setof); ms_mrmpset_free(ch);
   return 0;
 }
 
@@ -314,10 +340,19 @@ bundle_report:;
     ms_bundle_entry_t *secs = ms_bundle_list(path, &nsec);
     ms_mrmpset_t *ch = ms_mrmpset_open(path);
     printf("\nTREE  %s\n", path);
-    printf("  %-14s %u node(s) over a %u-set chain\n", "format", nsec - 2, ch->n_sets);
+    printf("  %-14s %u node(s) over a %u-set chain\n", "format", nsec - 2,
+           ch->n_sets);
+    /* Soft children (satellites) are sets of this chain but carry no booster
+     * -- listing them here with a blank model and a parent derived by the
+     * DOTTED rule printed "root.0" for a child of root.0.0, which is simply
+     * wrong. They are summarised per parent instead. */
+    uint32_t nsoft = 0;
+    for (uint32_t k = 0; k < ch->n_sets; ++k)
+      if (ms_set_is_satellite(ch->name[k])) ++nsoft;
     printf("\n  %-12s %8s %9s %10s  %s\n", "node", "classes", "booster",
            "patterns", "parent");
     for (uint32_t k = 0; k < ch->n_sets; ++k) {
+      if (ms_set_is_satellite(ch->name[k])) continue;
       ms_bundle_entry_t e; uint64_t blen = 0;
       if (ms_bundle_find(path, ch->name[k], &e)) blen = e.length;
       mrmp_top_t *t = ms_mrmp_top_read_at(path, ch->block_off[k], UINT32_MAX);
@@ -325,11 +360,27 @@ bundle_report:;
       char par[64]; snprintf(par, sizeof par, "%.*s",
                              dot ? (int)(dot - ch->name[k]) : 2,
                              dot ? ch->name[k] : "--");
-      char b1[32], b2[32];
-      printf("  %-12s %8u %9s %10s  %s\n", ch->name[k], t->n_samples,
+      /* how much extra evidence its soft children lend it */
+      uint32_t ns = 0; uint64_t scpg = 0;
+      for (uint32_t j = 0; j < ch->n_sets; ++j) {
+        char ob[512];
+        if (!ms_set_owner(ch->name[j], ob, sizeof ob)) continue;
+        if (strcmp(ob, ch->name[k])) continue;
+        mrmp_top_t *st = ms_mrmp_top_read_at(path, ch->block_off[j], UINT32_MAX);
+        for (uint32_t q = 0; q < st->n_patterns; ++q) scpg += st->count[q];
+        ms_mrmp_top_free(st); ++ns;
+      }
+      char b1[32], b2[32], b3[32];
+      printf("  %-12s %8u %9s %10s  %s", ch->name[k], t->n_samples,
              commafmt(blen, b1), commafmt(t->n_patterns, b2), par);
+      if (ns) printf("   + %u soft, %s CpGs", ns, commafmt(scpg, b3));
+      putchar('\n');
       ms_mrmp_top_free(t);
     }
+    if (nsoft)
+      printf("\n  %u soft child(ren) lend columns to a node's booster and carry\n"
+             "  no model of their own; `inspect --tree` shows them in place.\n",
+             nsoft);
     printf("\n  Score with: methscope classify query.cg %s\n\n", path);
     ms_mrmpset_free(ch); free(secs); free(kind);
     return 0;
