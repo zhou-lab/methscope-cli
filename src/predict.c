@@ -328,17 +328,27 @@ static int predict_tree(const char *query_cg, const char *bundle,
     }
     ms_msfm_layout_free(lay);
   } else {
-  uint64_t *base = malloc(n * sizeof(uint64_t)), *blen2 = malloc(n * sizeof(uint64_t));
-  uint32_t *np = malloc(n * sizeof(uint32_t));
+  /* EVERY set in the chain, not just the nodes: the layout the colspans index
+   * into counts satellites too, so featurizing only `n` blocks builds a matrix
+   * that is both too narrow AND misaligned -- `n` here would also index the
+   * chain by POSITION, silently taking the first n sets rather than the node
+   * ones. Human at 11 nodes over a 15-set chain lost root.4, the Enterocyte
+   * leaf, and read its column out of a matrix that never had it: 766 of 1,201
+   * Bian cells flipped colon -> small intestine. Invisible via --data, which
+   * takes a matrix built by classify-featurize over the whole chain. */
+  const uint32_t nall = ch->n_sets;
+  uint64_t *base = malloc(nall * sizeof(uint64_t));
+  uint64_t *blen2 = malloc(nall * sizeof(uint64_t));
+  uint32_t *np = malloc(nall * sizeof(uint32_t));
   if (!base || !blen2 || !np) pdie("out of memory (tree)", NULL);
-  const char **rr = malloc(n * sizeof(char *));
-  for (uint32_t k = 0; k < n; ++k) {
+  const char **rr = malloc(nall * sizeof(char *));
+  for (uint32_t k = 0; k < nall; ++k) {
     rr[k] = bundle; base[k] = ch->block_off[k]; blen2[k] = ch->block_bytes[k];
     mrmp_top_t *t = ms_mrmp_top_read_at(bundle, ch->block_off[k], UINT32_MAX);
     np[k] = t->n_patterns; ms_mrmp_top_free(t);
   }
-  uint32_t *col0 = malloc(n * sizeof(uint32_t));
-  ms_msfm_build_sampled_multi(query_cg, rr, base, blen2, np, n, &one, 1,
+  uint32_t *col0 = malloc(nall * sizeof(uint32_t));
+  ms_msfm_build_sampled_multi(query_cg, rr, base, blen2, np, nall, &one, 1,
                               1 /* -b */, 0, 20260812, threads, 1 /* 0.5 cut */,
                               (mode & MSFM_FLAG_CONTRAST_ONLY) ? 2 :
                               (mode & MSFM_FLAG_CONTRAST_ADD)  ? 1 : 0,
@@ -346,6 +356,17 @@ static int predict_tree(const char *query_cg, const char *bundle,
                               (mode & MSFM_FLAG_RANK_ADD)  ? 1 : 0,
                               &beta, &levels, &cellname, &ncells, &ncol, col0);
   free(base); free(blen2); free(np); free((void *)rr); free(col0);
+  /* The --data path checks this; the .cg path did not, which is how a matrix
+   * missing whole sets scored 766 cells wrong without a word. Both paths feed
+   * the same colspans, so both must agree with the layout. */
+  { ms_msfm_layout_t *lay = ms_msfm_layout(bundle, mode);
+    if (lay->total != ncol) {
+      char m[192];
+      snprintf(m, sizeof m, "featurized %u columns but the tree's layout wants "
+               "%u -- a chain set was missed", ncol, lay->total);
+      ms_msfm_layout_free(lay); pdie(m, query_cg);
+    }
+    ms_msfm_layout_free(lay); }
   }
 
   char  **lab  = calloc(ncells, sizeof(char *));
