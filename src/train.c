@@ -349,6 +349,22 @@ int main_train_tree(int argc, char *argv[]) {
       if (!ms_set_is_satellite(ch->name[j]) && !strcmp(ch->name[j], ob)) break;
     if (j == ch->n_sets)
       tdie("satellite names a node that is not in this chain", ch->name[s]);
+    /* Its classes must be a SUBSET of the node's -- it lends that node's
+     * booster columns, so a class the node never decides is evidence about
+     * nothing. Siblings may overlap, which is the difference from a hard
+     * child, and is not checked. inspect --tree enforces the same rule; this
+     * is the copy that guards a hand-assembled chain at the point a model is
+     * actually built from it. */
+    mrmp_top_t *ts = ms_mrmp_top_read_at(chain, ch->block_off[s], 1);
+    mrmp_top_t *tn = ms_mrmp_top_read_at(chain, ch->block_off[j], 1);
+    for (uint32_t c = 0; c < ts->n_samples; ++c) {
+      uint32_t seen = 0;
+      for (uint32_t e = 0; e < tn->n_samples && !seen; ++e)
+        seen = !strcmp(tn->labels[e], ts->labels[c]);
+      if (!seen) tdie("satellite carries a class its node does not",
+                      ts->labels[c]);
+    }
+    ms_mrmp_top_free(ts); ms_mrmp_top_free(tn);
   }
   fprintf(stderr, "\n[methscope] classify-train\n\n");
   fprintf(stderr, "  %-12s %d records x %d columns, %u node(s)", "data",

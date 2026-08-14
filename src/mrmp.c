@@ -3058,6 +3058,19 @@ static uint32_t tree_satellites(const char *store, const subset_block_t *sb,
       char ta[128], tb[128], sname[512];
       sat_tag(lab[a], ta, sizeof ta); sat_tag(lab[b], tb, sizeof tb);
       snprintf(sname, sizeof sname, "%s%c%s__%s", name, MS_SAT_SEP, ta, tb);
+      /* sat_tag maps every non-alphanumeric to '_' and truncates at 128, so it
+       * is lossy: "IT-L5" and "IT_L5" produce the same tag. Two sets sharing a
+       * name in one chain is silently wrong -- a by-name lookup takes the
+       * first -- and nothing downstream checks it, so refuse here where the
+       * offending pair can be named. */
+      for (uint32_t q = 0; q < made; ++q)
+        if (!strcmp(sname, out->name[out->n - made + q])) {
+          char m[512];
+          snprintf(m, sizeof m, "%.200s and an earlier pair of %.100s both "
+                   "yield this satellite name; class names must stay distinct "
+                   "after non-alphanumerics become '_'", sname, name);
+          die(m, lab[a]);
+        }
       char *two[2]; int64_t vv[2];
       two[0] = lab[a]; two[1] = lab[b]; vv[0] = vo[a]; vv[1] = vo[b];
       subset_block_t s2;
