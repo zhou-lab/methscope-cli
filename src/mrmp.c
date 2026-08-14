@@ -2085,7 +2085,6 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
         "        --qfilter already bounds the worst case; the two scored within\n"
         "        0.007 of each other on held-out margin. Identical for 2\n"
         "        classes, diverging only at 3+.\n\n"
-        "  --p01-min X               (DEFAULT rule, at 0.60)\n"
         "        The rule in force unless --qfilter or\n"
         "        --delta-mean-top is given, any of which reverts to the legacy\n"
         "        rule above. Keep every CpG\n"
@@ -2106,7 +2105,6 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
         "        cohort (0.9561 native vs 0.9516 for the legacy rule) -- though\n"
         "        the spread across all four was 0.0028, within noise, so the\n"
         "        real argument is that one threshold replaces five knobs.\n\n"
-        "  --p01-top N               (default 0, uncapped)\n"
         "        Optional cap: keep at most the N highest by P(01) PER\n"
         "        BINSTRING. A budget, not part of the rule -- a threshold on a\n"
         "        calibrated probability already says which CpGs are usable, so\n"
@@ -2136,18 +2134,10 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
     else if (!strcmp(a, "--projection-top") && i + 1 < argc)
       proj_top = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc) {
-      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a); sel.p01_on = 0;
+      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a);
     }
     else if (!strcmp(a, "--include-all-0")) sel.inc_all0 = 1;
     else if (!strcmp(a, "--include-all-1")) sel.inc_all1 = 1;
-    else if (!strcmp(a, "--p01-top") && i + 1 < argc) {
-      sel.p01_top = (uint32_t)parse_u64(argv[++i], a); sel.p01_on = 1;
-    }
-    else if (!strcmp(a, "--p01-min") && i + 1 < argc) {
-      sel.p01_min = (float)atof(argv[i + 1]); ++i; sel.p01_on = 1;
-      if (!(sel.p01_min >= 0.0f && sel.p01_min <= 1.0f))
-        die("--p01-min needs 0 <= X <= 1", argv[i]);
-    }
     else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
       sel.depth_floor_frac = (float)atof(argv[++i]);
     else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
@@ -2160,7 +2150,7 @@ int main_mrmp_build_thin(int argc, char *argv[]) {
       if (!(lo >= 0.0f && hi <= 1.0f && lo < hi)) die("needs 0 <= LO < HI <= 1", a);
 
       else        { sel.qfilter_lo = lo; sel.qfilter_hi = hi; }
-      sel.p01_on = 0;                 /* asking for the old rule selects it */
+                      /* asking for the old rule selects it */
     }
     else if (!strcmp(a, "--force")) force = 1;
     else if (a[0] == '-') die("unrecognized or incomplete option", a);
@@ -2525,8 +2515,6 @@ int main_mrmp_build_neighbor(int argc, char *argv[]) {
         "  --include-all-1           keep patterns no class calls 0\n"
         "        Folded into PNA by default: a binstring with no class on one\n"
         "        side separates nothing, whatever its CpG count.\n\n"        "  Per-CpG selection (shared with mrmp-build-thin):\n"
-        "  --p01-min X               (default 0.60) the selection rule; 0 off\n"
-        "  --p01-top N               (default 0 = uncapped) optional budget\n"
         "  --qfilter LO,HI           legacy rule; giving it selects the legacy\n"
         "  --delta-mean-top N        legacy per-binstring rank\n"
         "  --depth-floor-frac F      (default 1.0) relative to each class mean\n"
@@ -2542,18 +2530,10 @@ int main_mrmp_build_neighbor(int argc, char *argv[]) {
     else if (!strcmp(a, "--max-segregating") && i + 1 < argc)
       max_seg = atof(argv[++i]);
     else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc) {
-      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a); sel.p01_on = 0;
+      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a);
     }
     else if (!strcmp(a, "--include-all-0")) sel.inc_all0 = 1;
     else if (!strcmp(a, "--include-all-1")) sel.inc_all1 = 1;
-    else if (!strcmp(a, "--p01-top") && i + 1 < argc) {
-      sel.p01_top = (uint32_t)parse_u64(argv[++i], a); sel.p01_on = 1;
-    }
-    else if (!strcmp(a, "--p01-min") && i + 1 < argc) {
-      sel.p01_min = (float)atof(argv[i + 1]); ++i; sel.p01_on = 1;
-      if (!(sel.p01_min >= 0.0f && sel.p01_min <= 1.0f))
-        die("--p01-min needs 0 <= X <= 1", argv[i]);
-    }
     else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
       sel.depth_floor_frac = (float)atof(argv[++i]);
     else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
@@ -2566,7 +2546,7 @@ int main_mrmp_build_neighbor(int argc, char *argv[]) {
       if (!(lo >= 0.0f && hi <= 1.0f && lo < hi)) die("needs 0 <= LO < HI <= 1", a);
 
       else        { sel.qfilter_lo = lo; sel.qfilter_hi = hi; }
-      sel.p01_on = 0;                 /* asking for the old rule selects it */
+                      /* asking for the old rule selects it */
     }
     else if (!strcmp(a, "--dry-run")) dry_run = 1;
     else if (!strcmp(a, "--force")) force = 1;
@@ -3174,7 +3154,6 @@ int main_mrmp_build(int argc, char *argv[]) {
         "                          Stringency is only affordable with the CpG\n"
         "                          budget to pay for it, so this is the budget\n"
         "                          knob that makes a tight --qfilter usable.\n"
-        "    --p01-min X           P(01) floor (default 0.60, the default rule)\n"
         "    --mincov N            min per-class coverage (default 1)\n"
         "    --depth-floor-frac F  per-class RELATIVE depth floor: a CpG is\n"
         "          dropped unless every class covers it at min(F * that class's\n"
@@ -3234,16 +3213,8 @@ int main_mrmp_build(int argc, char *argv[]) {
     else if (!strcmp(a, "--mincov") && i + 1 < argc)
       gh.mincov = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--node-dir") && i + 1 < argc) nodedir = argv[++i];
-    else if (!strcmp(a, "--p01-min") && i + 1 < argc) {
-      sel.p01_min = (float)atof(argv[++i]); sel.p01_on = 1;
-      if (!(sel.p01_min >= 0.0f && sel.p01_min <= 1.0f))
-        die("--p01-min needs 0 <= X <= 1", argv[i]);
-    }
-    else if (!strcmp(a, "--p01-top") && i + 1 < argc) {
-      sel.p01_top = (uint32_t)parse_u64(argv[++i], a); sel.p01_on = 1;
-    }
     else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc) {
-      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a); sel.p01_on = 0;
+      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a);
     }
     else if (!strcmp(a, "--qfilter") && i + 1 < argc) {
       const char *v = argv[++i]; char *end = NULL;
@@ -3253,7 +3224,7 @@ int main_mrmp_build(int argc, char *argv[]) {
       if (!(lo >= 0.0f && hi <= 1.0f && lo < hi))
         die("--qfilter needs 0 <= LO < HI <= 1", v);
       sel.qfilter_lo = lo; sel.qfilter_hi = hi;
-      sel.p01_on = 0;                /* asking for the old rule selects it */
+                     /* asking for the old rule selects it */
     }
     else if (!strcmp(a, "--force")) force = 1;
     else if (a[0] == '-') die("unrecognized or incomplete option", a);
