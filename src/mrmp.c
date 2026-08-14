@@ -3028,7 +3028,15 @@ static uint32_t tree_satellites(const char *store, const subset_block_t *sb,
                                 const ms_select_opt_t *sel, const char *name,
                                 uint32_t n_partner, int tty, treeout_t *out,
                                 FILE *rep) {
-  if (n < 2 || !n_partner) return 0;
+  /* A 2-class node needs no satellite: its only pair IS its own class pair, so
+   * the satellite rebuilds the identical MRMP and hands the booster a second
+   * copy of the column it already has. Seen on the human tree, where
+   * root.1.0.9.1 (T.Cell.CD4/CD8, 2 patterns, 6,418 CpGs) generated a
+   * satellite with exactly 2 patterns and 6,418 CpGs. At 3+ classes they are
+   * genuinely different -- the same node's Dendritic/Macrophage/Monocyte
+   * satellites carry 4,277-10,270 CpGs against the 3-class set's 5,798,
+   * because dropping the third class admits CpGs its filter had spoiled. */
+  if (n < 3 || !n_partner) return 0;
   double *d = sat_hamming(sb->img);
   uint8_t *want = xcalloc((size_t)n * n, 1, "satellite pairs");
   uint32_t *ord = xcalloc(n, sizeof(uint32_t), "near order");
@@ -3274,9 +3282,10 @@ int main_mrmp_build(int argc, char *argv[]) {
         "                          node's filter is a conjunction that starves\n"
         "                          exactly the pairs needing help; the same\n"
         "                          contrast over 2 classes is far thicker.\n"
-        "    --satellite-n N       after the tree, give every CHILDLESS node a\n"
-        "          soft child per class pair among its N nearest, by CpG-weighted\n"
-        "          Hamming over that node's own binstrings -- reference only, no\n"
+        "    --satellite-n N       after the tree, give every CHILDLESS node of\n"
+        "          3+ CLASSES a soft child per class pair among its N nearest, by\n"
+        "          CpG-weighted Hamming over that node's own binstrings --\n"
+        "          reference only, no\n"
         "          test cell. Each is a fresh 2-class MRMP appended to the same\n"
         "          chain as <node>@<a>__<b>, so one command emits the whole\n"
         "          artifact. OVERLAPPING, not a partition: a class joins as many\n"
