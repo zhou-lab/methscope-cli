@@ -63,8 +63,7 @@
  * that silently switched on flag ORDER -- --p01-min after --qfilter voided both
  * --qfilter and --delta-mean-top -- cost more in confusion than the option was
  * worth. One rule now: q-filter admits, delta_mean ranks, --delta-mean-top
- * budgets, and --delta-mean-top 0 is the uncapped form.
- *
+ * budgets, and --delta-mean-top 0 is the uncapped form. */
 #ifndef MS_MRMP_SELECT_H
 #define MS_MRMP_SELECT_H
 

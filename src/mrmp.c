@@ -2960,12 +2960,129 @@ static uint64_t tree_threshold(const uint64_t *sorted, uint64_t npair,
 
 /* Build this node's MRMP over its own classes, then recurse into the groups it
  * cannot separate. Depth-first, so the chain reads parent before child. */
+
+/* CpG-weighted Hamming between every pair of a node's classes: the fraction of
+ * this set's pattern CpG mass on which the two are called differently. It is
+ * the metric the classifier scores with, so a small distance IS a predicted
+ * confusion, and it reads the reference alone -- no test cell, no confusion
+ * matrix -- so satellites can be chosen at build time. Distinct from
+ * tree_pair_seg, which counts only CpGs where one is '0' and the other '1';
+ * here a '2' against a '1' is a difference too, matching the 20260806
+ * generator this reproduces. */
+static double *sat_hamming(const void *img) {
+  const mrmp_header_t *h = (const mrmp_header_t *)img;
+  const uint32_t ns = h->n_samples, nw = mrmp_key_words(ns);
+  const uint64_t stride = mrmp_pattern_stride(ns), npat = h->n_candidates;
+  const char *base = (const char *)img + h->patterns_offset;
+  double *d = xcalloc((size_t)ns * ns, sizeof(double), "sat hamming");
+  char *bs = xcalloc((size_t)ns + 1, 1, "binstring");
+  double tot = 0.0;
+  for (uint64_t p = 0; p < npat; ++p) {
+    const char *rec = base + p * stride;
+    key_to_string((const uint64_t *)(const void *)rec, ns, bs);
+    uint64_t cnt; memcpy(&cnt, rec + (uint64_t)nw * sizeof(uint64_t), sizeof cnt);
+    if (!cnt) continue;
+    tot += (double)cnt;
+    for (uint32_t a = 0; a < ns; ++a)
+      for (uint32_t b = a + 1; b < ns; ++b)
+        if ((bs[a] == '1') != (bs[b] == '1')) {
+          d[(size_t)a * ns + b] += (double)cnt;
+          d[(size_t)b * ns + a] += (double)cnt;
+        }
+  }
+  free(bs);
+  if (tot > 0.0)
+    for (size_t i = 0; i < (size_t)ns * ns; ++i) d[i] /= tot;
+  return d;
+}
+
+/* A class name as it appears in a set NAME: the '@' separator and the dotted
+ * parent rule both have to survive it, so anything else becomes '_'. */
+static void sat_tag(const char *in, char *out, size_t cap) {
+  size_t j = 0;
+  for (size_t i = 0; in[i] && j + 1 < cap; ++i) {
+    char c = in[i];
+    out[j++] = ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                (c >= '0' && c <= '9')) ? c : '_';
+  }
+  out[j] = '\0';
+}
+
+/* Overlapping closest-N pairs of a childless node, each built as its own
+ * 2-class set and appended to the same chain under the name <node>@<a>__<b>.
+ *
+ * OVERLAPPING, not a partition: the 20260806 measurement found a WPGMA
+ * partition left 73.5% of the remaining error in pairs no satellite covered,
+ * because a partition cannot cover a close pair straddling a block boundary.
+ * Here a class joins as many pairs as name it -- on the mouse 33-class leaf
+ * PAL-Inh lands in 20 of 135, which no partition can express.
+ *
+ * The point is the CpG budget, not the pairing: a node's pattern must hold
+ * across every class it carries, so a wide node's filter is a conjunction that
+ * starves exactly the pairs needing help. Rebuilt over 2 classes the same
+ * contrast is far thicker -- MGE-Sst/PAL-Inh goes from 10 CpGs on the side a
+ * rank column needs to 3,034. */
+static uint32_t tree_satellites(const char *store, const subset_block_t *sb,
+                                uint32_t n, char *const *lab,
+                                const int64_t *vo, const mrmp_header_t *gh,
+                                const ms_select_opt_t *sel, const char *name,
+                                uint32_t n_partner, int tty, treeout_t *out,
+                                FILE *rep) {
+  if (n < 2 || !n_partner) return 0;
+  double *d = sat_hamming(sb->img);
+  uint8_t *want = xcalloc((size_t)n * n, 1, "satellite pairs");
+  uint32_t *ord = xcalloc(n, sizeof(uint32_t), "near order");
+  for (uint32_t a = 0; a < n; ++a) {
+    uint32_t m = 0;
+    for (uint32_t b = 0; b < n; ++b) if (b != a) ord[m++] = b;
+    /* partial selection sort: N is small, and it keeps ties resolved by index
+     * so a rebuild reproduces the same set */
+    uint32_t take = n_partner < m ? n_partner : m;
+    for (uint32_t i = 0; i < take; ++i) {
+      uint32_t best = i;
+      for (uint32_t j = i + 1; j < m; ++j) {
+        double dj = d[(size_t)a * n + ord[j]], db = d[(size_t)a * n + ord[best]];
+        if (dj < db || (dj == db && ord[j] < ord[best])) best = j;
+      }
+      uint32_t t = ord[i]; ord[i] = ord[best]; ord[best] = t;
+      uint32_t x = a < ord[i] ? a : ord[i], y = a < ord[i] ? ord[i] : a;
+      want[(size_t)x * n + y] = 1;
+    }
+  }
+  free(ord); free(d);
+
+  uint32_t made = 0;
+  for (uint32_t a = 0; a < n; ++a)
+    for (uint32_t b = a + 1; b < n; ++b) {
+      if (!want[(size_t)a * n + b]) continue;
+      char ta[128], tb[128], sname[512];
+      sat_tag(lab[a], ta, sizeof ta); sat_tag(lab[b], tb, sizeof tb);
+      snprintf(sname, sizeof sname, "%s%c%s__%s", name, MS_SAT_SEP, ta, tb);
+      char *two[2]; int64_t vv[2];
+      two[0] = lab[a]; two[1] = lab[b]; vv[0] = vo[a]; vv[1] = vo[b];
+      subset_block_t s2;
+      { char m[192];
+        snprintf(m, sizeof m, "[%.180s]", sname); spin_start(tty, m); }
+      build_subset_block(store, 2, two, vv, gh, sel, sname, &s2);
+      spin_stop();
+      tree_push(out, s2.img, s2.bytes, sname);
+      ++made;
+    }
+  free(want);
+  if (made) {
+    char b1[32];
+    fprintf(rep, "  %s+ %u satellite(s) over %s pairs of %s\n",
+            tty ? "\r\033[K" : "", made, commafmt_local(made, b1), name);
+  }
+  return made;
+}
+
 static void tree_build(const char *store, char *const *slab, const int64_t *voff,
                        const uint32_t *idx, uint32_t n, const mrmp_header_t *gh,
                        const ms_select_opt_t *sel, const char *name,
                        double split_q, uint64_t fixed_seg, int have_fixed,
                        uint32_t depth, uint32_t max_depth, int dry,
-                       int tty, treeout_t *out, FILE *rep) {
+                       uint32_t sat_n, int tty, treeout_t *out, FILE *rep) {
   char **lab = xcalloc(n, sizeof(char *), "node labels");
   int64_t *vo = xcalloc(n, sizeof(int64_t), "node offsets");
   for (uint32_t k = 0; k < n; ++k) { lab[k] = slab[idx[k]]; vo[k] = voff[idx[k]]; }
@@ -2985,6 +3102,9 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
     fprintf(rep, "%s%s%s  n=%-3u %7s pat %9s CpGs\n", tty ? "\r\033[K" : "",
             ind, name, n, commafmt_local(sb.n_pat, b1),
             commafmt_local(sb.n_kept, b2));
+    if (!dry)
+      tree_satellites(store, &sb, n, lab, vo, gh, sel, name, sat_n, tty,
+                      out, rep);
     free(lab); free(vo); return;
   }
 
@@ -3049,6 +3169,12 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
       for (uint32_t k = 0; k < n; ++k) fprintf(rep, " %s", lab[k]);
       fprintf(rep, "\n");
     }
+    /* This is the node satellites are FOR: the classes it carries are the
+     * ones its own evidence cannot separate, and a 2-class rebuild is where
+     * the CpGs to separate them come from. */
+    if (!dry)
+      tree_satellites(store, &sb, n, lab, vo, gh, sel, name, sat_n, tty,
+                      out, rep);
     free(sorted); free(seg); free(grp); free(lab); free(vo); return;
   }
   for (uint32_t g = 0; g < ng; ++g) {
@@ -3071,7 +3197,7 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
     if (dry) { free(sub); continue; }
     char cn[256]; snprintf(cn, sizeof cn, "%s.%u", name, g);
     tree_build(store, slab, voff, sub, m, gh, sel, cn, split_q, fixed_seg,
-               have_fixed, depth + 1, max_depth, dry, tty, out, rep);
+               have_fixed, depth + 1, max_depth, dry, sat_n, tty, out, rep);
     free(sub);
   }
   free(sorted); free(seg); free(grp); free(lab); free(vo);
@@ -3083,6 +3209,7 @@ int main_mrmp_build(int argc, char *argv[]) {
                    (void)main_mrmp_build(2, h); return 1; }
   const char *pos[2] = {NULL, NULL}, *nodedir = NULL, *setname = "root";
   int npos = 0, force = 0, dry = 0, have_fixed = 0, flat = 0;
+  uint32_t sat_n = 0;                /* --satellite-n; 0 = no satellites */
   uint64_t fixed_seg = 0; uint32_t max_depth = 16;
   double split_q = 0.0;              /* only if --split-quantile asks for it */
   ms_select_opt_t sel; ms_select_defaults(&sel);
@@ -3134,6 +3261,19 @@ int main_mrmp_build(int argc, char *argv[]) {
         "                          node's filter is a conjunction that starves\n"
         "                          exactly the pairs needing help; the same\n"
         "                          contrast over 2 classes is far thicker.\n"
+        "    --satellite-n N       after the tree, give every CHILDLESS node a\n"
+        "          soft child per class pair among its N nearest, by CpG-weighted\n"
+        "          Hamming over that node's own binstrings -- reference only, no\n"
+        "          test cell. Each is a fresh 2-class MRMP appended to the same\n"
+        "          chain as <node>@<a>__<b>, so one command emits the whole\n"
+        "          artifact. OVERLAPPING, not a partition: a class joins as many\n"
+        "          pairs as name it, because a partition cannot cover a close\n"
+        "          pair straddling a block boundary -- that left 73.5%% of the\n"
+        "          remaining error uncovered when it was tried. The point is the\n"
+        "          CpG budget: a node's pattern must hold across every class it\n"
+        "          carries, so a wide node's filter is a conjunction that starves\n"
+        "          the pairs needing help most, and the same contrast rebuilt\n"
+        "          over 2 classes is far thicker. Default 0, off.\n"
         "    --name NAME           the set's name. For a satellite this MUST\n"
         "                          be <node>@<tag> -- root.0.0@MGE-Sst_PAL-Inh\n"
         "                          -- naming the node whose booster it joins.\n"
@@ -3191,6 +3331,8 @@ int main_mrmp_build(int argc, char *argv[]) {
      * became the tree builder, kept because a flat global is still the right
      * artifact for deconvolution and for a reference too shallow to split. */
     else if (!strcmp(a, "--flat")) flat = 1;
+    else if (!strcmp(a, "--satellite-n") && i + 1 < argc)
+      sat_n = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
       sel.depth_floor_frac = (float)atof(argv[++i]);
     else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
@@ -3284,7 +3426,7 @@ int main_mrmp_build(int argc, char *argv[]) {
             " of each node's own pairs%s\n", g_cmd, nstore, split_q,
             dry ? " (dry run)" : "");
   tree_build(store, slab, voff, idx, nstore, &gh, &sel, setname, split_q,
-             fixed_seg, have_fixed, 0, max_depth, dry,
+             fixed_seg, have_fixed, 0, max_depth, dry, sat_n,
              rep == stderr ? tty : 0, &t, rep);
   if (dry) return 0;
 
