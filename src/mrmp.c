@@ -2996,90 +2996,6 @@ static double *sat_hamming(const void *img) {
   return d;
 }
 
-
-/* The node's selected CpG rows, read back out of its own block. */
-static uint64_t *sat_selected(const void *img, uint64_t *n_sel) {
-  const mrmp_header_t *h = (const mrmp_header_t *)img;
-  const int rle = (h->flags & MRMP_FLAG_MEMB_RLE) != 0;
-  const uint64_t nb = rle ? h->membership_bytes : h->n_cpg * sizeof(uint32_t);
-  uint32_t *memb = memb_decompress((const uint8_t *)img + h->membership_offset,
-                                   nb, h->n_cpg, h->n_candidates,
-                                   (h->flags & MRMP_FLAG_MEMB_BGZF) != 0,
-                                   "satellite membership");
-  uint64_t m = 0;
-  for (uint64_t i = 0; i < h->n_cpg; ++i)
-    if (memb[i] != MRMP_PNA_MEMBERSHIP) ++m;
-  uint64_t *sel = xcalloc(m ? m : 1, sizeof(uint64_t), "selected rows");
-  uint64_t j = 0;
-  for (uint64_t i = 0; i < h->n_cpg; ++i)
-    if (memb[i] != MRMP_PNA_MEMBERSHIP) sel[j++] = i;
-  free(memb);
-  *n_sel = m;
-  return sel;
-}
-
-/* Distance with the SAMPLING FLOOR SUBTRACTED, over the node's selected CpGs:
- *
- *     p_k  = (M + 1/2) / (cov + 1)          rate a future single cell reads 1
- *     se   = sqrt(p_a(1-p_a)/cov_a + p_b(1-p_b)/cov_b)
- *     d    = mean over CpGs of  max(0, |p_a - p_b| - z*se)
- *
- * The binary form asks only whether the two thresholded calls DIFFER, so a
- * class with 20 cells reading 0.55 contributes a full unit of difference
- * against a deep class at 0.95 -- a difference it cannot actually support.
- * Subtracting the floor discounts exactly that, and it is the subtraction that
- * matters rather than the shrinkage: |p_a - p_b| alone still ranked thin pairs
- * FARTHER apart (thin/deep mean 1.12 against binary's 1.14), while one SE
- * flips it to 0.93. On the mouse 33-class leaf ANP/ASC moves from rank 172 of
- * 528 to 57, and closest-5 selection then covers 97% of the errors the
- * no-satellite tree makes against the binary rule's 90%, using 122 pairs
- * rather than 135.
- *
- * Costs one extra read of each class's record at the selected rows only --
- * 115,278 of 21.9M for that leaf, so ~15 MB and no genome pass. */
-static double *sat_shrunk(const char *store, uint32_t ns, char *const *label,
-                          const int64_t *voff, const void *img, double z) {
-  uint64_t nsel = 0;
-  uint64_t *sel = sat_selected(img, &nsel);
-  double *d = xcalloc((size_t)ns * ns, sizeof(double), "sat shrunk");
-  if (!nsel) { free(sel); return d; }
-
-  float *P = xcalloc((size_t)ns * nsel, sizeof(float), "class rates");
-  float *V = xcalloc((size_t)ns * nsel, sizeof(float), "rate variance");
-  cfile_t cf = open_cfile((char *)store);
-  for (uint32_t k = 0; k < ns; ++k) {
-    cdata_t c = read_record_at(&cf, voff[k], label[k]);
-    for (uint64_t j = 0; j < nsel; ++j) {
-      uint64_t mu = f3_get_mu(&c, sel[j]);
-      double cov = mu ? (double)MU2cov(mu) : 0.0;
-      double m1 = mu ? (double)(mu >> 32) : 0.0;
-      /* an absent class contributes p = 1/2 with maximal variance, which the
-       * floor then wipes out -- silence must not read as difference */
-      double pk = (m1 + 0.5) / (cov + 1.0);
-      P[(size_t)k * nsel + j] = (float)pk;
-      V[(size_t)k * nsel + j] = (float)(pk * (1.0 - pk) / (cov > 0.0 ? cov : 1.0));
-    }
-    free_cdata(&c);
-  }
-  bgzf_close(cf.fh);
-
-  for (uint32_t a = 0; a < ns; ++a)
-    for (uint32_t b = a + 1; b < ns; ++b) {
-      const float *pa = P + (size_t)a * nsel, *pb = P + (size_t)b * nsel;
-      const float *va = V + (size_t)a * nsel, *vb = V + (size_t)b * nsel;
-      double acc = 0.0;
-      for (uint64_t j = 0; j < nsel; ++j) {
-        double gap = pa[j] - pb[j];
-        if (gap < 0) gap = -gap;
-        double lo = gap - z * sqrt((double)va[j] + (double)vb[j]);
-        if (lo > 0) acc += lo;
-      }
-      d[(size_t)a * ns + b] = d[(size_t)b * ns + a] = acc / (double)nsel;
-    }
-  free(P); free(V); free(sel);
-  return d;
-}
-
 /* A class name as it appears in a set NAME: the '@' separator and the dotted
  * parent rule both have to survive it, so anything else becomes '_'. */
 static void sat_tag(const char *in, char *out, size_t cap) {
@@ -3110,12 +3026,10 @@ static uint32_t tree_satellites(const char *store, const subset_block_t *sb,
                                 uint32_t n, char *const *lab,
                                 const int64_t *vo, const mrmp_header_t *gh,
                                 const ms_select_opt_t *sel, const char *name,
-                                uint32_t n_partner, double sat_z, int tty,
-                                treeout_t *out, FILE *rep) {
+                                uint32_t n_partner, int tty, treeout_t *out,
+                                FILE *rep) {
   if (n < 2 || !n_partner) return 0;
-  /* sat_z < 0 keeps the binary rule; >= 0 subtracts that many SE */
-  double *d = sat_z < 0.0 ? sat_hamming(sb->img)
-                          : sat_shrunk(store, n, lab, vo, sb->img, sat_z);
+  double *d = sat_hamming(sb->img);
   uint8_t *want = xcalloc((size_t)n * n, 1, "satellite pairs");
   uint32_t *ord = xcalloc(n, sizeof(uint32_t), "near order");
   for (uint32_t a = 0; a < n; ++a) {
@@ -3168,8 +3082,7 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
                        const ms_select_opt_t *sel, const char *name,
                        double split_q, uint64_t fixed_seg, int have_fixed,
                        uint32_t depth, uint32_t max_depth, int dry,
-                       uint32_t sat_n, double sat_z, int tty, treeout_t *out,
-                       FILE *rep) {
+                       uint32_t sat_n, int tty, treeout_t *out, FILE *rep) {
   char **lab = xcalloc(n, sizeof(char *), "node labels");
   int64_t *vo = xcalloc(n, sizeof(int64_t), "node offsets");
   for (uint32_t k = 0; k < n; ++k) { lab[k] = slab[idx[k]]; vo[k] = voff[idx[k]]; }
@@ -3190,8 +3103,8 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
             ind, name, n, commafmt_local(sb.n_pat, b1),
             commafmt_local(sb.n_kept, b2));
     if (!dry)
-      tree_satellites(store, &sb, n, lab, vo, gh, sel, name, sat_n, sat_z,
-                      tty, out, rep);
+      tree_satellites(store, &sb, n, lab, vo, gh, sel, name, sat_n, tty,
+                      out, rep);
     free(lab); free(vo); return;
   }
 
@@ -3260,8 +3173,8 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
      * ones its own evidence cannot separate, and a 2-class rebuild is where
      * the CpGs to separate them come from. */
     if (!dry)
-      tree_satellites(store, &sb, n, lab, vo, gh, sel, name, sat_n, sat_z,
-                      tty, out, rep);
+      tree_satellites(store, &sb, n, lab, vo, gh, sel, name, sat_n, tty,
+                      out, rep);
     free(sorted); free(seg); free(grp); free(lab); free(vo); return;
   }
   for (uint32_t g = 0; g < ng; ++g) {
@@ -3284,8 +3197,7 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
     if (dry) { free(sub); continue; }
     char cn[256]; snprintf(cn, sizeof cn, "%s.%u", name, g);
     tree_build(store, slab, voff, sub, m, gh, sel, cn, split_q, fixed_seg,
-               have_fixed, depth + 1, max_depth, dry, sat_n, sat_z, tty,
-               out, rep);
+               have_fixed, depth + 1, max_depth, dry, sat_n, tty, out, rep);
     free(sub);
   }
   free(sorted); free(seg); free(grp); free(lab); free(vo);
@@ -3298,7 +3210,6 @@ int main_mrmp_build(int argc, char *argv[]) {
   const char *pos[2] = {NULL, NULL}, *nodedir = NULL, *setname = "root";
   int npos = 0, force = 0, dry = 0, have_fixed = 0, flat = 0;
   uint32_t sat_n = 0;                /* --satellite-n; 0 = no satellites */
-  double sat_z = -1.0;                /* --satellite-metric; <0 = binary */
   uint64_t fixed_seg = 0; uint32_t max_depth = 16;
   double split_q = 0.0;              /* only if --split-quantile asks for it */
   ms_select_opt_t sel; ms_select_defaults(&sel);
@@ -3363,17 +3274,6 @@ int main_mrmp_build(int argc, char *argv[]) {
         "          carries, so a wide node's filter is a conjunction that starves\n"
         "          the pairs needing help most, and the same contrast rebuilt\n"
         "          over 2 classes is far thicker. Default 0, off.\n"
-        "    --satellite-metric M  how nearness is measured for --satellite-n.\n"
-        "          binary (DEFAULT) counts the CpG mass on which the two classes'\n"
-        "          thresholded calls differ. shrunk (= z of 1) instead sums\n"
-        "          max(0, |pa-pb| - z*SE) over the node's selected CpGs, where p\n"
-        "          is the rate a future single cell reads 1 and SE its sampling\n"
-        "          error -- so a difference a THIN class cannot support counts\n"
-        "          for nothing. Binary lets 20 cells reading 0.55 stand as a\n"
-        "          full unit of difference against a deep class at 0.95, which\n"
-        "          makes thin classes look FARTHER from everything and hides\n"
-        "          their real confusions. Any z >= 0 also works. Costs one extra\n"
-        "          read of each class at the selected rows only.\n"
         "    --name NAME           the set's name. For a satellite this MUST\n"
         "                          be <node>@<tag> -- root.0.0@MGE-Sst_PAL-Inh\n"
         "                          -- naming the node whose booster it joins.\n"
@@ -3433,16 +3333,6 @@ int main_mrmp_build(int argc, char *argv[]) {
     else if (!strcmp(a, "--flat")) flat = 1;
     else if (!strcmp(a, "--satellite-n") && i + 1 < argc)
       sat_n = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--satellite-metric") && i + 1 < argc) {
-      const char *v = argv[++i];
-      if (!strcmp(v, "binary")) sat_z = -1.0;
-      else if (!strcmp(v, "shrunk")) sat_z = 1.0;
-      else {
-        char *end = NULL; sat_z = strtod(v, &end);
-        if (!end || *end || sat_z < 0.0)
-          die("--satellite-metric wants binary, shrunk, or a z >= 0", v);
-      }
-    }
     else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
       sel.depth_floor_frac = (float)atof(argv[++i]);
     else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
@@ -3536,7 +3426,7 @@ int main_mrmp_build(int argc, char *argv[]) {
             " of each node's own pairs%s\n", g_cmd, nstore, split_q,
             dry ? " (dry run)" : "");
   tree_build(store, slab, voff, idx, nstore, &gh, &sel, setname, split_q,
-             fixed_seg, have_fixed, 0, max_depth, dry, sat_n, sat_z,
+             fixed_seg, have_fixed, 0, max_depth, dry, sat_n,
              rep == stderr ? tty : 0, &t, rep);
   if (dry) return 0;
 
