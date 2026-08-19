@@ -108,19 +108,19 @@ integer *index, *mode;
 
     /* Local variables */
     extern doublereal diff_();
-    static integer iter;
-    static doublereal temp, wmax;
-    static integer i__, j, l;
-    static doublereal t, alpha, asave;
-    static integer itmax, izmax, nsetp;
+    integer iter;
+    doublereal temp, wmax;
+    integer i__, j, l;
+    doublereal t, alpha, asave;
+    integer itmax, izmax, nsetp;
     extern /* Subroutine */ int g1_();
-    static doublereal dummy, unorm, ztest, cc;
+    doublereal dummy, unorm, ztest, cc;
     extern /* Subroutine */ int h12_();
-    static integer ii, jj, ip;
-    static doublereal sm;
-    static integer iz, jz;
-    static doublereal up, ss;
-    static integer rtnkey, iz1, iz2, npp1;
+    integer ii, jj, ip;
+    doublereal sm;
+    integer iz, jz;
+    doublereal up, ss;
+    integer rtnkey, iz1, iz2, npp1;
 
     /* Fortran I/O blocks */
     /* The following line was commented out after the f2c translation */
@@ -509,7 +509,7 @@ doublereal *a, *b, *cterm, *sterm, *sig;
     /* double sqrt(), d_sign(); */
 
     /* Local variables */
-    static doublereal xr, yr;
+    doublereal xr, yr;
 
 
 /*     COMPUTE ORTHOGONAL ROTATION MATRIX.. */
@@ -610,12 +610,12 @@ integer *ice, *icv, *ncv;
     /* double sqrt(); */
 
     /* Local variables */
-    static integer incr;
-    static doublereal b;
-    static integer i__, j;
-    static doublereal clinv;
-    static integer i2, i3, i4;
-    static doublereal cl, sm;
+    integer incr;
+    doublereal b;
+    integer i__, j;
+    doublereal clinv;
+    integer i2, i3, i4;
+    doublereal cl, sm;
 
 /*     ------------------------------------------------------------------ 
 */
