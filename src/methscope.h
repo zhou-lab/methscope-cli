@@ -162,6 +162,10 @@ int main_predict(int argc, char *argv[]);
 int main_train(int argc, char *argv[]);
 int main_train_tree(int argc, char *argv[]);
 int main_deconv(int argc, char *argv[]);
+int main_deconv2_build_ref(int argc, char *argv[]);
+int main_deconv2(int argc, char *argv[]);
+int main_deconv3_build_ref(int argc, char *argv[]);
+int main_deconv3(int argc, char *argv[]);
 /* Embed labels from a meta.tsv into a raw booster (used by `bundle -l`). */
 void ms_annotate_booster(const char *in_ubj, const char *meta_tsv, const char *out_ubj);
 int main_upscale(int argc, char *argv[]);
@@ -176,6 +180,7 @@ int main_upscale_set_units(int argc, char *argv[]);
 int main_upscale_trunk_train(int argc, char *argv[]);
 int main_bundle(int argc, char *argv[]);
 int main_unbundle(int argc, char *argv[]);
+int main_relabel(int argc, char *argv[]);
 
 #define METHSCOPE_VERSION "0.5"
 

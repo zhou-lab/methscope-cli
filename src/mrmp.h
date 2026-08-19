@@ -186,6 +186,7 @@ int main_mrmp_build_thin(int argc, char *argv[]);
  * a class appears in as many sets as it has close neighbours. */
 int main_mrmp_build_neighbor(int argc, char *argv[]);
 int main_mrmp_export(int argc, char *argv[]);
+int main_mrmp_planes(int argc, char *argv[]);
 int main_mrmp_inspect(int argc, char *argv[]);
 /* Pool sets into one chain AND cut to a shared column budget. Concatenation
  * alone is just `cat`; this is the step that selects. */

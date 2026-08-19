@@ -19,7 +19,16 @@
 #include "cdata.h"
 
 void ms_select_defaults(ms_select_opt_t *o) {
-  o->qfilter_lo = 0.25f; o->qfilter_hi = 0.60f;
+  /* 0.30/0.70, not the old 0.25/0.60: ONE admission rule across the classifier
+   * and the deconvolver, so a CpG is admissible or not for the reference as a
+   * whole rather than per consumer. The tree command list already passed
+   * 0.30,0.70 explicitly, so this only moves the default to meet it. On the
+   * 200-mixture Tier-1 set the two filters are a wash for deconvolution --
+   * 0.30/0.70 wins at 2^18 (0.105 vs 0.114 TVD) and loses at 2^20 (0.043 vs
+   * 0.034), rung-averaged 0.101 vs 0.098 -- which is far too small a gap to
+   * justify the two halves of the pipeline disagreeing about what a
+   * segregating CpG is. */
+  o->qfilter_lo = 0.30f; o->qfilter_hi = 0.70f;
   /* 20000, not the old 1000: the budget is per BINSTRING, and a 2-class
    * satellite holds two of them, so 1000 capped a focused set at 2,000 CpGs --
    * far below what the same pair carries once its filter is a 2-way rather

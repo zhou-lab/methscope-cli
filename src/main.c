@@ -43,6 +43,7 @@ static int usage(void) {
   CMD("mrmp-build-thin","One 2-class satellite per (thin class, nearest partner)");
   CMD("mrmp-build-neighbor","One 2-class satellite per (class, near neighbour)");
   CMD("mrmp-export",  "Emit the runtime .cm mask (and pattern / count tables)");
+  CMD("mrmp-planes",  "Persist per-class q-filter bits so a subset rebuilds cheaply");
   CMD("mrmp-pool",    "Combine MRMP sets and cut them to a shared column budget");
 
   fprintf(stderr, "\n%sClassification%s %s(cell type, sex, ...)%s\n", B, R, D, R);
@@ -53,6 +54,10 @@ static int usage(void) {
   fprintf(stderr, "\n%sDeconvolution%s\n", B, R);
   CMD("deconv",         "Estimate cell-type proportions (NNLS) from a mixture");
   CMD("deconv-build-ref","Build a .refx deconvolution reference (--matrix for the raw matrix)");
+  CMD("deconv2-build-ref","Pack a cell-type store into the uint16 .msdref deconv2 reference");
+  CMD("deconv2","Deconvolve against a .msdref, rebuilding the MRMP on measured CpGs");
+  CMD("deconv3-build-ref","Build the global+satellite pooled reference in one pass");
+  CMD("deconv3","Deconvolve against a .d3ref");
 
   fprintf(stderr, "\n%sUpscaling%s %s(imputation)%s\n", B, R, D, R);
   CMD("upscale",      "Impute genome-wide CpG methylation from a sparse methylome");
@@ -62,6 +67,7 @@ static int usage(void) {
 
   fprintf(stderr, "\n%sModel bundles%s\n", B, R);
   CMD("bundle",       "Wrap a model + its MRMP into a self-contained bundle");
+  CMD("relabel",      "Rename a class label in a trained model, no retraining");
   CMD("unbundle",     "Unpack a bundle into its model, MRMP, and outcpg mask");
   CMD("inspect",      "Describe any artifact: bundle, .mrmp, .msui, .msur, or .msfm");
 
@@ -83,6 +89,10 @@ int main(int argc, char *argv[]) {
   }
   if (strcmp(argv[1], "classify")    == 0) return main_predict(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-featurize") == 0) return main_classify_featurize(argc - 1, argv + 1);
+  if (strcmp(argv[1], "deconv2-build-ref") == 0) return main_deconv2_build_ref(argc - 1, argv + 1);
+  if (strcmp(argv[1], "deconv3-build-ref") == 0) return main_deconv3_build_ref(argc - 1, argv + 1);
+  if (strcmp(argv[1], "deconv3") == 0) return main_deconv3(argc - 1, argv + 1);
+  if (strcmp(argv[1], "deconv2") == 0) return main_deconv2(argc - 1, argv + 1);
   if (strcmp(argv[1], "deconv-build-ref") == 0) return main_build_reference(argc - 1, argv + 1);
   if (strcmp(argv[1], "matrix")     == 0) {   /* renamed 2026-07; alias kept */
     fprintf(stderr, "[methscope] 'matrix' was renamed to 'build-reference'\n");
@@ -121,11 +131,13 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "mrmp-build-neighbor") == 0) return main_mrmp_build_neighbor(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-tree")    == 0) return main_mrmp_build(argc - 1, argv + 1);  /* old name */
   if (strcmp(argv[1], "mrmp-export")  == 0) return main_mrmp_export(argc - 1, argv + 1);
+  if (strcmp(argv[1], "mrmp-planes")  == 0) return main_mrmp_planes(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-pool")    == 0) return main_mrmp_pool(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-train-tree") == 0) return main_train_tree(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-train")      == 0) return main_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "inspect")    == 0) return main_inspect(argc - 1, argv + 1);
   if (strcmp(argv[1], "bundle")     == 0) return main_bundle(argc - 1, argv + 1);
+  if (strcmp(argv[1], "relabel")    == 0) return main_relabel(argc - 1, argv + 1);
   if (strcmp(argv[1], "unbundle")   == 0) return main_unbundle(argc - 1, argv + 1);
 
   fprintf(stderr, "[methscope] unrecognized command '%s'\n", argv[1]);
