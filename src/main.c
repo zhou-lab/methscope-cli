@@ -56,8 +56,6 @@ static int usage(void) {
   CMD("deconv-build-ref","Build a .refx deconvolution reference (--matrix for the raw matrix)");
   CMD("deconv2-build-ref","Pack a cell-type store into the uint16 .msdref deconv2 reference");
   CMD("deconv2","Deconvolve against a .msdref, rebuilding the MRMP on measured CpGs");
-  CMD("deconv3-build-ref","Build the global+satellite pooled reference in one pass");
-  CMD("deconv3","Deconvolve against a .d3ref");
 
   fprintf(stderr, "\n%sUpscaling%s %s(imputation)%s\n", B, R, D, R);
   CMD("upscale",      "Impute genome-wide CpG methylation from a sparse methylome");
@@ -90,8 +88,6 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "classify")    == 0) return main_predict(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-featurize") == 0) return main_classify_featurize(argc - 1, argv + 1);
   if (strcmp(argv[1], "deconv2-build-ref") == 0) return main_deconv2_build_ref(argc - 1, argv + 1);
-  if (strcmp(argv[1], "deconv3-build-ref") == 0) return main_deconv3_build_ref(argc - 1, argv + 1);
-  if (strcmp(argv[1], "deconv3") == 0) return main_deconv3(argc - 1, argv + 1);
   if (strcmp(argv[1], "deconv2") == 0) return main_deconv2(argc - 1, argv + 1);
   if (strcmp(argv[1], "deconv-build-ref") == 0) return main_build_reference(argc - 1, argv + 1);
   if (strcmp(argv[1], "matrix")     == 0) {   /* renamed 2026-07; alias kept */
