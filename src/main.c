@@ -87,10 +87,6 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "classify-featurize") == 0) return main_classify_featurize(argc - 1, argv + 1);
   if (strcmp(argv[1], "deconv-build-ref") == 0) return main_deconv_build_ref(argc - 1, argv + 1);
   if (strcmp(argv[1], "deconv") == 0) return main_deconv(argc - 1, argv + 1);
-  if (strcmp(argv[1], "matrix")     == 0) {   /* renamed 2026-07; alias kept */
-    fprintf(stderr, "[methscope] 'matrix' was renamed to 'build-reference'\n");
-    return main_build_reference(argc - 1, argv + 1);
-  }
   if (strcmp(argv[1], "upscale")    == 0) return main_upscale(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-train") == 0) return main_upscale_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-featurize") == 0) return main_upscale_prepare(argc - 1, argv + 1);

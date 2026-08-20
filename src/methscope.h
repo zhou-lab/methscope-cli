@@ -156,7 +156,6 @@ void ms_viomodel_free(viomodel_t *vm);
 void ms_help(FILE *out, const char *text);
 
 /* subcommand entry points */
-int main_build_reference(int argc, char *argv[]); /* CLI `build-reference` (was `matrix`) */
 int main_inspect(int argc, char *argv[]);
 int main_predict(int argc, char *argv[]);
 int main_train(int argc, char *argv[]);
