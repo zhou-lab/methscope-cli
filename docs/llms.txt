@@ -66,8 +66,6 @@ These are the mistakes that are not visible in the usage strings.
 ## Commands
 
   mrmp-build        Build the MRMP routing tree (--flat for one flat set)
-  mrmp-build-thin   One 2-class satellite per (thin class, nearest partner)
-  mrmp-build-neighbor One 2-class satellite per (class, near neighbour)
   mrmp-export       Emit the runtime .cm mask (and pattern / count tables)
   mrmp-pool         Combine MRMP sets and cut them to a shared column budget
   classify          Classify a methylome -> labels + confidence

@@ -1449,7 +1449,7 @@ int main_mrmp_pool(int argc, char *argv[]) {
         "DIFFERENT stores, as long as they share a row space. Nothing here\n"
         "distinguishes a global from a satellite.\n\n"
         "Each input is a CHAIN of one or more sets and expands into all of\n"
-        "them under their own names, so a mrmp-build-thin output competes for\n"
+        "them under their own names, so a satellite-bearing chain competes for\n"
         "slots as the many 2-class sets it is, not as one blob. A set carries\n"
         "its name in its own block (mrmp-build --name), so pooling needs no\n"
         "NAME: prefix and cannot mislabel anything.\n\n"
@@ -1482,9 +1482,10 @@ int main_mrmp_pool(int argc, char *argv[]) {
   }
   if (!out || argc - i < 1) die("need -o OUT and at least one IN.mrmp", NULL);
 
-  /* Every input is a chain of one or more sets and expands into all of them. That is what makes the four-command workflow
-   * close: mrmp-build-thin emits ONE file holding many 2-class sets, and pooling
-   * has to see them as the separate competitors they are, not as one blob.
+  /* Every input is a chain of one or more sets and expands into all of them.
+   * That is what makes the four-command workflow close: one `mrmp-build
+   * --satellite-n` emits ONE file holding many 2-class sets, and pooling has to
+   * see them as the separate competitors they are, not as one blob.
    * Expanded blocks keep the container's own set names -- those came from the
    * generator that knows what each set is, and are what makes `inspect`'s pooled
    * table readable. So the input count is not the set count. */
@@ -1669,7 +1670,7 @@ int main_mrmp_pool(int argc, char *argv[]) {
   return 0;
 }
 
-/* ---------------- mrmp-build-thin --------------------------------------- */
+/* ---------------- subset-block builder (shared) -------------------------- */
 
 /* One 2-class satellite per (thin class, partner). A class is thin because it
  * LACKS THE CELLS to define a pattern, not because it resembles anything, so
@@ -1944,392 +1945,15 @@ static void build_subset_block(const char *store, uint32_t ns,
   out->n_pat = n_cand; out->n_kept = n_cpg - pna_cpg;
 }
 
-/* Length of a record name minus the `-R<digits>` replicate suffix the sampled
- * featurizer appends (`ASC-R1`). Matching on that key rather than on record
- * POSITION is the one place this differs from the Python driver, which indexed
- * the matrix by the class's line number in classes.txt -- correct only while
- * the .msfm rows and the store records happen to be in the same order. */
-static size_t class_key_len(const char *name) {
-  size_t n = strlen(name), i = n;
-  while (i > 0 && name[i - 1] >= '0' && name[i - 1] <= '9') --i;
-  if (i < n && i >= 2 && name[i - 1] == 'R' && name[i - 2] == '-') return i - 2;
-  return n;
-}
-
-static uint32_t msfm_row_of(char *const *rec_names, uint32_t n_rec,
-                            const char *cls) {
-  size_t n = strlen(cls);
-  for (uint32_t r = 0; r < n_rec; ++r) {
-    const char *nm = rec_names[r];
-    size_t k = class_key_len(nm);
-    if (k == n && !memcmp(nm, cls, n)) return r;   /* first replicate wins */
-  }
-  return UINT32_MAX;
-}
-
-/* Projection distance: mean |v - w| over the pattern-average vectors, on the
- * columns both classes actually have. The u16 codes are differenced directly
- * and scaled once at the end, which is the same number as differencing betas. */
-static double proj_dist(const uint16_t *beta, uint32_t stride,
-                        uint32_t ra, uint32_t rb,
-                        uint32_t K, uint32_t *n_shared) {
-  const uint16_t *va = beta + (uint64_t)ra * stride;
-  const uint16_t *vb = beta + (uint64_t)rb * stride;
-  double s = 0; uint32_t m = 0;
-  for (uint32_t j = 0; j < K; ++j) {
-    if (va[j] == MSFM_NA || vb[j] == MSFM_NA) continue;
-    s += fabs((double)va[j] - (double)vb[j]);
-    ++m;
-  }
-  *n_shared = m;
-  return m ? s / (double)m / 65534.0 : 1.0 / 0.0;
-}
-
-typedef struct { double d; const char *name; uint32_t k; } cand_t;
-static int cand_cmp(const void *a, const void *b) {
-  const cand_t *x = a, *y = b;
-  if (x->d < y->d) return -1;
-  if (x->d > y->d) return 1;
-  return strcmp(x->name, y->name);          /* ties resolve by name, not by luck */
-}
-
-/* `<generator>_<a>_<b>` -- e.g. thin_ANP_ASC, neighbor_IT-L5_IT-L6.
+/* Progress spinner for the per-node MRMP builds.
  *
- * The generator is spelled out because the name is the only place it survives:
- * a set is a set, and nothing downstream distinguishes them, so "which
- * generator proposed this" is readable in a pooled `inspect` table or nowhere.
- * It was `th_`/`nb_` to match the Python driver's names; that mattered only
- * while runs were being compared across the two implementations.
- *
- * Class labels go in VERBATIM rather than lowercased with '-' stripped. `IT-L5`
- * is what the label actually is, and `itl5` was a second decoding step for a
- * reader. None of the vocabulary contains '_', so the separator stays
- * unambiguous. The name also becomes a .cm record name and the `Pna.<set>`
- * column name, so it avoids '.' (already the Pna separator) and ':'. */
-static char *pair_set_name(const char *prefix, const char *a, const char *b) {
-  size_t n = strlen(prefix) + strlen(a) + strlen(b) + 2;
-  char *s = xcalloc(n, 1, "set name");
-  snprintf(s, n, "%s%s_%s", prefix, a, b);
-  return s;
-}
-
-int main_mrmp_build_thin(int argc, char *argv[]) {
-  g_cmd = "mrmp-build-thin";
-  /* No arguments at all is a question, not an error: print the help rather
-   * than a one-line complaint that tells the reader to go ask for it. */
-  if (argc == 1) { char *h[2]; h[0] = argv[0]; h[1] = (char *)"-h";
-                   (void)main_mrmp_build_thin(2, h); return 1; }
-  const char *pos[3] = {NULL, NULL, NULL};
-  int npos = 0, force = 0;
-  uint32_t n_partner = 3, proj_top = 6000;
-  ms_select_opt_t sel; ms_select_defaults(&sel);
-  sel.depth_floor_frac = 1.0f;   /* satellites turn the RELATIVE floor on */
-  sel.quiet = 1;                 /* one line per pair, printed by this command */
-  for (int i = 1; i < argc; ++i) {
-    const char *a = argv[i];
-    if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
-      ms_help(stderr,
-        "Usage: methscope mrmp-build-thin [options] STORE.cg GLOBAL.mrmp OUT.mrmp\n\n"
-        "  One 2-class satellite per (thin class, partner) pair, written as one\n"
-        "  chain. Thin classes are derived as (store labels -\n"
-        "  GLOBAL.mrmp labels). A class is thin because it LACKS THE CELLS to\n"
-        "  define a pattern, not because it resembles anything -- no distance\n"
-        "  metric finds ANP/ASC (196th of 820 by weighted Hamming, correctly,\n"
-        "  since their confident evidence really does separate), yet 52% of\n"
-        "  held-out ANP cells were called ASC. This generator and\n"
-        "  mrmp-build-neighbor therefore find different things and neither\n"
-        "  subsumes the other.\n\n"
-        "  Binstring resolution (mincov, beta threshold, ambiguity, majority\n"
-        "  fold) is read from GLOBAL.mrmp's header rather than re-declared here:\n"
-        "  a satellite resolved on a different rule than the global it\n"
-        "  supplements would put two incompatible pattern definitions in one\n"
-        "  pooled feature vector.\n\n"
-        "  The partner search needs the reference featurized against\n"
-        "  GLOBAL.mrmp, and does that itself. It used to be a required\n"
-        "  --ref-msfm argument; nothing checked that the matrix given had been\n"
-        "  built against the global given beside it, and a mismatched pair chose\n"
-        "  partners in the wrong feature space silently. None of the\n"
-        "  featurizer's options were free choices here either -- it must be this\n"
-        "  reference, this global, every pattern, native coverage -- so there was\n"
-        "  nothing for a caller to decide.\n\n"
-        "  --n-partner N             (default 3)\n"
-        "        Nearest classes each thin class is given a satellite against,\n"
-        "        found by projection of reference pattern-average vectors. Each\n"
-        "        partner gets its OWN 2-class satellite; they are NOT combined\n"
-        "        into one N-class set. A joint binstring forces the thin class\n"
-        "        to oppose every neighbour at once, and that joint requirement\n"
-        "        is where its noise concentrates: held-out separation 0.228 for\n"
-        "        a 3-class set against 0.317 and 0.487 for the two pairs it\n"
-        "        replaced. Partner candidates include other THIN classes, not\n"
-        "        only deep ones -- PC loses more held-out cells to VLMC-Pia\n"
-        "        (17.1%) than to its deep partner VLMC (15.9%). A thin-thin pair\n"
-        "        is reachable from both ends and is emitted once.\n\n"
-        "  --projection-top N        (default 6000)\n"
-        "        Patterns of --ref-msfm the distance is taken over. The\n"
-        "        background is excluded: it is the\n"
-        "        unpatterned background, so it carries no contrast between two\n"
-        "        classes and only dilutes the mean.\n\n"
-        "  --qfilter LO,HI           (default 0.30,0.70)\n"
-        "        As mrmp-build. Forms the FLOOR leg of the selection rule.\n\n"
-        "        Tighter gate forming the SELF-SIZING leg: every CpG passing it\n"
-        "        is kept regardless of budget, so a pair with genuinely clean\n"
-        "        positions contributes all of them. Its yield is steeply\n"
-        "        depth-dependent by design -- the same pair gave 6,453 CpGs at\n"
-        "        reference depth 7.9 and 204 at 4.54 -- which is exactly why it\n"
-        "        cannot be used alone.\n\n"
-        "  --delta-mean-top N        (default 20000)\n"
-        "        PER BINSTRING, keep the N highest by delta_mean among --qfilter\n"
-        "        passers. The floor leg: it guarantees a pattern is never\n"
-        "        delta_mean (mean gap between the expected-1 and expected-0\n"
-        "        groups) rather than delta_beta (worst-case margin) because\n"
-        "        --qfilter already bounds the worst case; the two scored within\n"
-        "        0.007 of each other on held-out margin. Identical for 2\n"
-        "        classes, diverging only at 3+.\n\n"
-        "        The rule in force unless --qfilter or\n"
-        "        --delta-mean-top is given, any of which reverts to the legacy\n"
-        "        rule above. Keep every CpG\n"
-        "        whose P(01) is at least X. That is the probability a future\n"
-        "        single-cell draw reads 0 in the expected-0 group AND 1 in the\n"
-        "        expected-1 group, worst class on each side:\n"
-        "            P(01) = min_1classes (M+0.5)/(M+U+1)\n"
-        "                  * min_0classes (U+0.5)/(M+U+1)\n"
-        "        At one read per cell per CpG a class's beta IS the fraction of\n"
-        "        its cells reading 1, so this is a Jeffreys-shrunk cell count.\n"
-        "        It unifies depth (shallow CpGs shrink toward 0.5 and cannot\n"
-        "        outrank deep ones) with contrast (the product peaks when the\n"
-        "        sides sit at opposite ends), and it selects on the BINARY\n"
-        "        objective the classifier trains on rather than the continuous\n"
-        "        one delta_mean measures. 0.25 is chance; 1.0 is a CpG that is\n"
-        "        deeply covered and clean on both sides. 0.60 is the default\n"
-        "        because it scored best of 0.50/0.60/0.70/0.75 on the mouse\n"
-        "        cohort (0.9561 native vs 0.9516 for the legacy rule) -- though\n"
-        "        the spread across all four was 0.0028, within noise, so the\n"
-        "        real argument is that one threshold replaces five knobs.\n\n"
-        "        Optional cap: keep at most the N highest by P(01) PER\n"
-        "        BINSTRING. A budget, not part of the rule -- a threshold on a\n"
-        "        calibrated probability already says which CpGs are usable, so\n"
-        "        a cap on top of it silently drops CpGs that met the bar. Use\n"
-        "        only to bound artifact size.\n\n"
-        "  --include-all-0           keep patterns no class calls 1\n"
-        "  --include-all-1           keep patterns no class calls 0\n"
-        "        Folded into PNA by default: a binstring with no class on one\n"
-        "        side separates nothing, whatever its CpG count.\n\n"        "  --depth-floor-frac F      (default 1.0)\n"
-        "        Per class, require coverage of at least F times THAT CLASS'S\n"
-        "        OWN genome-wide mean depth. Relative, so one number serves\n"
-        "        classes spanning depth 5 to 112. Purely relative is too harsh\n"
-        "        when many classes must agree at once, hence the cap below.\n\n"
-        "  --depth-floor-cap N       (default 20)\n"
-        "        Cap the above at N cells: \"enough to be reliable, never more\n"
-        "        than the class can give\". At depth 20 a beta carries SE ~ 0.11,\n"
-        "        and a class at 112 gains nothing from being asked for 112.\n\n"
-        "  --force                   overwrite an existing output\n\n"
-        "  Output is a chain of 2-class sets, which mrmp-pool takes\n"
-        "  directly (it expands a chain into its sets). Sets are sets: a\n"
-        "  satellite here is the same object mrmp-build writes, and nothing\n"
-        "  downstream distinguishes them.\n");
-      return 0;
-    }
-    else if (!strcmp(a, "--n-partner") && i + 1 < argc)
-      n_partner = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--projection-top") && i + 1 < argc)
-      proj_top = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc) {
-      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a);
-    }
-    else if (!strcmp(a, "--include-all-0")) sel.inc_all0 = 1;
-    else if (!strcmp(a, "--include-all-1")) sel.inc_all1 = 1;
-    else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
-      sel.depth_floor_frac = (float)atof(argv[++i]);
-    else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
-      sel.depth_floor_cap = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--qfilter") && i + 1 < argc) {
-      const char *v = argv[++i]; char *end = NULL;
-      float lo = strtof(v, &end);
-      if (!end || *end != ',') die("wants LO,HI", a);
-      float hi = strtof(end + 1, NULL);
-      if (!(lo >= 0.0f && hi <= 1.0f && lo < hi)) die("needs 0 <= LO < HI <= 1", a);
-
-      else        { sel.qfilter_lo = lo; sel.qfilter_hi = hi; }
-                      /* asking for the old rule selects it */
-    }
-    else if (!strcmp(a, "--force")) force = 1;
-    else if (a[0] == '-') die("unrecognized or incomplete option", a);
-    else if (npos < 3) pos[npos++] = a;
-    else die("too many arguments", a);
-  }
-  if (npos != 3) die("need STORE.cg GLOBAL.mrmp OUT.mrmp (see -h)", NULL);
-  const char *store = pos[0], *global = pos[1], *out = pos[2];
-  if (!n_partner) die("--n-partner must be at least 1", NULL);
-  if (!force) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
-
-  uint32_t nstore = 0; int64_t *voff = NULL;
-  char **slab = read_store_index(store, &nstore, &voff);
-
-  {  /* the global must be ONE set: its binstring columns define the classes */
-    ms_mrmpset_t *gs = ms_mrmpset_open(global);
-    uint32_t gn = gs->n_sets;
-    ms_mrmpset_free(gs);
-    if (gn != 1) die("GLOBAL must hold exactly one set", global);
-  }
-  mrmp_reader_t gr; mrmp_open(&gr, global);
-  const mrmp_header_t gh = *gr.h;
-  const uint32_t ngl = gr.h->n_samples;
-  char **glab = xcalloc(ngl, sizeof(char *), "global labels");
-  for (uint32_t s = 0; s < ngl; ++s) {
-    size_t n = strlen(gr.names[s]) + 1;
-    glab[s] = xcalloc(n, 1, "global label");
-    memcpy(glab[s], gr.names[s], n);
-  }
-  mrmp_close(&gr);
-
-  /* Thin == in the store but not in the global. The artifact carries its own
-   * sample names, so the thin/deep split is recoverable from it and needs no
-   * side file and no depth threshold repeated here. */
-  uint8_t *is_thin = xcalloc(nstore, 1, "thin flags");
-  uint32_t n_thin = 0;
-  for (uint32_t s = 0; s < nstore; ++s) {
-    int in_g = 0;
-    for (uint32_t g = 0; g < ngl && !in_g; ++g) in_g = !strcmp(slab[s], glab[g]);
-    if (!in_g) { is_thin[s] = 1; ++n_thin; }
-  }
-  for (uint32_t g = 0; g < ngl; ++g) {
-    int in_s = 0;
-    for (uint32_t s = 0; s < nstore && !in_s; ++s) in_s = !strcmp(slab[s], glab[g]);
-    if (!in_s)
-      fprintf(stderr, "[methscope] %s: warning: global class '%s' is not in the "
-              "store -- the two were built from different references\n",
-              g_cmd, glab[g]);
-  }
-  if (!n_thin)
-    die("every store class is already in the global; no thin class to cover", global);
-
-  /* Featurize the reference against THIS global, here, rather than taking a
-   * .msfm as an argument.
-   *
-   * It used to be required, on the grounds that featurizing is a command in its
-   * own right and one matrix could serve several callers. There are no several
-   * callers -- mrmp-build-thin was the only consumer -- and nothing verified
-   * that the matrix passed had been built against the global passed beside it.
-   * A mismatched pair computed the projection in the wrong feature space and
-   * chose the wrong partners, silently. Building it here makes that
-   * unrepresentable rather than merely documented.
-   *
-   * None of the featurizer's knobs are free choices either: it must be this
-   * reference against this global, every pattern, native coverage, unbinarised.
-   * So there was nothing for a caller to decide. */
-  char tpl[] = "/tmp/methscope_thinref_XXXXXX.cm";
-  int tfd = mkstemps(tpl, 3);
-  if (tfd < 0) die("cannot create a temporary mask", tpl);
-  close(tfd);
-  ms_mrmp_write_mask(global, tpl, "Pna", UINT32_MAX);
-  uint16_t *beta = NULL; uint32_t *levels = NULL; char **rec = NULL;
-  uint32_t n_rec = 0, ncol = 0, native = 0;
-  /* binarize_feat = 0: the projection is a distance between pattern-average
-   * vectors, so it needs continuous betas. Binarising here would collapse the
-   * partner distances onto a handful of values. */
-  ms_msfm_build_sampled(store, tpl, 0, &native, 1, 0, 0, 1, 1, 0,
-                        &beta, &levels, &rec, &n_rec, &ncol);
-  unlink(tpl);
-  free(levels);
-  /* last column is the PNA background: no contrast, so it only dilutes a mean */
-  uint32_t np = ncol ? ncol - 1 : 0;
-  const uint32_t K = proj_top < np ? proj_top : np;
-  uint32_t *row = xcalloc(nstore, sizeof(uint32_t), "msfm rows");
-  for (uint32_t s = 0; s < nstore; ++s) {
-    row[s] = msfm_row_of(rec, n_rec, slab[s]);
-    if (row[s] == UINT32_MAX)
-      die("the reference has no record for store class", slab[s]);
-  }
-
-  /* Partner search, then dedup: a thin-thin pair is reachable from both ends. */
-  const int tty = isatty(STDERR_FILENO);
-  uint32_t cap = n_thin * n_partner, npair = 0;
-  uint32_t *pa = xcalloc(cap, sizeof(uint32_t), "pair a");
-  uint32_t *pb = xcalloc(cap, sizeof(uint32_t), "pair b");
-  double   *pd = xcalloc(cap, sizeof(double), "pair distance");
-  cand_t *cand = xcalloc(nstore, sizeof(cand_t), "partner candidates");
-  for (uint32_t s = 0; s < nstore; ++s) {
-    if (!is_thin[s]) continue;
-    uint32_t nc = 0;
-    for (uint32_t c = 0; c < nstore; ++c) {
-      if (c == s) continue;
-      uint32_t m; double d = proj_dist(beta, ncol, row[s], row[c], K, &m);
-      if (m <= 50) continue;    /* too few shared columns for a mean to mean much */
-      cand[nc].d = d; cand[nc].name = slab[c]; cand[nc].k = c; ++nc;
-    }
-    qsort(cand, nc, sizeof(cand_t), cand_cmp);
-    uint32_t take = n_partner < nc ? n_partner : nc;
-    if (!take)
-      fprintf(stderr, "[methscope] %s: warning: no partner for thin class '%s'\n",
-              g_cmd, slab[s]);
-    for (uint32_t j = 0; j < take; ++j) {
-      uint32_t b = cand[j].k, dup = 0;
-      for (uint32_t q = 0; q < npair && !dup; ++q)
-        dup = (pa[q] == s && pb[q] == b) || (pa[q] == b && pb[q] == s);
-      if (dup) continue;
-      pa[npair] = s; pb[npair] = b; pd[npair] = cand[j].d; ++npair;
-    }
-  }
-  free(cand); free(row); free(beta);
-  for (uint32_t r = 0; r < n_rec; ++r) free(rec[r]);
-  free(rec);
-  if (!npair) die("no (thin, partner) pair survived the projection", global);
-
-  fprintf(stderr, "[methscope] %s: %u thin of %u store classes, %u satellites\n",
-          g_cmd, n_thin, nstore, npair);
-
-  char **name = xcalloc(npair, sizeof(char *), "set names");
-  void **blk  = xcalloc(npair, sizeof(void *), "blocks");
-  uint64_t *len = xcalloc(npair, sizeof(uint64_t), "block sizes");
-  for (uint32_t q = 0; q < npair; ++q) {
-    /* members in STORE order, so a set's digit order is the store's */
-    uint32_t k0 = pa[q] < pb[q] ? pa[q] : pb[q];
-    uint32_t k1 = pa[q] < pb[q] ? pb[q] : pa[q];
-    char *lab[2] = {slab[k0], slab[k1]};
-    int64_t vo[2] = {voff[k0], voff[k1]};
-    name[q] = pair_set_name("thin_", slab[pa[q]], slab[pb[q]]);
-    subset_block_t sb;
-    { char m[192];
-      snprintf(m, sizeof m, "[%2u/%u] %s + %s", q + 1, npair,
-               slab[pa[q]], slab[pb[q]]);
-      spin_start(tty, m); }
-    build_subset_block(store, 2, lab, vo, &gh, &sel, name[q], &sb);
-    spin_stop();
-    blk[q] = sb.img; len[q] = sb.bytes;
-    /* Same shape as mrmp-build-neighbor: the set name repeats both class names
-     * and the CpG count repeated across lines. Terminal repaints; a log keeps
-     * one line per pair, since a log is read after the fact. */
-    { char pair[72], cb[32];
-      snprintf(pair, sizeof pair, "%s + %s", slab[pa[q]], slab[pb[q]]);
-      fprintf(stderr, "%s  [%2u/%u] %-46s proj %.3f  %" PRIu64 " pat  %s CpGs%s",
-              tty ? "\r\033[K" : "", q + 1, npair, pair, pd[q],
-              sb.n_pat, commafmt_local(sb.n_kept, cb), tty ? "" : "\n");
-      if (tty) fflush(stderr); }
-  }
-  if (tty) fprintf(stderr, "\r\033[K");     /* clear the progress line */
-  ms_mrmp_chain_write(out, npair, (const void *const *)blk, len);
-  fprintf(stderr, "[methscope] %s: %u sets -> %s\n", g_cmd, npair, out);
-
-  for (uint32_t q = 0; q < npair; ++q) { free(blk[q]); free(name[q]); }
-  free(name); free(blk); free(len); free(pa); free(pb); free(pd);
-  for (uint32_t s = 0; s < nstore; ++s) free(slab[s]);
-  for (uint32_t g = 0; g < ngl; ++g) free(glab[g]);
-  free(slab); free(glab); free(voff); free(is_thin);
-  return 0;
-}
-
-/* ---------------- mrmp-build-neighbor ----------------------------------- */
-
-
-/* Progress spinner for the satellite builders.
- *
- * Each pair's build_subset_block() is a multi-second streaming pass with no
+ * Each build_subset_block() is a multi-second streaming pass with no
  * natural progress to report from inside, so a static line looks hung. A
  * detached thread repaints a frame while the caller works; the caller then
  * overwrites the whole line with the finished result.
  *
  * Terminal only. Redirected, this writes nothing at all -- \r animation in a
- * SLURM log is noise, and the builders print one line per pair there instead. */
+ * SLURM log is noise, and mrmp-build prints one line per node there instead. */
 static volatile sig_atomic_t g_spin_run;
 static char g_spin_msg[192];
 
@@ -2363,340 +1987,6 @@ static void spin_stop(void) {
   pthread_join(g_spin_th, NULL);
   g_spin_on = 0;
   fprintf(stderr, "\r\033[K");
-}
-
-/* Satellites for classes that GENUINELY RESEMBLE each other, so their evidence
- * overlaps and a distance metric finds them. Complementary to mrmp-build-thin,
- * which addresses a measurement artifact rather than a real similarity, and
- * neither subsumes the other.
- *
- * Deliberately NOT a port of the WPGMA partition this replaces. WPGMA
- * PARTITIONS -- each class lands in at most one block, and the 3-class cap then
- * truncates -- and that is where three quarters of the remaining error was
- * living: measured on the 10-fold arm, 73.5% of it sat in confusion pairs no
- * satellite covered, because IT-L4 and MGE-Pvalb fell out of the vocabulary
- * entirely and PAL-Inh <-> LSX-Inh was split across two blocks. Overlapping
- * closest-N pairs fix that by construction: a class appears in as many sets as
- * it has close neighbours, and every pair that matters is reachable.
- *
- * Pairs rather than blocks is also the better trade per column. Pattern count
- * grows as 2^N-2 while covered error does not -- a 2-class set spent 2 pooled
- * columns for 7.4% of error where a 6-class one spent 62 for 4.6%.
- *
- * --n-partner, measured on a 34-class mouse global against the share of
- * deep-deep confusion error the proposed pairs cover:
- *   N=1  28 sets 37.8%   N=2  55 sets 59.6%   N=3  81 sets 68.0%
- *   N=4 105 sets 76.2%   N=5 130 sets 79.9%
- * against an 80.9% ceiling for the 85 worst pairs chosen with the confusion
- * matrix in hand. At ~2 pooled columns per set, N=5 puts a quarter of a 1,000
- * budget here. 3 is the default for the same reason it is in mrmp-build-thin,
- * not because 3 is special.
- *
- * --max-segregating, measured on a 33-class human global: 78 pairs ungated,
- * 39 at 20000, 10 at 10000, 6 at 5000, 4 at 1000. Bimodal -- a myeloid trio at
- * 300-366 and T.Cell.CD4/CD8 at 822, then a 5x gap to 4192 -- so 10000 keeps
- * that cluster plus the next tier and drops the two thirds the global already
- * resolves.
- *
- * KNOWN COST of that gate. A documented confusion can sit ABOVE it:
- * Enterocyte.(Colon) vs Enterocyte.(Small.Intest) is separated by 21,146 CpGs
- * and is still confused in practice (81.4% -> 71-72% under pooling), so it is
- * not proposed. Reference separation measures the evidence that EXISTS, not
- * whether a query's observed evidence resolves it -- the same lesson as the
- * mouse IT-L5/IT-L6 residual, which was within-class heterogeneity no
- * reference-side statistic could see. Raise N or pass 0 when that is wrong. */
-
-/* Distance between two class columns of the global: the CpG-weighted share of
- * DISAGREEMENTS among the CpGs where at least one of the two is called 0. A
- * small distance is a predicted confusion, since this is the evidence the
- * classifier scores with.
- *
- * Weighted by CpG count rather than counting patterns, because a pattern
- * carrying 10,000 CpGs and one carrying 3 are not equal evidence -- the global's
- * counts are violently skewed (median 17).
- *
- * The denominator is the point, and plain Hamming (dividing by ALL weight) is
- * wrong here. Every class is called 1 on 81-93% of weighted CpGs, so the
- * disagreement weight collapses to roughly (1 - frac1(a)) + (1 - frac1(b)) and
- * the nearest neighbour of EVERY class comes out as whichever class is called 1
- * most often -- PAL-Inh for 19 of 34 classes, with ASC-PAL-Inh ranked nearest of
- * all. That is the binstring-centroid artifact that got the A-score partner gate
- * dropped, reproduced exactly. Normalising by the union of the ZERO calls
- * removes the marginal-frequency term, because a class that is almost never 0
- * lands far from everything instead of close to it.
- *
- * Measured against the 10-fold confusion matrix, over the pairs each metric
- * proposes at --n-partner 3: same share of deep-deep error covered (68.0% vs
- * 67.4%) from 81 sets rather than 85, and a less degenerate partner list. A
- * disagreement implies at least one 0, so num <= den and the result is in [0,1]. */
-/* CpGs that STRICTLY segregate a from b: one class called 0 where the other is
- * called 1, weighted by the pattern's CpG count. Absolute evidence, in CpGs,
- * rather than the share column_dist() returns.
- *
- * Not the same as that function's numerator, which counts any disagreement and
- * so includes '2' -- the ambiguous call, where the reference could not decide.
- * A CpG one class cannot call is not evidence separating it from anything.
- *
- * The point of having both: rank partners by column_dist(), which is normalised
- * and therefore free of the binstring-centroid artifact, but GATE on this,
- * because "how many CpGs actually tell these two apart" is in units a cell can
- * be measured against. At ~7% coverage a pair separated by 5,000 CpGs gives a
- * cell ~350 observations; one separated by 200 gives it ~14. A share cannot say
- * that, and its scale does not transfer between references. */
-static double segregating_cpgs(const mrmp_top_t *t, uint32_t a, uint32_t b) {
-  double n = 0;
-  for (uint32_t p = 0; p < t->n_patterns; ++p) {
-    const char ca = t->binstring[p][a], cb = t->binstring[p][b];
-    if ((ca == '0' && cb == '1') || (ca == '1' && cb == '0'))
-      n += (double)t->count[p];
-  }
-  return n;
-}
-
-static double column_dist(const mrmp_top_t *t, uint32_t a, uint32_t b) {
-  double num = 0, den = 0;
-  for (uint32_t p = 0; p < t->n_patterns; ++p) {
-    const char ca = t->binstring[p][a], cb = t->binstring[p][b];
-    const double w = (double)t->count[p];
-    if (ca != cb) num += w;
-    if (ca == '0' || cb == '0') den += w;
-  }
-  return den > 0 ? num / den : 1.0 / 0.0;
-}
-
-int main_mrmp_build_neighbor(int argc, char *argv[]) {
-  g_cmd = "mrmp-build-neighbor";
-  /* No arguments at all is a question, not an error: print the help rather
-   * than a one-line complaint that tells the reader to go ask for it. */
-  if (argc == 1) { char *h[2]; h[0] = argv[0]; h[1] = (char *)"-h";
-                   (void)main_mrmp_build_neighbor(2, h); return 1; }
-  const char *pos[3] = {NULL, NULL, NULL};
-  int npos = 0, force = 0, dry_run = 0;
-  uint32_t n_partner = 3, dist_top = 6000;
-  double max_dist = 0.0;                  /* 0 == no distance gate; see help */
-  double max_seg = 10000.0;               /* 0 disables; see help for the default */
-  ms_select_opt_t sel; ms_select_defaults(&sel);
-  sel.depth_floor_frac = 1.0f;   /* satellites turn the RELATIVE floor on */
-  sel.quiet = 1;                 /* one line per pair, printed by this command */
-  for (int i = 1; i < argc; ++i) {
-    const char *a = argv[i];
-    if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
-      ms_help(stderr,
-        "Usage: methscope mrmp-build-neighbor [options] STORE.cg GLOBAL.mrmp OUT.mrmp\n\n"
-        "  One 2-class satellite per (class, near neighbour) pair, over the\n"
-        "  classes GLOBAL.mrmp already covers, written as one chain. Finds\n"
-        "  classes that genuinely resemble each other; mrmp-build-thin covers\n"
-        "  classes too shallow to define a pattern at all. Overlapping pairs,\n"
-        "  not a partition -- a class appears in as many sets as it has close\n"
-        "  neighbours. Needs no reference featurization: the distance is a pure\n"
-        "  artifact computation over GLOBAL.mrmp.\n\n"
-        "  --max-segregating N       (default 10000; 0 disables) THE control\n"
-        "        Skip a partner the global already separates by more than N\n"
-        "        CpGs, so satellites are spent where the global is weak. Counts\n"
-        "        CpGs one class calls 0 where the other calls 1, weighted by\n"
-        "        pattern CpG count. Absolute evidence, unlike --max-dist.\n"
-        "        A confusion CAN sit above the gate -- see the note in the\n"
-        "        source; use --dry-run to find the scale on your reference.\n\n"
-        "  --max-dist D              (default 0 = no gate)\n"
-        "        Skip a partner farther than D by the normalised distance.\n\n"
-        "  --dist-top K              (default 6000)\n"
-        "        Patterns of GLOBAL.mrmp the distance is taken over,\n"
-        "        highest CpG count first.\n\n"
-        "  --dry-run                 list the proposed pairs and exit\n"
-        "  --force                   overwrite an existing output\n\n"
-        "  --n-partner N             (default 3) COMPATIBILITY\n"
-        "        A cap on partners per class, kept for the ungated case. With\n"
-        "        --max-segregating on it is nearly inert -- on a 33-class human\n"
-        "        global it saturates at 2 (8/10/10/10 sets for N=1/2/3/32),\n"
-        "        because the gate has already removed the far partners N used to\n"
-        "        exclude. Ungated it still dominates (26/78/134 for N=1/3/5), so\n"
-        "        it stays as the backstop for --max-segregating 0.\n\n"
-        "  --include-all-0           keep patterns no class calls 1\n"
-        "  --include-all-1           keep patterns no class calls 0\n"
-        "        Folded into PNA by default: a binstring with no class on one\n"
-        "        side separates nothing, whatever its CpG count.\n\n"        "  Per-CpG selection (shared with mrmp-build-thin):\n"
-        "  --qfilter LO,HI           legacy rule; giving it selects the legacy\n"
-        "  --delta-mean-top N        legacy per-binstring rank\n"
-        "  --depth-floor-frac F      (default 1.0) relative to each class mean\n"
-        "  --depth-floor-cap N       (default 20) cap on the above\n\n"
-        "  Output is a chain of 2-class sets, which mrmp-pool takes directly.\n");
-      return 0;
-    }
-    else if (!strcmp(a, "--n-partner") && i + 1 < argc)
-      n_partner = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--dist-top") && i + 1 < argc)
-      dist_top = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--max-dist") && i + 1 < argc) max_dist = atof(argv[++i]);
-    else if (!strcmp(a, "--max-segregating") && i + 1 < argc)
-      max_seg = atof(argv[++i]);
-    else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc) {
-      sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a);
-    }
-    else if (!strcmp(a, "--include-all-0")) sel.inc_all0 = 1;
-    else if (!strcmp(a, "--include-all-1")) sel.inc_all1 = 1;
-    else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
-      sel.depth_floor_frac = (float)atof(argv[++i]);
-    else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
-      sel.depth_floor_cap = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--qfilter") && i + 1 < argc) {
-      const char *v = argv[++i]; char *end = NULL;
-      float lo = strtof(v, &end);
-      if (!end || *end != ',') die("wants LO,HI", a);
-      float hi = strtof(end + 1, NULL);
-      if (!(lo >= 0.0f && hi <= 1.0f && lo < hi)) die("needs 0 <= LO < HI <= 1", a);
-
-      else        { sel.qfilter_lo = lo; sel.qfilter_hi = hi; }
-                      /* asking for the old rule selects it */
-    }
-    else if (!strcmp(a, "--dry-run")) dry_run = 1;
-    else if (!strcmp(a, "--force")) force = 1;
-    else if (a[0] == '-') die("unrecognized or incomplete option", a);
-    else if (npos < 3) pos[npos++] = a;
-    else die("too many arguments", a);
-  }
-  if (npos != 3) die("need STORE.cg GLOBAL.mrmp OUT.mrmp (see -h)", NULL);
-  const char *store = pos[0], *global = pos[1], *out = pos[2];
-  if (!n_partner) die("--n-partner must be at least 1", NULL);
-  if (!force && !dry_run) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
-
-  uint32_t nstore = 0; int64_t *voff = NULL;
-  char **slab = read_store_index(store, &nstore, &voff);
-
-  {  /* the global must be ONE set: its binstring columns define the classes */
-    ms_mrmpset_t *gs = ms_mrmpset_open(global);
-    uint32_t gn = gs->n_sets;
-    ms_mrmpset_free(gs);
-    if (gn != 1) die("GLOBAL must hold exactly one set", global);
-  }
-  mrmp_reader_t gr; mrmp_open(&gr, global);
-  const mrmp_header_t gh = *gr.h;
-  mrmp_close(&gr);
-
-  /* The binstring columns ARE the input: labels, per-pattern calls and CpG
-   * counts all come out of the global, so no store pass and no .msfm. */
-  mrmp_top_t *t = ms_mrmp_top_read(global, dist_top);
-  const uint32_t ngl = t->n_samples;
-  if (ngl < 2) die("global has fewer than two classes; no pair to build", global);
-
-  /* Each global class must be findable in the store, since that is where the
-   * pair is actually built from. */
-  uint32_t *srow = xcalloc(ngl, sizeof(uint32_t), "store rows");
-  for (uint32_t g = 0; g < ngl; ++g) {
-    uint32_t s = 0;
-    for (; s < nstore && strcmp(slab[s], t->labels[g]); ++s) {}
-    if (s == nstore)
-      die("global class is not in the store -- the two were built from "
-          "different references", t->labels[g]);
-    srow[g] = s;
-  }
-
-  /* Closest-N per class, then dedup: a pair is reachable from both ends. */
-  const int tty = isatty(STDERR_FILENO);
-  uint32_t cap = ngl * n_partner, npair = 0;
-  uint32_t *pa = xcalloc(cap, sizeof(uint32_t), "pair a");
-  uint32_t *pb = xcalloc(cap, sizeof(uint32_t), "pair b");
-  double   *pd = xcalloc(cap, sizeof(double), "pair distance");
-  cand_t *cand = xcalloc(ngl, sizeof(cand_t), "partner candidates");
-  uint32_t n_isolated = 0;
-  for (uint32_t a = 0; a < ngl; ++a) {
-    uint32_t nc = 0;
-    for (uint32_t b = 0; b < ngl; ++b) {
-      if (b == a) continue;
-      double d = column_dist(t, a, b);
-      if (max_dist > 0.0 && d > max_dist) continue;
-      /* The global already resolves this pair, so a satellite would spend two
-       * pooled columns re-separating what is separated. */
-      if (max_seg > 0.0 && segregating_cpgs(t, a, b) > max_seg) continue;
-      cand[nc].d = d; cand[nc].name = t->labels[b]; cand[nc].k = b; ++nc;
-    }
-    qsort(cand, nc, sizeof(cand_t), cand_cmp);
-    uint32_t take = n_partner < nc ? n_partner : nc;
-    /* Counted, not warned per class. With --max-segregating on, most classes
-     * having no partner is the GATE WORKING -- the global already separates
-     * them -- not 21 problems. The old line also named --max-dist regardless of
-     * which gate actually excluded them. */
-    if (!take) ++n_isolated;
-    for (uint32_t j = 0; j < take; ++j) {
-      uint32_t b = cand[j].k, dup = 0;
-      for (uint32_t q = 0; q < npair && !dup; ++q)
-        dup = (pa[q] == a && pb[q] == b) || (pa[q] == b && pb[q] == a);
-      if (dup) continue;
-      pa[npair] = a; pb[npair] = b; pd[npair] = cand[j].d; ++npair;
-    }
-  }
-  free(cand);
-  if (!npair) die("no (class, neighbour) pair survived --max-dist", global);
-
-  fprintf(stderr, "[methscope] %s: %u classes, %u satellites\n",
-          g_cmd, ngl, npair);
-  if (n_isolated) {
-    char gates[128] = "";
-    if (max_seg > 0.0 && max_dist > 0.0)
-      snprintf(gates, sizeof gates, "--max-segregating %.0f / --max-dist %g",
-               max_seg, max_dist);
-    else if (max_seg > 0.0)
-      snprintf(gates, sizeof gates, "--max-segregating %.0f", max_seg);
-    else snprintf(gates, sizeof gates, "--max-dist %g", max_dist);
-    fprintf(stderr, "  %u class(es) got no partner (%s); the global already "
-            "separates them\n", n_isolated, gates);
-  }
-
-  if (dry_run) {
-    printf("#set\tclass_a\tclass_b\tdistance\tsegregating_cpgs\n");
-    for (uint32_t q = 0; q < npair; ++q) {
-      char *nm = pair_set_name("neighbor_", t->labels[pa[q]], t->labels[pb[q]]);
-      printf("%s\t%s\t%s\t%.6f\t%.0f\n", nm, t->labels[pa[q]], t->labels[pb[q]],
-             pd[q], segregating_cpgs(t, pa[q], pb[q]));
-      free(nm);
-    }
-    free(pa); free(pb); free(pd);
-    for (uint32_t s = 0; s < nstore; ++s) free(slab[s]);
-    free(slab); free(voff); free(srow);
-    ms_mrmp_top_free(t);
-    return 0;
-  }
-
-  char **name = xcalloc(npair, sizeof(char *), "set names");
-  void **blk  = xcalloc(npair, sizeof(void *), "blocks");
-  uint64_t *len = xcalloc(npair, sizeof(uint64_t), "block sizes");
-  for (uint32_t q = 0; q < npair; ++q) {
-    /* members in STORE order, so a set's digit order is the store's */
-    uint32_t s0 = srow[pa[q]], s1 = srow[pb[q]];
-    uint32_t k0 = s0 < s1 ? s0 : s1, k1 = s0 < s1 ? s1 : s0;
-    char *lab[2] = {slab[k0], slab[k1]};
-    int64_t vo[2] = {voff[k0], voff[k1]};
-    name[q] = pair_set_name("neighbor_", t->labels[pa[q]], t->labels[pb[q]]);
-    subset_block_t sb;
-    { char m[192];
-      snprintf(m, sizeof m, "[%2u/%u] %s + %s", q + 1, npair,
-               t->labels[pa[q]], t->labels[pb[q]]);
-      spin_start(tty, m); }
-    build_subset_block(store, 2, lab, vo, &gh, &sel, name[q], &sb);
-    spin_stop();
-    blk[q] = sb.img; len[q] = sb.bytes;
-    /* The pair is the thing to see. The set name repeats both class names, and
-     * the CpG count repeated three ways across three lines; one line each. */
-    /* A terminal gets one repainting line; a redirected log keeps one line per
-     * pair, because a log is read after the fact and \r would leave a single
-     * mangled line where the record should be. */
-    { char pair[72], cb[32];
-      snprintf(pair, sizeof pair, "%s + %s", t->labels[pa[q]], t->labels[pb[q]]);
-      fprintf(stderr, "%s  [%2u/%u] %-46s d %.3f  seg %-7.0f %" PRIu64 " pat  %s CpGs%s",
-              tty ? "\r\033[K" : "", q + 1, npair, pair, pd[q],
-              segregating_cpgs(t, pa[q], pb[q]), sb.n_pat,
-              commafmt_local(sb.n_kept, cb), tty ? "" : "\n");
-      if (tty) fflush(stderr); }
-  }
-  if (tty) fprintf(stderr, "\r\033[K");     /* clear the progress line */
-  ms_mrmp_chain_write(out, npair, (const void *const *)blk, len);
-  fprintf(stderr, "[methscope] %s: %u sets -> %s\n", g_cmd, npair, out);
-
-  for (uint32_t q = 0; q < npair; ++q) { free(blk[q]); free(name[q]); }
-  free(name); free(blk); free(len); free(pa); free(pb); free(pd);
-  for (uint32_t s = 0; s < nstore; ++s) free(slab[s]);
-  free(slab); free(voff); free(srow);
-  ms_mrmp_top_free(t);
-  return 0;
 }
 
 /* Thousands separators. inspect.c has its own; this one keeps mrmp.c's reports
@@ -2795,7 +2085,7 @@ int main_mrmpset_inspect(const char *path) {
 /* ----------------------------------------------------------------- mrmp-build
  *
  * One command builds EVERY node of a routing tree, each node an MRMP over its
- * own class subset. It replaces mrmp-build + mrmp-build-neighbor + mrmp-pool
+ * own class subset. It replaces the old build + satellite-build + pool chain
  * for this shape: the tree IS the set collection, and a node's children are the
  * groups its own patterns cannot tell apart.
  *
@@ -2850,10 +2140,9 @@ static void tree_push(treeout_t *t, void *img, uint64_t len, const char *name) {
  * out of its in-memory image -- the block is a standalone MRMPIDX1, so this is
  * the same walk ms_mrmp_top_read() does on a file, minus the file.
  *
- * seg[a*ns+b] sums the CpGs of patterns calling a '0' and b '1' or the reverse,
- * matching segregating_cpgs() in mrmp-build-neighbor exactly: a '2' (no call)
- * never counts, because a pattern that abstains on a class carries no evidence
- * about it. */
+ * seg[a*ns+b] sums the CpGs of patterns calling a '0' and b '1' or the reverse.
+ * A '2' (no call) never counts, because a pattern that abstains on a class
+ * carries no evidence about it. */
 static uint64_t *tree_pair_seg(const void *img) {
   const mrmp_header_t *h = (const mrmp_header_t *)img;
   const uint32_t ns = h->n_samples, nw = mrmp_key_words(ns);
@@ -3036,6 +2325,17 @@ static uint32_t tree_satellites(const char *store, const subset_block_t *sb,
    * genuinely different -- the same node's Dendritic/Macrophage/Monocyte
    * satellites carry 4,277-10,270 CpGs against the 3-class set's 5,798,
    * because dropping the third class admits CpGs its filter had spoiled. */
+  /* Overlapping closest-N pairs, not a partition of the node's classes. A
+   * partition puts each class in at most one block, and a cap on block size then
+   * truncates -- measured on a 10-fold mouse arm, three quarters of the residual
+   * error sat in confusion pairs no block covered, because two classes fell out
+   * of the vocabulary entirely and one pair was split across two blocks. Here a
+   * class appears in as many sets as it has close neighbours, so every pair that
+   * matters is reachable.
+   *
+   * Pairs also buy more per column: pattern count grows as 2^N-2 while covered
+   * error does not, and a 2-class set spent 2 pooled columns for 7.4% of error
+   * where a 6-class one spent 62 for 4.6%. */
   if (n < 3 || !n_partner) return 0;
   double *d = sat_hamming(sb->img);
   uint8_t *want = xcalloc((size_t)n * n, 1, "satellite pairs");
@@ -3412,9 +2712,9 @@ int main_mrmp_build(int argc, char *argv[]) {
   if (dry && !have_fixed && split_q <= 0.0) { have_fixed = 1; fixed_seg = 0; }
   if (flat) { have_fixed = 1; fixed_seg = UINT64_MAX; }   /* nothing can split */
   /* The floor stays OFF by default, including under --flat. It was briefly
-   * defaulted on here, because mrmp-build-neighbor ran it and --flat replaced
-   * that builder -- but measurement says the protection is band-specific, not
-   * builder-specific. At --qfilter 0.15,0.75 held-out PAL-Inh read 0.422 on a
+   * defaulted on here, because the standalone satellite builder that --flat
+   * replaced ran it -- but measurement says the protection is band-specific,
+   * not builder-specific. At --qfilter 0.15,0.75 held-out PAL-Inh read 0.422 on a
    * contrast its reference put at 0.043, and the floor was the right answer.
    * At 0.30,0.70 the same pair reads 0.080 against 0.078: the looser band
    * never selects the extreme, thinly-supported CpGs in the first place, so

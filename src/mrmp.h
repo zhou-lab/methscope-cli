@@ -180,11 +180,9 @@ static inline uint64_t mrmp_pattern_stride(uint32_t n_samples) {
 int main_mrmp_build(int argc, char *argv[]);
 /* One 2-class satellite per (thin class, partner), as one chain.
  * Thin == store labels minus the global's, so the split needs no side file. */
-int main_mrmp_build_thin(int argc, char *argv[]);
 /* One 2-class satellite per (class, near neighbour) over the classes the global
  * already covers, as one chain. Overlapping pairs, NOT a partition:
  * a class appears in as many sets as it has close neighbours. */
-int main_mrmp_build_neighbor(int argc, char *argv[]);
 int main_mrmp_export(int argc, char *argv[]);
 int main_mrmp_inspect(int argc, char *argv[]);
 /* Pool sets into one chain AND cut to a shared column budget. Concatenation
