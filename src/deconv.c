@@ -1548,8 +1548,22 @@ int main_deconv(int argc, char *argv[]) {
    * 500 that was briefly the default came from a sweep on the global-only fit
    * where it was worth 0.194 vs 0.195 -- noise -- before narrowing and
    * satellites existed. Dominance is real but wants a different instrument. */
-  uint64_t min_n = 5, dm_top = 0, rescue_below = 0;
-  double rescue_lo = 0.40, rescue_hi = 0.60, rescue_gap = 0.0;
+  uint64_t min_n = 5, dm_top = 0;
+  /* The rescue is ON by default. Without it a pair the panel cannot separate
+   * is decided by a handful of CpGs carrying most of the residual, and the fit
+   * buys a lower SSE by inventing an absent class -- the un-rescued rebuild is
+   * WORSE than the frozen-panel path it replaced at 2^16 (0.466 vs 0.200 on
+   * immune mixtures, 0.431 vs 0.359 on the 33-class set), and better than it
+   * everywhere once the rescue is on. Shipping it off would ship the worst
+   * configuration measured.
+   *
+   * 2000: a pair the panel separates by fewer than this many measured CpGs is
+   * treated as starved. 0.20: admit a CpG when the pair's betas differ by that
+   * much, whatever the band says about either one. Both were chosen on one
+   * record and then held up unchanged on the 33-class cohort, which they were
+   * never tuned against; --rescue-below 0 turns the whole thing off. */
+  uint64_t rescue_below = 2000;
+  double rescue_lo = 0.40, rescue_hi = 0.60, rescue_gap = 0.20;
   double rescue_floor = 0.15;
   unsigned long rescue_target = 0;
   /* 10, not 60: a gap read off a couple of reads is noise, but the sweep
@@ -1670,8 +1684,8 @@ int main_deconv(int argc, char *argv[]) {
 "                   pass over the kept rows.\n"
 "    --rescue-below N  a pair the rebuilt panel separates by fewer than N\n"
 "                   measured CpGs is WEAK; the panel is then rebuilt so that a\n"
-"                   CpG splitting a weak pair is admitted under a wider band\n"
-"                   for the other classes (default 0 = off). Those CpGs are\n"
+"                   CpG splitting a weak pair is admitted under a wider rule\n"
+"                   for the other classes (default 2000; 0 = off). Those CpGs are\n"
 "                   normally lost to a THIRD class sitting in the ambiguous\n"
 "                   band, not to any doubt about the pair itself: at 2^22\n"
 "                   T.Cell.CD4|T.Cell.CD8 holds 948 measured CpGs and a\n"
@@ -1682,7 +1696,7 @@ int main_deconv(int argc, char *argv[]) {
 "                   the solve uses -- two classes separate when their profile\n"
 "                   means differ, not when their digits do -- so a CpG at CD4\n"
 "                   0.10 / CD8 0.50 counts, where the band discards it for\n"
-"                   calling 0.50 no-call. Default 0 = use the band rule.\n"
+"                   calling 0.50 no-call. Default 0.20; 0 = use the band rule.\n"
 "    --rescue-target N  fit EACH weak pair its own gap threshold, loosening\n"
 "                   until it has N measured CpGs or the floor is hit (default\n"
 "                   0 = use the flat --rescue-gap). Pairs respond very\n"
