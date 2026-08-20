@@ -43,7 +43,6 @@ static int usage(void) {
   CMD("mrmp-build-thin","One 2-class satellite per (thin class, nearest partner)");
   CMD("mrmp-build-neighbor","One 2-class satellite per (class, near neighbour)");
   CMD("mrmp-export",  "Emit the runtime .cm mask (and pattern / count tables)");
-  CMD("mrmp-planes",  "Persist per-class q-filter bits so a subset rebuilds cheaply");
   CMD("mrmp-pool",    "Combine MRMP sets and cut them to a shared column budget");
 
   fprintf(stderr, "\n%sClassification%s %s(cell type, sex, ...)%s\n", B, R, D, R);
@@ -119,7 +118,6 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "mrmp-build-neighbor") == 0) return main_mrmp_build_neighbor(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-tree")    == 0) return main_mrmp_build(argc - 1, argv + 1);  /* old name */
   if (strcmp(argv[1], "mrmp-export")  == 0) return main_mrmp_export(argc - 1, argv + 1);
-  if (strcmp(argv[1], "mrmp-planes")  == 0) return main_mrmp_planes(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-pool")    == 0) return main_mrmp_pool(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-train-tree") == 0) return main_train_tree(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-train")      == 0) return main_train(argc - 1, argv + 1);
