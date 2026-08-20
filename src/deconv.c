@@ -79,9 +79,13 @@
 #define D2_MAGIC   "MSDREF1"
 #define D2_BETA_NA 0xFFFFu
 
+/* Set by whichever subcommand is running, so an error names the command the
+ * user typed rather than whichever one happens to own the helper. */
+static const char *d2_cmd = "deconv";
+
 static void d2die(const char *msg, const char *arg) {
-  if (arg) fprintf(stderr, "[methscope] deconv-build-ref: %s: %s\n", msg, arg);
-  else     fprintf(stderr, "[methscope] deconv-build-ref: %s\n", msg);
+  if (arg) fprintf(stderr, "[methscope] %s: %s: %s\n", d2_cmd, msg, arg);
+  else     fprintf(stderr, "[methscope] %s: %s\n", d2_cmd, msg);
   exit(1);
 }
 
@@ -134,6 +138,7 @@ static void put_u64(FILE *f, uint64_t v) { fwrite(&v, 8, 1, f); }
 static void put_f64(FILE *f, double v)   { fwrite(&v, 8, 1, f); }
 
 int main_deconv_build_ref(int argc, char *argv[]) {
+  d2_cmd = "deconv-build-ref";
   const char *out_path = NULL;
   double qlo = 0.30, qhi = 0.70, beta_thr = 0.5;
   uint32_t mincov = 1;
@@ -932,7 +937,7 @@ static uint32_t d2_scope(const d2ref_t *R, const double *x, const uint32_t *seg,
 typedef struct {
   d2q_t     Q;
   uint32_t *sel, *sel2, *seg, *seg2, *segu;
-  uint8_t  *inscope, *inscope2, *done, *weak;
+  uint8_t  *inscope, *inscope2, *weak;
   float    *gap_of;
   double   *x, *x2, *xf, *xadj;
 } d2ws_t;
@@ -947,7 +952,6 @@ static void d2ws_init(const d2ref_t *R, d2ws_t *w) {
   w->segu = d2alloc((size_t)R->n_class * R->n_class, sizeof(uint32_t), "segu");
   w->inscope  = d2alloc(R->n_class, 1, "scope");
   w->inscope2 = d2alloc(R->n_class, 1, "scope2");
-  w->done     = d2alloc((size_t)R->n_class * R->n_class, 1, "settled pairs");
   w->weak     = d2alloc((size_t)R->n_class * R->n_class, 1, "weak pairs");
   w->gap_of   = d2alloc((size_t)R->n_class * R->n_class, sizeof(float), "per-pair gaps");
   w->x    = d2alloc(R->n_class, sizeof(double), "proportions");
@@ -959,19 +963,19 @@ static void d2ws_init(const d2ref_t *R, d2ws_t *w) {
 static void d2ws_free(d2ws_t *w) {
   d2q_free(&w->Q);
   free(w->sel); free(w->sel2); free(w->seg); free(w->seg2); free(w->segu);
-  free(w->inscope); free(w->inscope2); free(w->done); free(w->weak);
+  free(w->inscope); free(w->inscope2); free(w->weak);
   free(w->gap_of);
   free(w->x); free(w->x2); free(w->xf); free(w->xadj);
 }
 
 typedef struct {
-  uint64_t min_n, dm_top, sat_dm_top, max_seg, rescue_below;
+  uint64_t min_n, dm_top, max_seg, rescue_below;
   double   rescue_lo, rescue_hi, rescue_gap, rescue_floor;
   uint64_t rescue_target;
   uint32_t rescue_depth;
-  double   mass_floor, sat_share;
+  double   mass_floor;
   uint32_t max_round;
-  int      adjudicate, narrow, verbose, sat_both, global_ref;
+  int      narrow, verbose, global_ref;
   double   wexp[16];
   int      n_wexp;
   const char *pair_spec, *panel_out, *scope_out, *force_scope, *eval_x;
@@ -1070,143 +1074,6 @@ static void d2_fit_gaps(const d2ref_t *R, const d2q_t *Q,
   free(hist);
 }
 
-/* Union a panel with a 2-class satellite for every pair that panel cannot
- * separate. The caller solves the union; the caller also keeps the BASE panel's
- * seg matrix for scope decisions, because once a satellite is in the panel the
- * pair no longer looks confusable and would lose its scope protection.
- *
- * Satellites belong in the FIRST fit, not only the last. The shipped legacy
- * reference bakes its neighbour sets into the one panel it ever uses, so its
- * only fit already sees the pair evidence. Adding them after convergence
- * instead means the global fit is made with ~18 CpGs separating CD4 from CD8,
- * the scope is then narrowed on the strength of that wrong fit, the error
- * hardens to an exact 0.000, and the satellite arrives to correct a panel that
- * was already rebuilt around the wrong answer. */
-static void d2_union_sats(const d2ref_t *R, const d2q_t *Q, const d2pan_t *P,
-                          const uint32_t *sel, uint32_t ns,
-                          const uint32_t *seg, uint64_t max_seg,
-                          uint64_t sat_dm, int verbose, int global_ref,
-                          double sat_share, uint32_t *seg_aug,
-                          d2pan_t *U, uint32_t *n_sat_out) {
-  memset(U, 0, sizeof *U);
-  U->nall = R->n_class; U->ns = ns; U->kw = 0; U->key = NULL;
-  uint32_t ucap = P->n_pat + 64;
-  U->n    = d2alloc(ucap, sizeof(uint64_t), "union n");
-  U->rn   = d2alloc(ucap, sizeof(uint64_t), "union rn");
-  U->wscale = d2alloc(ucap, sizeof(double), "union wscale");
-  for (uint32_t z = 0; z < ucap; ++z) U->wscale[z] = 1.0;
-  U->qsum = d2alloc(ucap, sizeof(double), "union qsum");
-  U->rsum = d2alloc((size_t)ucap * U->nall, sizeof(double), "union rsum");
-  for (uint32_t r = 0; r < P->n_pat; ++r) {
-    U->n[r] = P->n[r]; U->rn[r] = P->rn[r]; U->qsum[r] = P->qsum[r];
-    memcpy(U->rsum + (size_t)r * U->nall, P->rsum + (size_t)r * P->nall,
-           U->nall * sizeof(double));
-  }
-  U->n_pat = P->n_pat;
-
-  uint32_t n_sat = 0;
-  for (uint32_t i = 0; i < ns; ++i)
-    for (uint32_t j = i + 1; j < ns; ++j) {
-      uint32_t ga = sel[i], gb = sel[j];
-      if (seg[(size_t)ga * R->n_class + gb] > max_seg) continue;
-      uint32_t pr[2] = { ga, gb };
-      d2pan_t A; d2pan_build(R, Q, pr, 2, sat_dm, global_ref, NULL, 0, 0, NULL, 0, 0, &A);
-      if (U->n_pat + A.n_pat > ucap) {
-        ucap = (U->n_pat + A.n_pat) * 2;
-        U->n    = realloc(U->n, ucap * sizeof(uint64_t));
-        U->rn   = realloc(U->rn, ucap * sizeof(uint64_t));
-        U->wscale = realloc(U->wscale, ucap * sizeof(double));
-        for (uint32_t z = U->n_pat; z < ucap; ++z) U->wscale[z] = 1.0;
-        U->qsum = realloc(U->qsum, ucap * sizeof(double));
-        U->rsum = realloc(U->rsum, (size_t)ucap * U->nall * sizeof(double));
-        if (!U->n || !U->rn || !U->qsum || !U->rsum) d2die("out of memory", "union grow");
-      }
-      uint64_t acp = 0;
-      for (uint32_t r = 0; r < A.n_pat; ++r) {
-        uint32_t d = U->n_pat + r;
-        U->n[d] = A.n[r]; U->rn[d] = A.rn[r]; U->qsum[d] = A.qsum[r];
-        memcpy(U->rsum + (size_t)d * U->nall, A.rsum + (size_t)r * A.nall,
-               U->nall * sizeof(double));
-        acp += A.n[r];
-      }
-      U->n_pat += A.n_pat; ++n_sat;
-      /* Credit the satellite back into seg, so the SCOPE rule sees the evidence
-       * the SOLVE was actually given. Protection is meant to say "this query
-       * cannot separate them", not "the base panel cannot": once a pair has had
-       * its satellite -- Monocyte|Macrophage goes from ~48 CpGs to ~364 -- and
-       * one member still reads exactly 0.000, that zero is the strongest
-       * evidence available and the class should be droppable. Without this the
-       * pair stays protected forever and Macrophage/Dendritic.Cell ride along
-       * at 0.000 to the end, which is most of the scope's imprecision. */
-      if (seg_aug) {
-        seg_aug[(size_t)ga * R->n_class + gb] += (uint32_t)acp;
-        seg_aug[(size_t)gb * R->n_class + ga] += (uint32_t)acp;
-      }
-      if (verbose) {
-        fprintf(stderr, "[methscope]   satellite %s|%s: panel %u -> %u patterns"
-                        " / %llu CpGs\n", R->name[ga], R->name[gb],
-                seg[(size_t)ga * R->n_class + gb], A.n_pat,
-                (unsigned long long)acp);
-        /* What does the satellite say ON ITS OWN? Two patterns, two classes,
-         * so the 2x2 is exactly determined. It ignores the out-group, whose
-         * methylation lands on these CpGs too, so read it as the direction of
-         * the pair evidence rather than as a proportion. */
-        if (A.n_pat == 2) {
-          double m[2][2], y[2];
-          for (int r = 0; r < 2; ++r) {
-            double den = (double)(A.rn[r] ? A.rn[r] : A.n[r]);
-            m[r][0] = A.rsum[(size_t)r * A.nall + ga] / den;
-            m[r][1] = A.rsum[(size_t)r * A.nall + gb] / den;
-            y[r]    = A.qsum[r] / (double)A.n[r];
-            fprintf(stderr, "[methscope]     pat%d n=%llu q=%.3f %s=%.3f %s=%.3f\n",
-                    r, (unsigned long long)A.n[r], y[r],
-                    R->name[ga], m[r][0], R->name[gb], m[r][1]);
-          }
-          double det = m[0][0]*m[1][1] - m[0][1]*m[1][0];
-          if (det != 0) {
-            double fa = ( y[0]*m[1][1] - m[0][1]*y[1]) / det;
-            double fb = ( m[0][0]*y[1] - y[0]*m[1][0]) / det;
-            if (fa < 0) fa = 0; if (fb < 0) fb = 0;
-            double tot2 = fa + fb;
-            if (tot2 > 0)
-              fprintf(stderr, "[methscope]     -> pair-only ratio %s:%s = "
-                              "%.3f:%.3f\n", R->name[ga], R->name[gb],
-                      fa/tot2, fb/tot2);
-          }
-        }
-      }
-      d2pan_free(&A);
-    }
-  /* CAP THE SATELLITES' SHARE OF THE FIT.
-   *
-   * A satellite selects CpGs that split a from b with no constraint on anyone
-   * else, so in a mixture the out-group's methylation lands on exactly those
-   * CpGs and a pair-only reading attributes it to whichever member it
-   * resembles: on a pure-CD8 mixture the CD4|CD8 satellite still claims 40%
-   * CD4. The legacy reference carries the same contamination and is unharmed
-   * because its neighbour set is 0.14% of the panel -- a nudge inside a large
-   * fit. Ours reaches 3.3% once narrowing has shrunk the panel, ~23x the
-   * leverage, so the same bias propagates.
-   *
-   * Influence is linear in CpG count, so hold the satellites to a fixed share
-   * of it. sat_share <= 0 leaves them uncapped. */
-  if (sat_share > 0 && n_sat) {
-    uint64_t nb = 0, ns = 0;
-    for (uint32_t r = 0; r < P->n_pat; ++r) nb += P->n[r];
-    for (uint32_t r = P->n_pat; r < U->n_pat; ++r) ns += U->n[r];
-    if (ns && nb) {
-      double cur = (double)ns / (double)(nb + ns);
-      if (cur > sat_share) {
-        double k = sat_share * (double)nb / ((double)ns * (1.0 - sat_share));
-        for (uint32_t r = P->n_pat; r < U->n_pat; ++r) U->wscale[r] = k;
-        if (verbose)
-          fprintf(stderr, "[methscope]   satellite share %.1f%% -> %.1f%% "
-                          "(weight x%.3f)\n", 100*cur, 100*sat_share, k);
-      }
-    }
-  }
-  *n_sat_out = n_sat;
-}
 
 /* Deconvolve ONE record. Reads nothing global: the reference is const and
  * shared, everything mutable lives in `w`. */
@@ -1218,22 +1085,20 @@ static void d2_record(const d2ref_t *Rr, const d2opt_t *o, d2ws_t *w,
   const cdata_t c = *cc;
   uint32_t *sel = w->sel, *sel2 = w->sel2;
   uint32_t *seg = w->seg, *seg2 = w->seg2, *segu = w->segu;
-  uint8_t *inscope = w->inscope, *inscope2 = w->inscope2, *done = w->done;
+  uint8_t *inscope = w->inscope, *inscope2 = w->inscope2;
   uint8_t *weak = w->weak;
   float *gap_of = w->gap_of;
   double *x = w->x, *x2 = w->x2, *xf = w->xf, *xadj = w->xadj;
-  const uint64_t min_n = o->min_n, dm_top = o->dm_top,
-                 sat_dm_top = o->sat_dm_top, max_seg = o->max_seg,
+  const uint64_t min_n = o->min_n, dm_top = o->dm_top, max_seg = o->max_seg,
                  rescue_below = o->rescue_below;
   const double rescue_lo = o->rescue_lo, rescue_hi = o->rescue_hi,
                rescue_gap = o->rescue_gap;
   const uint32_t rescue_depth = o->rescue_depth;
   const uint64_t rescue_target = o->rescue_target;
   const double rescue_floor = o->rescue_floor;
-  const double mass_floor = o->mass_floor, sat_share = o->sat_share;
+  const double mass_floor = o->mass_floor;
   const uint32_t max_round = o->max_round;
-  const int adjudicate = o->adjudicate, narrow = o->narrow,
-            verbose = o->verbose, sat_both = o->sat_both,
+  const int narrow = o->narrow, verbose = o->verbose,
             global_ref = o->global_ref;
   const double *wexp = o->wexp; const int n_wexp = o->n_wexp;
   const char *pair_spec = o->pair_spec;
@@ -1294,15 +1159,7 @@ static void d2_record(const d2ref_t *Rr, const d2opt_t *o, d2ws_t *w,
     }
     d2pan_t P; d2pan_build(&R, &Q, sel, R.n_class, dm_top, global_ref, NULL, 0, 0, NULL, 0, 0, &P);
     d2_seg_matrix(&R, &P, sel, R.n_class, seg);
-    if (adjudicate) {
-      d2pan_t U1; uint32_t ns1 = 0;
-      d2_union_sats(&R, &Q, &P, sel, R.n_class, seg, max_seg, sat_dm_top,
-                    verbose, global_ref, sat_share, seg, &U1, &ns1);
-      d2_solve(&U1, sel, R.n_class, min_n, wexp[0], x);
-      d2pan_free(&U1);
-    } else {
-      d2_solve(&P, sel, R.n_class, min_n, wexp[0], x);
-    }
+    d2_solve(&P, sel, R.n_class, min_n, wexp[0], x);
 
     if (verbose) {
       uint64_t tot = 0;
@@ -1430,65 +1287,6 @@ static void d2_record(const d2ref_t *Rr, const d2opt_t *o, d2ws_t *w,
          * seg2 is credited with each pair's satellite CpGs at the same time, so
          * the pruning below judges a confuser on the evidence the solve was
          * actually given rather than on the base panel alone. */
-        if (adjudicate) {
-          d2pan_t U2; uint32_t ns2 = 0;
-          d2_union_sats(&R, &Q, &P2, sel2, n_sel2, seg2, max_seg, sat_dm_top,
-                        verbose, global_ref, sat_share, seg2, &U2, &ns2);
-          if (o->design_out) {
-            /* The exact system d2_solve is handed: one row per pattern, the
-             * weight it carries, the observed value, and the reference profile
-             * of every scope class. Enough to redo or re-tune the fit outside
-             * the code. */
-            FILE *df = fopen(o->design_out, round == 2 ? "w" : "a");
-            if (!df) d2die("cannot open --design-out", o->design_out);
-            if (round == 2) {
-              fprintf(df, "round\tsource\tn\trn\tweight\tq");
-              for (uint32_t c = 0; c < R.n_class; ++c)
-                if (inscope[c]) fprintf(df, "\t%s", R.name[c]);
-              fputc('\n', df);
-            }
-            for (uint32_t r = 0; r < U2.n_pat; ++r) {
-              if (U2.n[r] < min_n) continue;
-              double den = (double)(U2.rn[r] ? U2.rn[r] : U2.n[r]);
-              double w = (we == 0.5) ? sqrt((double)U2.n[r])
-                       : (we == 0.0) ? 1.0 : pow((double)U2.n[r], we);
-              if (U2.wscale && U2.wscale[r] != 1.0) w *= sqrt(U2.wscale[r]);
-              fprintf(df, "%u\t%s\t%llu\t%llu\t%.4f\t%.6f", round,
-                      r < P2.n_pat ? "panel" : "satellite",
-                      (unsigned long long)U2.n[r], (unsigned long long)U2.rn[r],
-                      w, U2.qsum[r] / (double)U2.n[r]);
-              for (uint32_t s2 = 0; s2 < n_sel2; ++s2)
-                fprintf(df, "\t%.6f",
-                        U2.rsum[(size_t)r * U2.nall + sel2[s2]] / den);
-              fputc('\n', df);
-            }
-            fclose(df);
-          }
-          d2_solve(&U2, sel2, n_sel2, min_n, we, x2);
-          if (o->eval_x && verbose) {
-            for (uint32_t c = 0; c < R.n_class; ++c) xf[c] = 0;
-            for (uint32_t s2 = 0; s2 < n_sel2; ++s2) xf[sel2[s2]] = x2[s2];
-            fprintf(stderr, "[methscope]   SSE fitted            %.6g\n",
-                    d2_sse(&U2, sel2, n_sel2, min_n, we, xf));
-            char spec[512]; snprintf(spec, sizeof spec, "%s", o->eval_x);
-            char *outer = NULL;   /* strtok_r: the inner split uses strtok too */
-            for (char *cand = strtok_r(spec, ";", &outer); cand;
-                 cand = strtok_r(NULL, ";", &outer)) {
-              double xv[64]; memset(xv, 0, sizeof xv);
-              char one[256]; snprintf(one, sizeof one, "%s", cand);
-              for (char *tok = strtok(one, ","); tok; tok = strtok(NULL, ",")) {
-                char *eq = strchr(tok, '=');
-                if (!eq) continue;
-                *eq = '\0';
-                for (uint32_t c = 0; c < R.n_class && c < 64; ++c)
-                  if (!strcmp(R.name[c], tok)) xv[c] = atof(eq + 1);
-              }
-              fprintf(stderr, "[methscope]   SSE %-20s %.6g\n", cand,
-                      d2_sse(&U2, sel2, n_sel2, min_n, we, xv));
-            }
-          }
-          d2pan_free(&U2);
-        } else {
           if (o->design_out) {      /* same dump, base panel only */
             FILE *df = fopen(o->design_out, round == 2 ? "w" : "a");
             if (!df) d2die("cannot open --design-out", o->design_out);
@@ -1514,7 +1312,34 @@ static void d2_record(const d2ref_t *Rr, const d2opt_t *o, d2ws_t *w,
             fclose(df);
           }
           d2_solve(&P2, sel2, n_sel2, min_n, we, x2);
-        }
+          if (o->eval_x && verbose) {
+            /* The objective at a HAND-GIVEN composition, beside the fitted
+             * one. It answers the question NNLS cannot: is the answer wrong
+             * because the solver missed the optimum, or because the panel
+             * genuinely scores the wrong composition better? On t1_2_23 the
+             * fitted answer scored 3.83 against the truth's 5.56, which is how
+             * the starved-pair diagnosis was pinned down. */
+            for (uint32_t c = 0; c < R.n_class; ++c) xf[c] = 0;
+            for (uint32_t s2 = 0; s2 < n_sel2; ++s2) xf[sel2[s2]] = x2[s2];
+            fprintf(stderr, "[methscope]   SSE fitted            %.6g\n",
+                    d2_sse(&P2, sel2, n_sel2, min_n, we, xf));
+            char spec[512]; snprintf(spec, sizeof spec, "%s", o->eval_x);
+            char *outer = NULL;
+            for (char *cand = strtok_r(spec, ";", &outer); cand;
+                 cand = strtok_r(NULL, ";", &outer)) {
+              double xv[64]; memset(xv, 0, sizeof xv);
+              char one[256]; snprintf(one, sizeof one, "%s", cand);
+              for (char *tok = strtok(one, ","); tok; tok = strtok(NULL, ",")) {
+                char *eq = strchr(tok, '=');
+                if (!eq) continue;
+                *eq = '\0';
+                for (uint32_t c = 0; c < R.n_class && c < 64; ++c)
+                  if (!strcmp(R.name[c], tok)) xv[c] = atof(eq + 1);
+              }
+              fprintf(stderr, "[methscope]   SSE %-20s %.6g\n", cand,
+                      d2_sse(&P2, sel2, n_sel2, min_n, we, xv));
+            }
+          }
         for (uint32_t c = 0; c < R.n_class; ++c) xf[c] = 0;
         for (uint32_t s2 = 0; s2 < n_sel2; ++s2) xf[sel2[s2]] = x2[s2];
         uint32_t n_in2 = d2_scope(&R, xf, seg2, mass_floor, max_seg,
@@ -1634,15 +1459,7 @@ static void d2_record(const d2ref_t *Rr, const d2opt_t *o, d2ws_t *w,
                                     rescue_target ? gap_of : NULL,
                                     rescue_gap, rescue_depth, &PF);
         d2_seg_matrix_min(&R, &PF, sel2, n_fin, min_n, seg2);
-        if (adjudicate) {
-          d2pan_t UF; uint32_t nsf = 0;
-          d2_union_sats(&R, &Q, &PF, sel2, n_fin, seg2, max_seg, sat_dm_top,
-                        verbose, global_ref, sat_share, NULL, &UF, &nsf);
-          d2_solve(&UF, sel2, n_fin, min_n, wexp[n_wexp - 1], xadj);
-          d2pan_free(&UF);
-        } else {
-          d2_solve(&PF, sel2, n_fin, min_n, wexp[n_wexp - 1], xadj);
-        }
+        d2_solve(&PF, sel2, n_fin, min_n, wexp[n_wexp - 1], xadj);
         for (uint32_t c = 0; c < R.n_class; ++c) x[c] = 0;
         for (uint32_t s3 = 0; s3 < n_fin; ++s3) x[sel2[s3]] = xadj[s3];
         d2pan_free(&PF);
@@ -1731,7 +1548,7 @@ int main_deconv(int argc, char *argv[]) {
    * 500 that was briefly the default came from a sweep on the global-only fit
    * where it was worth 0.194 vs 0.195 -- noise -- before narrowing and
    * satellites existed. Dominance is real but wants a different instrument. */
-  uint64_t min_n = 5, dm_top = 0, sat_dm_top = 0, rescue_below = 0;
+  uint64_t min_n = 5, dm_top = 0, rescue_below = 0;
   double rescue_lo = 0.40, rescue_hi = 0.60, rescue_gap = 0.0;
   double rescue_floor = 0.15;
   unsigned long rescue_target = 0;
@@ -1740,7 +1557,7 @@ int main_deconv(int argc, char *argv[]) {
    * 2^20). 10 is the smallest floor that still excludes a coin flip. */
   unsigned long rescue_depth = 10;
   uint32_t max_round = 8;
-  int adjudicate = 1, narrow = 1, nthreads = 1, sat_both = 0, global_ref = 0;
+  int narrow = 1, nthreads = 1, global_ref = 0;
   /* One value per ROUND, last repeating: "0.5,0.5,0" is 0.5 for the global fit
    * and the first rebuild, unweighted from round 3 on. A single value applies
    * everywhere. Per-round because the panel changes character as the scope
@@ -1756,7 +1573,7 @@ int main_deconv(int argc, char *argv[]) {
    * the edge. Set above that edge rather than on it, since the count moves with
    * coverage and with --delta-mean-top. */
   uint64_t max_seg = 200;
-  double mass_floor = 0.005, sat_share = 0.0;
+  double mass_floor = 0.005;
   int verbose = 0, i = 1;
   for (; i < argc; ++i) {
     const char *a = argv[i];
@@ -1767,8 +1584,6 @@ int main_deconv(int argc, char *argv[]) {
     else if (!strcmp(a, "--pair-count") && i + 1 < argc) pair_spec = argv[++i];
     else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc)
       dm_top = strtoull(argv[++i], NULL, 10);
-    else if (!strcmp(a, "--sat-delta-mean-top") && i + 1 < argc)
-      sat_dm_top = strtoull(argv[++i], NULL, 10);
     else if (!strcmp(a, "--max-segregating") && i + 1 < argc)
       max_seg = strtoull(argv[++i], NULL, 10);
     else if (!strcmp(a, "--weight-exponent") && i + 1 < argc) {
@@ -1780,9 +1595,7 @@ int main_deconv(int argc, char *argv[]) {
       if (!n_wexp) d2die("--weight-exponent wants E or E1,E2,...", argv[i]);
     }
     else if (!strcmp(a, "--unweighted")) { n_wexp = 1; wexp[0] = 0.0; }
-    else if (!strcmp(a, "--no-adjudicate")) adjudicate = 0;
     else if (!strcmp(a, "--no-narrow")) narrow = 0;
-    else if (!strcmp(a, "--sat-both")) sat_both = 1;
     else if (!strcmp(a, "--rescue-below") && i + 1 < argc)
       rescue_below = strtoull(argv[++i], NULL, 10);
     else if (!strcmp(a, "--rescue-gap") && i + 1 < argc)
@@ -1800,8 +1613,6 @@ int main_deconv(int argc, char *argv[]) {
       rescue_lo = v; rescue_hi = strtod(end + 1, NULL);
     }
     else if (!strcmp(a, "--global-ref")) global_ref = 1;
-    else if (!strcmp(a, "--sat-share") && i + 1 < argc)
-      sat_share = atof(argv[++i]);
     else if ((!strcmp(a, "--nthreads") || !strcmp(a, "--threads")) && i + 1 < argc)
       nthreads = atoi(argv[++i]);
     else if (!strcmp(a, "--max-round") && i + 1 < argc)
@@ -1849,15 +1660,6 @@ int main_deconv(int argc, char *argv[]) {
 "                   workspace (~16 MB) rather than linearly. Needs a\n"
 "                   <query>.idx to seek by; -v, --panel-out and --scope-out\n"
 "                   force a single thread so their output stays coherent.\n"
-"    --sat-delta-mean-top N  per SIDE of a satellite, keep only the N measured\n"
-"                   CpGs with the cleanest class gap (default 0 = keep all).\n"
-"                   A satellite has two binstrings, so this selects quality;\n"
-"                   the same number on the main panel merely truncates.\n"
-"    --sat-share F  hold all satellites together to at most fraction F of the\n"
-"                   fit's influence (default 0 = uncapped). A satellite is\n"
-"                   blind to the out-group, so its bias scales with its\n"
-"                   leverage; legacy's neighbour set is 0.14%% of its panel,\n"
-"                   ours reaches 3.3%% once narrowing shrinks the panel.\n"
 "    --global-ref   compute each pattern's REFERENCE profile over every\n"
 "                   reference CpG carrying that binstring, not just the ones\n"
 "                   this query measured. n and qsum stay measured-only. Noise\n"
@@ -1895,11 +1697,8 @@ int main_deconv(int argc, char *argv[]) {
 "                   which carries M/U rather than a bare beta). The other\n"
 "                   classes carry no depth requirement -- they are context.\n"
 "    --rescue-qfilter LO,HI  the wider band (default 0.40,0.60)\n"
-"    --sat-both     keep the global panel in the satellite solve alongside\n"
-"                   the narrowed one\n"
 "    --no-narrow    skip the rebuild rounds; satellites attach to the global\n"
 "                   panel over every class\n"
-"    --no-adjudicate  skip the satellites\n"
 "    --max-round N  cap on rebuild rounds (default 8); it stops early\n"
 "                   when the class set stops changing\n"
 "    --scope-out F  write the settled scope, 1/0 per class per record\n"
@@ -1938,17 +1737,15 @@ int main_deconv(int argc, char *argv[]) {
 
   d2opt_t opt;
   memset(&opt, 0, sizeof opt);
-  opt.min_n = min_n; opt.dm_top = dm_top; opt.sat_dm_top = sat_dm_top;
-  opt.max_seg = max_seg;
-  opt.mass_floor = mass_floor; opt.sat_share = sat_share;
+  opt.min_n = min_n; opt.dm_top = dm_top; opt.max_seg = max_seg;
+  opt.mass_floor = mass_floor;
   opt.rescue_below = rescue_below;
   opt.rescue_lo = rescue_lo; opt.rescue_hi = rescue_hi;
   opt.rescue_gap = rescue_gap;
   opt.rescue_depth = (uint32_t)rescue_depth;
   opt.rescue_target = rescue_target; opt.rescue_floor = rescue_floor;
+  opt.narrow = narrow; opt.verbose = verbose; opt.global_ref = global_ref;
   opt.max_round = max_round;
-  opt.adjudicate = adjudicate; opt.narrow = narrow; opt.verbose = verbose;
-  opt.sat_both = sat_both; opt.global_ref = global_ref;
   memcpy(opt.wexp, wexp, sizeof wexp); opt.n_wexp = n_wexp;
   opt.pair_spec = pair_spec; opt.panel_out = panel_out;
   opt.scope_out = scope_out; opt.force_scope = force_scope;
