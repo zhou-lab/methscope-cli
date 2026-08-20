@@ -15,7 +15,7 @@ Input is a YAME `.cg` store (see the yame tool). Models are self-contained
 bundles that carry their own feature definition:
   .updecx  upscale decoder   -- impute genome-wide CpG methylation
   .ubjx    classifier        -- cell type, sex
-  .refx    deconvolution ref -- cell-type proportions
+  .msdref  deconvolution ref -- cell-type proportions
 
 ## Install
 
@@ -37,7 +37,7 @@ shared registry, which verifies each file against a pinned digest:
   hg38_celltype.ubjx    cell-type classifier (human, 62 types)
   mm10_celltype.ubjx    cell-type classifier (mouse brain, 41 types)
   hg38_sex.ubjx         sex classifier
-  hg38_65celltypes.refx deconvolution reference (65 cell types)
+  hg38_65celltypes.msdref deconvolution reference (65 cell types)
   hg38_10k1.updecx      upscale decoder for one 10k-CpG block (legacy, small)
 
 ## Traps
@@ -65,19 +65,24 @@ These are the mistakes that are not visible in the usage strings.
 
 ## Commands
 
-  mrmp-build        Construct the MRMP artifact from a discretized reference .cg
+  mrmp-build        Build the MRMP routing tree (--flat for one flat set)
+  mrmp-build-thin   One 2-class satellite per (thin class, nearest partner)
+  mrmp-build-neighbor One 2-class satellite per (class, near neighbour)
   mrmp-export       Emit the runtime .cm mask (and pattern / count tables)
+  mrmp-pool         Combine MRMP sets and cut them to a shared column budget
   classify          Classify a methylome -> labels + confidence
   classify-train    Fit a label classifier (xgboost / threshold / logistic)
-  deconv            Estimate cell-type proportions (NNLS) from a mixture
-  deconv-build-ref  Build a .refx deconvolution reference (--matrix for the raw matrix)
+  classify-featurize Prebuild the .msfm feature matrix (parallel, reusable)
+  deconv-build-ref  Pack a cell-type store into the .msdref deconvolution reference
+  deconv            Estimate cell-type proportions, rebuilding the MRMP per query
   upscale           Impute genome-wide CpG methylation from a sparse methylome
   upscale-featurize Build the MSURAW2/3 training msur from a truth .cg
   upscale-set-units Build the MSUIDX1 processing-unit index from a .mrmp
   upscale-train     Train the whole-genome upscale decoder (CUDA)
   bundle            Wrap a model + its MRMP into a self-contained bundle
+  relabel           Rename a class label in a trained model, no retraining
   unbundle          Unpack a bundle into its model, MRMP, and outcpg mask
-  inspect           Describe any artifact: bundle, .mrmp, .msui, or .msur
+  inspect           Describe any artifact: bundle, .mrmp, .msui, .msur, or .msfm
 
 
 ### methscope upscale
@@ -119,8 +124,8 @@ Output:
 
 
 Usage:
-  methscope classify [options] <query.cg> <model.ubjx>
-  methscope classify [options] <query.cg> <ref.mrmp> <booster.ubj>
+  methscope classify [options] <query.cg> <model.clfx>
+  methscope classify --data <in.msfm> [options] <model.clfx>
 
 Purpose:
   Predict a label (cell type, sex, ... — whatever the model was trained on)
@@ -130,17 +135,37 @@ Purpose:
 Arguments:
   <query.cg>     Query methylome(s); '-' reads a .cg stream from stdin
                  (cells are then named 1,2,3,... as a stream has no index).
-  <model.ubjx>   A self-contained bundle of the booster + its MRMP (from
-                 `train -o model.ubjx` or `bundle`) — the recommended
+  <model.clfx>   A self-contained bundle of the model + its MRMP (from
+                 `classify-train -o model.clfx` or `bundle`) — the recommended
                  single-file form.
-  <ref.mrmp>     MRMP pattern definition (a YAME .cm) to featurize the query
-                 (loose form). A bundle (.ubjx/.updecx) also works here.
-  <booster.ubj>  Loose booster with class labels embedded (see train / bundle -l).
 
 Options:
   -o <out.tsv>   Write output to a file instead of stdout.
+  --framework violation   Score straight off a .mrmp with the violation
+                 rule instead of a fitted model: give <query.cg> <ref.mrmp>.
+                 The rule is UNFITTED -- a pure function of the artifact and
+                 the three knobs below -- so there is nothing to train and
+                 nothing worth storing in between.
+  --call-threshold t      violation: beta cutoff for calling a pattern (0.5)
+  --pattern-weight w      violation: sqrt|log1p|linear|flat (sqrt)
+  --min-patterns n        violation: patterns required on each side (20)
+  --top K                 violation: patterns to use, by rank (1000)
   --probs        Append one column per class with its predicted probability.
+  --levels       Append the predicted label's whole taxonomy path
+                 (compartment, lineage, group, subtype).
+  --level NAME   Append just one level -- compartment | lineage | group |
+                 subtype. Use this to score against a cohort labelled only
+                 that coarsely: collapse the prediction to the level the
+                 truth resolves to, and compare there.
+                 Both need a model trained with `classify-train --hierarchy`.
   --no-header    Suppress the header line.
+  --threads T    Featurize with T workers (default 1). Cells are partitioned
+                 across workers, each seeking its own records, so this needs
+                 the query's .cg index; a stream keeps the serial path.
+  --data <in.msfm>  Score a prebuilt feature artifact (classify-featurize)
+                 instead of featurizing <query.cg>. <query.cg> is then omitted.
+                 Featurization dominates the cost, so this is how to score many
+                 models on one test set without repeating it.
   -h             Show this help message.
 
 Output columns:
@@ -149,33 +174,107 @@ Output columns:
 
 ### methscope deconv
 
+Usage: methscope deconv [options] <query.cg> <ref.msdref> -o <out.tsv>
 
-Usage:
-  methscope deconv [options] <mixture.cg> <panel.refx>
+  Deconvolve each query record against a .msdref reference, over a global
+  flat MRMP rebuilt per query from the CpGs THAT QUERY MEASURED.
 
-Purpose:
-  Estimate per-cell cell-type proportions by non-negative least squares
-  (NNLS) deconvolution against a cell-type signature reference.
+  The measured-row restriction happens first and is structural: a pattern's
+  reference beta and its observed beta are means over the same CpGs, so the
+  two sides of each equation are comparable and the CpG count that sets the
+  row weight is the honest support of both.
 
-Arguments:
-  <mixture.cg>     Mixture methylome(s); '-' reads a .cg stream from stdin
-                   (cells are then named 1,2,3,... as a stream has no index).
-  <panel.refx>     A self-contained reference bundle (signature + MRMP) from
-                   `matrix --refx`. '-' reads the .refx from stdin, so you can
-                   build + deconvolve in one pipe:
-                     matrix --refx -o - pseudobulk.cg ref.mrmp \
-                       | deconv mixture.cg -
-
-Options:
-  -o <out.tsv>     Write output to a file instead of stdout.
-  --min-cov <k>    Per cell, only use patterns with >= k covered CpGs in the
-                   mixture (default: 1). Higher k (e.g. 3) drops thinly-
-                   covered, noisy patterns -- helps on sparse input.
-  --no-header      Suppress the header line.
-  -h               Show this help message.
-
-Output:
-  One row per mixture cell; columns are cell types (proportions summing to 1).
+  Options
+    -o FILE        output TSV, one row per query record (default stdout)
+    --delta-mean-top N  per BINSTRING keep only the N measured CpGs with the
+                   cleanest class gap (default 0 = keep all; fewer
+                   than N when the q-filter admits fewer). Bounds a
+                   pattern's influence, which is linear in its CpG count,
+                   and improves the pattern: its beta then averages its best
+                   separators rather than everything admissible.
+    --max-segregating N  two classes separated by <= N MEASURED CpGs are
+                   inseparable for this query, so if either carries mass
+                   both enter the scope; the relation is closed, making the
+                   scope a union of connected components. ABSOLUTE, because
+                   an absolute CpG count is what reaches the solve.
+                   Default 200: the global panel offers ~17 CpGs for
+                   CD4 vs CD8 on a 2^20 immune mixture, where the pair
+                   itself holds 217.
+    --mass-floor F  a class seeds the scope at >= F (default 0.005). Not 0:
+                   NNLS hands out arbitrary exact zeros among collinear
+                   columns.
+    --nthreads N   deconvolve N records in parallel (default 1; --threads
+                   is an alias). The
+                   reference is shared, so memory grows by the per-thread
+                   workspace (~16 MB) rather than linearly. Needs a
+                   <query>.idx to seek by; -v, --panel-out and --scope-out
+                   force a single thread so their output stays coherent.
+    --global-ref   compute each pattern's REFERENCE profile over every
+                   reference CpG carrying that binstring, not just the ones
+                   this query measured. n and qsum stay measured-only. Noise
+                   in the design matrix attenuates coefficients toward zero,
+                   so a noisier column loses mass to a cleaner correlated
+                   one; the legacy .refx has no such noise because its design
+                   values were computed once at build time. Costs a second
+                   pass over the kept rows.
+    --rescue-below N  a pair the rebuilt panel separates by fewer than N
+                   measured CpGs is WEAK; the panel is then rebuilt so that a
+                   CpG splitting a weak pair is admitted under a wider rule
+                   for the other classes (default 2000; 0 = off). Those CpGs are
+                   normally lost to a THIRD class sitting in the ambiguous
+                   band, not to any doubt about the pair itself: at 2^22
+                   T.Cell.CD4|T.Cell.CD8 holds 948 measured CpGs and a
+                   6-class conjunction admits 419. Every class still gets a
+                   digit, so this stays ONE MRMP set with full context.
+    --rescue-gap G  rescue on |beta_a - beta_b| >= G instead of on the band,
+                   and exempt the pair's own classes from it. The gap is what
+                   the solve uses -- two classes separate when their profile
+                   means differ, not when their digits do -- so a CpG at CD4
+                   0.10 / CD8 0.50 counts, where the band discards it for
+                   calling 0.50 no-call. Default 0.20; 0 = use the band rule.
+    --rescue-target N  fit EACH weak pair its own gap threshold, loosening
+                   until it has N measured CpGs or the floor is hit (default
+                   0 = use the flat --rescue-gap). Pairs respond very
+                   differently to loosening -- Macrophage|Monocyte gains 5.6x
+                   where T.Cell.CD4|T.Cell.CD8 gains 1.9x -- so one threshold
+                   over-relaxes the easy pairs before the starved ones have
+                   enough. Read off a per-pair gap histogram in one pass.
+    --rescue-floor G  never relax a pair past this gap (default 0.15), so a
+                   pair with no real evidence cannot admit noise.
+    --rescue-min-depth N  require N reads on BOTH classes of the pair before
+                   its gap is believed (default 10; 0 = off. Needs a v2 .msdref,
+                   which carries M/U rather than a bare beta). The other
+                   classes carry no depth requirement -- they are context.
+                   Default 10; 0 = off. Inactive on a v1 reference.
+    --rescue-qfilter LO,HI  the wider band (default 0.40,0.60)
+    --no-narrow    skip the rebuild rounds and fit the global panel over
+                   every class
+    --max-round N  cap on rebuild rounds (default 8); it stops early
+                   when the class set stops changing
+    --scope-out F  write the settled scope, 1/0 per class per record
+    --weight-exponent E  row weight is n^E (default 0.5 = sqrt(n), the
+                   precision weight). The solve squares it, so influence is
+                   n^2E. --unweighted is E = 0; both measured WORSE than the
+                   default at every rung.
+    --force-scope C[,C..]  use exactly these classes, skipping discovery. A
+                   diagnostic: it answers whether a narrow panel is weak
+                   because the scope is wrong or because it is narrow.
+    --eval-x SPEC  print the objective at hand-given compositions beside the
+                   fitted one, as "Cls=frac,Cls=frac;Cls=frac,...". Answers
+                   what NNLS cannot: is the answer wrong because the solver
+                   missed the optimum, or because the panel scores the wrong
+                   composition better? Needs -v.
+    --design-out F  dump the exact system handed to the solve -- one row per
+                   pattern, its weight, the observed value and every scope
+                   class's profile -- so the fit can be redone outside.
+    --min-cpg N    drop a pattern seen on fewer than N measured CpGs
+                   (default 5)
+    --pair-count A,B  report how many MEASURED CpGs segregate classes A and
+                   B on their own, and how many of those survive the
+                   all-classes admission conjunction
+    --panel-out F  dump the rebuilt panel: binstring, measured CpGs,
+                   observed beta -- one row per pattern per record
+    -v             per-record panel size and measured-row count
 
 
 ### methscope inspect
@@ -187,12 +286,16 @@ Usage:
 Purpose:
   Describe any methscope artifact without running it. The format is detected
   from its magic:
-    .ubjx/.updecx/.refx  bundle: kind mark, section layout, model breakdown
+    .clfx/.updecx/.refx  bundle: kind mark, section layout, model breakdown
     .mrmp   MRMPIDX1  pattern set: dimensions, binstring parameters, top ranks
     .msui   MSUIDX1   processing-unit index: units, memberships, CpG split
     .msur   MSURAW2/3 training msur: cells, replicates, embedded truth
+    .msfm   MSFMAT1   feature matrix: records, patterns, labels, coverage
 
 Options:
+  --tree       render an mrmp-tree: its nodes, and which class each one
+               decides. Works on a chain or a tree bundle; the structure
+               is DERIVED, so there is no tree file to keep in step.
   --patterns   .mrmp only: list the top-ranked patterns
   --top K      .mrmp only: how many to list (default 20)
   -h           Show this help message.

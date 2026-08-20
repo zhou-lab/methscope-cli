@@ -45,7 +45,7 @@ Input is a YAME `.cg` store (see the yame tool). Models are self-contained
 bundles that carry their own feature definition:
   .updecx  upscale decoder   -- impute genome-wide CpG methylation
   .ubjx    classifier        -- cell type, sex
-  .refx    deconvolution ref -- cell-type proportions
+  .msdref  deconvolution ref -- cell-type proportions
 
 ## Install
 
@@ -67,7 +67,7 @@ shared registry, which verifies each file against a pinned digest:
   hg38_celltype.ubjx    cell-type classifier (human, 62 types)
   mm10_celltype.ubjx    cell-type classifier (mouse brain, 41 types)
   hg38_sex.ubjx         sex classifier
-  hg38_65celltypes.refx deconvolution reference (65 cell types)
+  hg38_65celltypes.msdref deconvolution reference (65 cell types)
   hg38_10k1.updecx      upscale decoder for one 10k-CpG block (legacy, small)
 
 ## Traps

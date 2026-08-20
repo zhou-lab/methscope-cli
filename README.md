@@ -207,15 +207,15 @@ $MS upscale --probs toy.updec toy_feats.tsv
 
 ### Note on row order
 
-`predict`/`build-reference`/`deconv` emit one row per query record **in query-file order**
+`classify` and `deconv` emit one row per query record **in query-file order**
 (the MethScope R package instead sorts rows by cell name). When you supply labels
-to `train`, give them in that same query-record order.
+to `classify-train`, give them in that same query-record order.
 
 ### Advanced: parity against the R package
 
-`predict` / `build-reference --matrix` reproduce the R `PredictCellType`/`GenerateInput` outputs (the
-small residual in the matrix is R's 3-decimal text rounding; C uses full
-precision). See `test/parity.sh`, which needs a MethScope checkout + R.
+`classify` reproduces the R `PredictCellType` output. The feature-matrix leg of
+that comparison is gone with the `matrix` command, so `test/parity.sh` now checks
+the probabilities only; it needs a MethScope checkout + R.
 
 ## License
 
