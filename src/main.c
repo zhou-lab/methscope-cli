@@ -52,10 +52,8 @@ static int usage(void) {
   CMD("classify-featurize","Prebuild the .msfm feature matrix (parallel, reusable)");
 
   fprintf(stderr, "\n%sDeconvolution%s\n", B, R);
-  CMD("deconv",         "Estimate cell-type proportions (NNLS) from a mixture");
-  CMD("deconv-build-ref","Build a .refx deconvolution reference (--matrix for the raw matrix)");
-  CMD("deconv2-build-ref","Pack a cell-type store into the uint16 .msdref deconv2 reference");
-  CMD("deconv2","Deconvolve against a .msdref, rebuilding the MRMP on measured CpGs");
+  CMD("deconv-build-ref","Pack a cell-type store into the .msdref deconvolution reference");
+  CMD("deconv",           "Estimate cell-type proportions, rebuilding the MRMP per query");
 
   fprintf(stderr, "\n%sUpscaling%s %s(imputation)%s\n", B, R, D, R);
   CMD("upscale",      "Impute genome-wide CpG methylation from a sparse methylome");
@@ -87,14 +85,12 @@ int main(int argc, char *argv[]) {
   }
   if (strcmp(argv[1], "classify")    == 0) return main_predict(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-featurize") == 0) return main_classify_featurize(argc - 1, argv + 1);
-  if (strcmp(argv[1], "deconv2-build-ref") == 0) return main_deconv2_build_ref(argc - 1, argv + 1);
-  if (strcmp(argv[1], "deconv2") == 0) return main_deconv2(argc - 1, argv + 1);
-  if (strcmp(argv[1], "deconv-build-ref") == 0) return main_build_reference(argc - 1, argv + 1);
+  if (strcmp(argv[1], "deconv-build-ref") == 0) return main_deconv_build_ref(argc - 1, argv + 1);
+  if (strcmp(argv[1], "deconv") == 0) return main_deconv(argc - 1, argv + 1);
   if (strcmp(argv[1], "matrix")     == 0) {   /* renamed 2026-07; alias kept */
     fprintf(stderr, "[methscope] 'matrix' was renamed to 'build-reference'\n");
     return main_build_reference(argc - 1, argv + 1);
   }
-  if (strcmp(argv[1], "deconv")     == 0) return main_deconv(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale")    == 0) return main_upscale(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-train") == 0) return main_upscale_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-featurize") == 0) return main_upscale_prepare(argc - 1, argv + 1);
