@@ -137,10 +137,12 @@ static int train_usage(void) {
     "\n"
     "Arguments:\n"
     "  <query.cg>   Training methylome(s), one record per sample.\n"
-    "  <ref.cm>     MRMP pattern definition, the runtime .cm from mrmp-export.\n"
-    "               A bundle (.clfx/.updecx) also works; its MRMP is used.\n"
-    "               Features are the MRMP states; the 'Pna' NA-background state is\n"
-    "               excluded by default (see --include-pna).\n"
+    "  <ref.cm>     MRMP pattern definition. A bundle (.clfx/.updecx) also\n"
+    "               works; its MRMP is used. Features are the MRMP states; the\n"
+    "               'Pna' NA-background state is always excluded.\n"
+    "               NOTE the default framework (xgboost) does not take this form\n"
+    "               at all -- it needs --data TRAIN.msfm, which carries its own\n"
+    "               chain. This positional serves the unfitted frameworks.\n"
     "\n"
     "Options:\n"
     "  -l <labels.txt>  One label per query record, in query order (required).\n"
@@ -148,10 +150,10 @@ static int train_usage(void) {
     "                   self-contained bundle (model + MRMP) that `classify` can\n"
     "                   run directly; a plain '.ubj' writes just the loose booster.\n"
     "                   The bundled MRMP is TRIMMED to exactly the patterns used\n"
-    "                   (others folded into 'Pna'), and `predict` uses that same set.\n"
-    "  -p <npattern>    Use the first N patterns in the artifact's own order.\n"
-    "                   after the 'Pna' backgrounds have been excluded, in the\n"
-    "                   For an auto MRMP that order\n"
+    "                   (others folded into 'Pna'), and `classify` uses that same set.\n"
+    "  -p <npattern>    Use the first N patterns, in the artifact's own order and\n"
+    "                   after the 'Pna' backgrounds have been excluded. For an\n"
+    "                   auto MRMP that order\n"
     "                   is recurrence rank (P1,P2,...), so N means the N most\n"
     "                   recurrent; for curated named markers it is definition\n"
     "                   order, and leaving it unset is what you want.\n"
@@ -160,8 +162,6 @@ static int train_usage(void) {
     "                   drop whole trailing sets. Cut with mrmp-pool --pooled-top\n"
     "                   instead if you want a per-set budget.\n"
     "                   Default: every non-'Pna' state.\n"
-
-    "                   (default: excluded).\n"
     "  --framework <f>  Model framework (default: xgboost):\n"
     "                     xgboost    gradient-boosted trees (multiclass).\n"
     "                     threshold  interpretable binary linear rule; per-feature\n"
@@ -204,16 +204,18 @@ static int train_usage(void) {
     "                   positional, and labels come from the artifact unless -l is\n"
     "                   given. Featurization is single-threaded, so this is how to\n"
     "                   train repeatedly on the same cells without repeating it.\n"
-    "  --hierarchy TSV  Embed a label taxonomy in the model (label, compartment,\n"
-    "                   lineage, group, subtype). `classify --levels` then reports\n"
-    "                   the path, and an external cohort labelled only coarsely can\n"
-    "                   still be scored at the level both sides resolve.\n"
-    "  --scalar-coverage  Append ONE extra feature, log1p(covered CpGs) for the\n"
-    "                   record, after the patterns -- the classifier analogue\n"
-    "                   of the upscale model's `--features scalar`. Worth it when\n"
-    "                   training spans a coverage ladder, so the model can tell which\n"
-    "                   sparsity regime it is in. Requires --data (the artifact\n"
-    "                   carries the exact per-record total).\n"
+    "  --hierarchy TSV  Embed a label taxonomy (label, compartment, lineage,\n"
+    "                   group, subtype) in EVERY node of the tree, so `classify\n"
+    "                   --levels` / `--level NAME` can read it back from whichever\n"
+    "                   node made the call. An external cohort labelled only\n"
+    "                   coarsely can then be scored at the level both sides\n"
+    "                   resolve.\n"
+    "  --balance-classes  Weight each row nrow/(K*n_c), so every class contributes\n"
+    "                   the same total weight however many rows it has. Measured\n"
+    "                   NEUTRAL (2026-08-14: one of six arms, none beat the plain\n"
+    "                   400-cells/class baseline) and no shipped model uses it, so\n"
+    "                   expect nothing from it -- it is here to be re-measured,\n"
+    "                   not because it helped.\n"
     "  -h               Show this help message.\n"
     "\n");
   return 1;
@@ -237,10 +239,39 @@ typedef struct { int max_depth, min_child; double colsample; } tune_t;
 
 static BoosterHandle train_one(const float *X, const float *y, uint32_t nrow,
                                uint32_t ncol, int K, int nrounds, int nt,
-                               const tune_t *tn, const char *tag) {
+                               const tune_t *tn, const char *tag, int balance) {
   DMatrixHandle dtrain; BoosterHandle b;
   XGCHK(XGDMatrixCreateFromMat(X, nrow, ncol, NAN, &dtrain));
   XGCHK(XGDMatrixSetFloatInfo(dtrain, "label", y, nrow));
+  /* --balance-classes: weight every row by nrow/(K * n_c) so each class
+   * contributes the same total weight to the loss however many rows it has.
+   *
+   * This is the weight-only form of class balancing. The alternative --
+   * repeating a thin class's cells until its row count matches -- was built
+   * and measured, and it made those classes WORSE (mouse fold 0, per-class
+   * recall 0.984 -> 0.934 for the classes it targeted). Repetition adds no
+   * information: the copies are genuinely different coverage draws, verified,
+   * but they are draws of the same few cells, so the booster fits those cells
+   * harder rather than the class. Weighting changes the objective without
+   * duplicating anything, which is the only remaining way to ask the question. */
+  float *w = NULL;
+  if (balance && K > 0) {
+    uint32_t *n_c = calloc((size_t)K, sizeof(uint32_t));
+    if (!n_c) tdie("out of memory", NULL);
+    for (uint32_t r = 0; r < nrow; ++r) {
+      int c = (int)y[r];
+      if (c >= 0 && c < K) ++n_c[c];
+    }
+    w = malloc((size_t)nrow * sizeof(float));
+    if (!w) tdie("out of memory", NULL);
+    for (uint32_t r = 0; r < nrow; ++r) {
+      int c = (int)y[r];
+      w[r] = (c >= 0 && c < K && n_c[c])
+                 ? (float)((double)nrow / ((double)K * (double)n_c[c])) : 1.0f;
+    }
+    XGCHK(XGDMatrixSetFloatInfo(dtrain, "weight", w, nrow));
+    free(n_c);
+  }
   XGCHK(XGBoosterCreate(&dtrain, 1, &b));
   char buf[16];
   snprintf(buf, sizeof buf, "%d", K);
@@ -273,13 +304,32 @@ static BoosterHandle train_one(const float *X, const float *y, uint32_t nrow,
   return b;
 }
 
+/* Read a whole file into a NUL-terminated buffer (small metadata only). */
+static char *slurp_file(const char *path, const char *what) {
+  FILE *f = fopen(path, "r");
+  if (!f) tdie(what, path);
+  size_t cap = 1 << 16, n = 0;
+  char *buf = malloc(cap);
+  if (!buf) tdie("out of memory", NULL);
+  size_t got;
+  while ((got = fread(buf + n, 1, cap - n - 1, f)) > 0) {
+    n += got;
+    if (n + 1 >= cap) { cap <<= 1; buf = realloc(buf, cap);
+                        if (!buf) tdie("out of memory", NULL); }
+  }
+  buf[n] = 0; fclose(f);
+  return buf;
+}
+
 int main_train_tree(int argc, char *argv[]) {
-  const char *data_path = NULL, *out = NULL;
-  int nrounds = 0, nthread = 0;
+  const char *data_path = NULL, *out = NULL, *hier_path = NULL;
+  int nrounds = 0, nthread = 0, balance = 0;
   tune_t tn = {0, 0, 0.0};
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "--data") && i + 1 < argc) data_path = argv[++i];
+    else if (!strcmp(a, "--balance-classes")) balance = 1;
+    else if (!strcmp(a, "--hierarchy") && i + 1 < argc) hier_path = argv[++i];
     else if (!strcmp(a, "--max-depth") && i + 1 < argc) tn.max_depth = atoi(argv[++i]);
     else if (!strcmp(a, "--min-child-weight") && i + 1 < argc) tn.min_child = atoi(argv[++i]);
     else if (!strcmp(a, "--colsample") && i + 1 < argc) tn.colsample = atof(argv[++i]);
@@ -306,7 +356,14 @@ int main_train_tree(int argc, char *argv[]) {
         "  the chain's layout), so nothing is subset on disk and every node sees\n"
         "  the same coverage draw.\n\n"
         "  -n N        boosting rounds per node (default round(sqrt(rows)))\n"
-        "  --threads T thread pool\n\n"
+        "  --threads T thread pool\n"
+        "  --hierarchy TSV  embed a label taxonomy (label, compartment, lineage,\n"
+        "              group, subtype) in EVERY node, so `classify --levels`\n"
+        "              can read it back from whichever node made the call\n"
+        "  --balance-classes  weight each row nrow/(K*n_c) so every class\n"
+        "              contributes the same total weight. Measured NEUTRAL on\n"
+        "              2026-08-14 (one of six arms, none beat the plain\n"
+        "              400-cells/class baseline), and no shipped model uses it\n\n"
         "  Score the result with: methscope classify query.cg TREE.clfx\n");
       return 0;
     }
@@ -366,6 +423,13 @@ int main_train_tree(int argc, char *argv[]) {
     }
     ms_mrmp_top_free(ts); ms_mrmp_top_free(tn);
   }
+  /* Read once; every node gets a copy. A tree has no single booster to hang
+   * this on, and `classify` reads it back from whichever node made the call,
+   * so the taxonomy has to travel with all of them -- the same reason the
+   * class-label list is set per node. */
+  char *hier_buf = hier_path ? slurp_file(hier_path, "cannot open --hierarchy")
+                             : NULL;
+
   fprintf(stderr, "\n[methscope] classify-train\n\n");
   fprintf(stderr, "  %-12s %d records x %d columns, %u node(s)", "data",
           m->n_cells, m->n_patterns, n);
@@ -407,8 +471,9 @@ int main_train_tree(int argc, char *argv[]) {
     int nrd = nrounds > 0 ? nrounds : (int)(sqrt((double)nr) + 0.5);
     if (nrd < 1) nrd = 1;
     BoosterHandle b = train_one(X, y, nr, ncol, (int)t->n_samples, nrd,
-                                nthread, &tn, nm[i]);
+                                nthread, &tn, nm[i], balance);
     ms_booster_set_meta(b, t->labels, (int)t->n_samples);
+    if (hier_buf) ms_booster_set_hier(b, hier_buf);
     if (flags & MSFM_FLAG_BIN_FLAT)     ms_booster_set_binarize(b, "0.5");
     else if (flags & MSFM_FLAG_BIN_PAT) ms_booster_set_binarize(b, "pattern");
     {  /* the exact columns, by name -- classify selects by LAYOUT, but the
@@ -437,6 +502,7 @@ int main_train_tree(int argc, char *argv[]) {
     free(X); free(row); free(y); ms_colspan_free(cs);
     ms_mrmp_top_free(t);
   }
+  free(hier_buf);
   ms_bundle_pack_tree(out, chain, n, nm, bl, bn);
   fprintf(stderr, "\n  %-12s %u node(s) + the chain -> %s\n", "wrote", n, out);
   fprintf(stderr, "  %-12s methscope classify query.cg %s\n", "score with", out);
@@ -452,12 +518,26 @@ int main_train(int argc, char *argv[]) {
    * it was featurized against, so training walks its nodes and emits one
    * scorable bundle. The other frameworks are UNFITTED -- they transcribe a
    * .mrmp and take no training data at all -- so they stay here. */
-  { const char *fw = "xgboost"; int has_data = 0;
+  { const char *fw = "xgboost"; int has_data = 0, want_help = 0;
     for (int i = 1; i < argc; ++i) {
       if (!strcmp(argv[i], "--framework") && i + 1 < argc) fw = argv[i + 1];
       else if (!strcmp(argv[i], "--data") && i + 1 < argc) has_data = 1;
+      else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) want_help = 1;
     }
-    if (has_data && !strcmp(fw, "xgboost")) return main_train_tree(argc, argv);
+    /* -h before the --data check, or `classify-train -h` -- the commonest way
+     * to ask what the flags ARE -- dies telling you to pass one. */
+    if (want_help) { train_usage(); return 0; }
+    if (!strcmp(fw, "xgboost")) {
+      /* xgboost is tree-only now. The flat single-booster format is gone --
+       * scoring it was deleted with the second featurizer it depended on, so
+       * emitting one would produce a bundle nothing can read. --data is what
+       * pins the column layout to the chain the model is trained against. */
+      if (!has_data)
+        tdie("xgboost training needs --data <in.msfm> (classify-featurize): the "
+             "flat single-booster format was removed, and a tree's columns are "
+             "defined by the artifact its features were built from", NULL);
+      return main_train_tree(argc, argv);
+    }
   }
 
   const char *labels_path = NULL, *out_path = NULL, *framework = "xgboost";
@@ -485,11 +565,17 @@ int main_train(int argc, char *argv[]) {
       eval_every = parse_nonneg_int(argv[++i], "--eval-every expects a non-negative integer");
     else if (strcmp(argv[i], "--threads") == 0 && i+1 < argc)
       nthread = parse_nonneg_int(argv[++i], "--threads expects a non-negative integer");
+    /* Undocumented on purpose: both legs were already closed before the flat
+     * path went away -- without --data it dies below, and with --data every
+     * xgboost run goes to the tree, which never parses it. Kept so the error
+     * names the flag instead of "unrecognized option". */
     else if (strcmp(argv[i], "--scalar-coverage") == 0) scalar_cov = 1;
     else if (strcmp(argv[i], "--hierarchy") == 0 && i+1 < argc) hier_path = argv[++i];
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out_path    = argv[++i];
     else if (strcmp(argv[i], "-p") == 0 && i+1 < argc)
       npattern = parse_nonneg_int(argv[++i], "-p expects a non-negative integer");
+    /* Undocumented on purpose, like --scalar-coverage: parsed only so an old
+     * command line is told what happened rather than "unrecognized option". */
     else if (strcmp(argv[i], "--include-pna") == 0)
       tdie("--include-pna is gone: featurize no longer emits background "
            "patterns, so there is nothing to include", NULL);
@@ -753,7 +839,14 @@ int main_train(int argc, char *argv[]) {
       char tbuf[16]; snprintf(tbuf, sizeof(tbuf), "%d", nt);
       XGCHK(XGBoosterSetParam(booster, "nthread", tbuf));
       { char c1[32], c2[32];
-        fprintf(stderr, "\n[methscope] classify-train\n\n");
+        /* Read once; every node gets a copy. A tree has no single booster to hang
+   * this on, and `classify` reads it back from whichever node made the call,
+   * so the taxonomy has to travel with all of them -- the same reason the
+   * class-label list is set per node. */
+  char *hier_buf = hier_path ? slurp_file(hier_path, "cannot open --hierarchy")
+                             : NULL;
+
+  fprintf(stderr, "\n[methscope] classify-train\n\n");
         fprintf(stderr, "  %-14s %s records x %s patterns, %d classes\n", "data",
                 commafmt_tr((uint64_t)m->n_cells, c1),
                 commafmt_tr((uint64_t)npattern, c2), K);
@@ -835,18 +928,7 @@ int main_train(int argc, char *argv[]) {
     }
     if (scalar_cov) ms_booster_set_scalar_cov(booster);
     if (hier_path) {                    /* travel with the model, not beside it */
-      FILE *hf = fopen(hier_path, "r");
-      if (!hf) tdie("cannot open --hierarchy", hier_path);
-      size_t cap = 1 << 16, n = 0;
-      char *buf = malloc(cap);
-      if (!buf) tdie("out of memory", NULL);
-      size_t got;
-      while ((got = fread(buf + n, 1, cap - n - 1, hf)) > 0) {
-        n += got;
-        if (n + 1 >= cap) { cap <<= 1; buf = realloc(buf, cap);
-                            if (!buf) tdie("out of memory", NULL); }
-      }
-      buf[n] = 0; fclose(hf);
+      char *buf = slurp_file(hier_path, "cannot open --hierarchy");
       ms_booster_set_hier(booster, buf);
       free(buf);
     }

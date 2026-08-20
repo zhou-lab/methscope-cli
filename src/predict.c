@@ -33,24 +33,11 @@ static void pdie(const char *msg, const char *arg) {
   exit(1);
 }
 
-/* Shannon-entropy confidence, matching R confidence_score():
- * 1 - (-sum p*log(p+1e-10)) / log(K), clamped to [0,1]. */
-static double confidence_score(const float *p, int K) {
-  if (K <= 1) return 1.0;
-  double entropy = 0.0;
-  for (int c = 0; c < K; ++c) entropy -= p[c] * log(p[c] + 1e-10);
-  double conf = 1.0 - entropy / log((double)K);
-  if (conf < 0.0) conf = 0.0;
-  if (conf > 1.0) conf = 1.0;
-  return conf;
-}
-
 static int predict_usage(void) {
   ms_help(stderr,
     "\n"
     "Usage:\n"
     "  methscope classify [options] <query.cg> <model.clfx>\n"
-    "  methscope classify [options] <query.cg> <ref.mrmp> <booster.ubj>\n"
     "  methscope classify --data <in.msfm> [options] <model.clfx>\n"
     "\n"
     "Purpose:\n"
@@ -64,9 +51,6 @@ static int predict_usage(void) {
     "  <model.clfx>   A self-contained bundle of the model + its MRMP (from\n"
     "                 `classify-train -o model.clfx` or `bundle`) — the recommended\n"
     "                 single-file form.\n"
-    "  <ref.mrmp>     MRMP pattern definition (a YAME .cm) to featurize the query\n"
-    "                 (loose form). A bundle (.clfx/.updecx) also works here.\n"
-    "  <booster.ubj>  Loose booster with class labels embedded (see train / bundle -l).\n"
     "\n"
     "Options:\n"
     "  -o <out.tsv>   Write output to a file instead of stdout.\n"
@@ -80,13 +64,18 @@ static int predict_usage(void) {
     "  --min-patterns n        violation: patterns required on each side (20)\n"
     "  --top K                 violation: patterns to use, by rank (1000)\n"
     "  --probs        Append one column per class with its predicted probability.\n"
+    "                 NOT available on a routing tree: each node scores its own\n"
+    "                 class subset and a routed cell is scored by several, so\n"
+    "                 there is no one distribution to report. Whether it should\n"
+    "                 be the leaf's, or the product along the path, is undecided.\n"
     "  --levels       Append the predicted label's whole taxonomy path\n"
     "                 (compartment, lineage, group, subtype).\n"
     "  --level NAME   Append just one level -- compartment | lineage | group |\n"
     "                 subtype. Use this to score against a cohort labelled only\n"
     "                 that coarsely: collapse the prediction to the level the\n"
     "                 truth resolves to, and compare there.\n"
-    "                 Both need a model trained with `classify-train --hierarchy`.\n"
+    "                 Both need a model trained with `classify-train --hierarchy`,\n"
+    "                 and report NA for a label the taxonomy omits.\n"
     "  --no-header    Suppress the header line.\n"
     "  --threads T    Featurize with T workers (default 1). Cells are partitioned\n"
     "                 across workers, each seeking its own records, so this needs\n"
@@ -94,7 +83,7 @@ static int predict_usage(void) {
     "  --data <in.msfm>  Score a prebuilt feature artifact (classify-featurize)\n"
     "                 instead of featurizing <query.cg>. <query.cg> is then omitted.\n"
     "                 Featurization dominates the cost, so this is how to score many\n"
-    "                 models on one test set without repeating it. xgboost only.\n"
+    "                 models on one test set without repeating it.\n"
     "  -h             Show this help message.\n"
     "\n"
     "Output columns:\n"
@@ -233,9 +222,63 @@ static void tree_score(tnode_t *nd, const uint16_t *beta, uint32_t ncol_all,
   free(data);
 }
 
+/* The four taxonomy levels, in the order --hierarchy's TSV lists them. */
+static const char *LEVEL_NAME[4] = {"compartment","lineage","group","subtype"};
+
+/* label -> its four levels, parsed from a booster's embedded --hierarchy TSV.
+ * Keyed by label rather than class index, because a routed cell's call comes
+ * from whichever node decided it and class ids are per node. A label the table
+ * omits reports NA rather than an empty column. */
+typedef struct { char **lab; char **lvl; uint32_t n; } taxo_t;
+
+static void taxo_parse(taxo_t *tx, char *raw) {
+  memset(tx, 0, sizeof *tx);
+  uint32_t cap = 64;
+  tx->lab = calloc(cap, sizeof(char *));
+  tx->lvl = calloc((size_t)cap * 4, sizeof(char *));
+  if (!tx->lab || !tx->lvl) pdie("out of memory (hierarchy)", NULL);
+  char *save = NULL;
+  for (char *line = strtok_r(raw, "\n", &save); line;
+       line = strtok_r(NULL, "\n", &save)) {
+    char *f[5] = {0}; int nf = 0;
+    for (char *p2 = line; nf < 5; ) {
+      f[nf++] = p2;
+      char *t = strchr(p2, '\t');
+      if (!t) break;
+      *t = 0; p2 = t + 1;
+    }
+    if (nf < 5) continue;                 /* header or short row */
+    if (tx->n == cap) {
+      cap <<= 1;
+      tx->lab = realloc(tx->lab, cap * sizeof(char *));
+      tx->lvl = realloc(tx->lvl, (size_t)cap * 4 * sizeof(char *));
+      if (!tx->lab || !tx->lvl) pdie("out of memory (hierarchy)", NULL);
+    }
+    tx->lab[tx->n] = strdup(f[0]);
+    for (int j = 0; j < 4; ++j) tx->lvl[(size_t)tx->n * 4 + j] = strdup(f[j + 1]);
+    ++tx->n;
+  }
+}
+
+static const char *taxo_get(const taxo_t *tx, const char *label, int lvl) {
+  if (!label) return "NA";
+  for (uint32_t i = 0; i < tx->n; ++i)
+    if (!strcmp(tx->lab[i], label)) return tx->lvl[(size_t)i * 4 + lvl];
+  return "NA";
+}
+
+static void taxo_free(taxo_t *tx) {
+  for (uint32_t i = 0; i < tx->n; ++i) {
+    free(tx->lab[i]);
+    for (int j = 0; j < 4; ++j) free(tx->lvl[(size_t)i * 4 + j]);
+  }
+  free(tx->lab); free(tx->lvl);
+}
+
 static int predict_tree(const char *query_cg, const char *bundle,
                         const char *data_path, unsigned threads,
-                        const char *out_path, int no_header) {
+                        const char *out_path, int no_header,
+                        int with_levels, int lvl_col) {
   ms_mrmpset_t *ch = ms_mrmpset_open(bundle);
   /* Satellites are feature providers, not nodes: they have no booster, no
    * children and no place in routing. Their columns reach a node through its
@@ -400,11 +443,35 @@ static int predict_tree(const char *query_cg, const char *bundle,
     if (!moved) break;
   }
 
+  /* Every node carries the same taxonomy (classify-train --hierarchy writes it
+   * to all of them), so the first one that has it answers for the tree. */
+  taxo_t tx; memset(&tx, 0, sizeof tx);
+  if (with_levels || lvl_col >= 0) {
+    char *raw = NULL;
+    for (uint32_t k = 0; k < n && !raw; ++k) raw = ms_booster_get_hier(nd[k].bst);
+    if (!raw)
+      pdie("model carries no hierarchy; retrain with "
+           "`classify-train --hierarchy`", bundle);
+    taxo_parse(&tx, raw);
+    free(raw);
+  }
+
   FILE *fo = out_path ? fopen(out_path, "w") : stdout;
   if (!fo) pdie("cannot open output", out_path);
-  if (!no_header) fprintf(fo, "cell\tprediction_label\tconfidence\n");
-  for (uint32_t r = 0; r < ncells; ++r)
-    fprintf(fo, "%s\t%s\t%.6f\n", cellname[r], lab[r] ? lab[r] : "NA", conf[r]);
+  if (!no_header) {
+    fputs("cell\tprediction_label\tconfidence", fo);
+    if (with_levels)      for (int c = 0; c < 4; ++c) fprintf(fo, "\t%s", LEVEL_NAME[c]);
+    else if (lvl_col >= 0) fprintf(fo, "\t%s", LEVEL_NAME[lvl_col]);
+    fputc('\n', fo);
+  }
+  for (uint32_t r = 0; r < ncells; ++r) {
+    fprintf(fo, "%s\t%s\t%.6f", cellname[r], lab[r] ? lab[r] : "NA", conf[r]);
+    if (with_levels)
+      for (int c = 0; c < 4; ++c) fprintf(fo, "\t%s", taxo_get(&tx, lab[r], c));
+    else if (lvl_col >= 0) fprintf(fo, "\t%s", taxo_get(&tx, lab[r], lvl_col));
+    fputc('\n', fo);
+  }
+  taxo_free(&tx);
   if (fo != stdout) fclose(fo);
 
   for (uint32_t k = 0; k < n; ++k) { XGBoosterFree(nd[k].bst);
@@ -488,12 +555,12 @@ static int predict_violation(const char *query_cg, const char *ref_mrmp,
 int main_predict(int argc, char *argv[]) {
   const char *out_path = NULL, *data_path = NULL;
   unsigned threads = 1;
-  int with_probs = 0, with_levels = 0;
-  const char *one_level = NULL;
+  int with_probs = 0;
   int no_header = 0;
   /* violation scored straight off a .mrmp: it is UNFITTED, a pure function of
    * the artifact and these three numbers, so transcribing it to a bundle first
    * stored nothing and made changing a parameter a rebuild. */
+  int with_levels = 0, lvl_col = -1;
   int fw_violation = 0, vio_min_patterns = 20;
   double vio_threshold = 0.5;
   const char *vio_weight = "sqrt";
@@ -520,7 +587,13 @@ int main_predict(int argc, char *argv[]) {
       vio_top = (uint32_t)strtoul(argv[++i], NULL, 10);
     else if (strcmp(argv[i], "--probs") == 0) with_probs = 1;
     else if (strcmp(argv[i], "--levels") == 0) with_levels = 1;
-    else if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) one_level = argv[++i];
+    else if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) {
+      const char *want = argv[++i];
+      for (int c = 0; c < 4; ++c)
+        if (!strcmp(want, LEVEL_NAME[c])) lvl_col = c;
+      if (lvl_col < 0)
+        pdie("--level must be compartment, lineage, group or subtype", want);
+    }
     else if (strcmp(argv[i], "--no-header") == 0) no_header = 1;
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       predict_usage(); return 0;
@@ -533,15 +606,15 @@ int main_predict(int argc, char *argv[]) {
    * positional list; the model forms are otherwise unchanged. This is what
    * makes scoring many models on one test set cheap -- the featurization,
    * which dominates, happens once in classify-featurize instead of per run. */
-  if (data_path) { if (argc - i != 1 && argc - i != 2) return predict_usage(); }
-  else           { if (argc - i != 2 && argc - i != 3) return predict_usage(); }
+  /* Exactly one model argument. The loose <ref.mrmp> <booster.ubj> form went
+   * with the flat format: a bare booster has no framework mark and no chain, so
+   * there is nothing to route and nothing to check the featurization against. */
+  if (data_path) { if (argc - i != 1) return predict_usage(); }
+  else           { if (argc - i != 2) return predict_usage(); }
   if (data_path) --i;                 /* so argv[i+1], argv[i+2] stay the model */
   const char *query_cg  = data_path ? NULL : argv[i];
   const char *ref_mrmp  = NULL;     /* mrmp path (loose arg, or the bundle path itself) */
   const char *model_name;           /* for error messages */
-  char *tmp_mrmp = NULL;            /* ms_mrmp_resolve temp (always NULL now; kept for API) */
-
-  BoosterHandle booster = NULL;
 
   /* --framework violation: the second argument is the .mrmp itself, not a
    * bundle. Nothing is trained, so there is no model file in between. */
@@ -568,11 +641,12 @@ int main_predict(int argc, char *argv[]) {
     return rc;
   }
 
-  if (argc - i == 2) {
-    /* bundle form: query.cg model.ubjx (model + mrmp in one file) */
+  {
+    /* bundle form, now the only form: query.cg model.clfx (model + mrmp in one
+     * file, so the artifact scoring featurizes against is never in doubt). */
     model_name = argv[i + 1];
     if (!ms_bundle_is(model_name))
-      pdie("expected a .clfx bundle; for a bare booster give <ref.mrmp> <booster.ubj>", model_name);
+      pdie("expected a .clfx bundle", model_name);
     char *kind = ms_bundle_kind(model_name);      /* framework mark is REQUIRED */
     if (!kind)
       pdie("bundle has no framework 'kind' mark — regenerate it with a current "
@@ -590,8 +664,16 @@ int main_predict(int argc, char *argv[]) {
       return rc;
     }
     if (strcmp(kind, "tree") == 0) {
+      /* --probs has no meaning here yet and was being accepted silently: a tree
+       * has no single softmax to report, since each node emits probabilities
+       * over its OWN class subset and a routed cell is scored by several. Say
+       * so rather than emit a header the caller reads as "no classes". */
+      if (with_probs)
+        pdie("--probs is not implemented on the routing-tree path; each node "
+             "scores a different class subset, so there is no one distribution "
+             "to report", model_name);
       int rc = predict_tree(query_cg, model_name, data_path, threads,
-                            out_path, no_header);
+                            out_path, no_header, with_levels, lvl_col);
       free(kind);
       return rc;
     }
@@ -603,266 +685,22 @@ int main_predict(int argc, char *argv[]) {
       free(bbuf); free(kind);
       return rc;
     }
-    if (strcmp(kind, "xgboost") != 0)
-      pdie("unknown model framework 'kind' "
-           "(expected xgboost/violation/threshold/logistic)", kind);
-    free(kind);
-    size_t blen; void *bbuf = ms_bundle_section(model_name, "model", &blen);
-    XGCHK(XGBoosterCreate(NULL, 0, &booster));
-    XGCHK(XGBoosterLoadModelFromBuffer(booster, bbuf, blen));
-    free(bbuf);
-  } else {
-    /* loose form: query.cg ref.mrmp booster.ubj (ref.mrmp may itself be a
-     * bundle, e.g. reuse a .ubjx's mrmp with a different booster). */
-    ref_mrmp   = ms_mrmp_resolve(argv[i + 1], &tmp_mrmp);
-    model_name = argv[i + 2];
-    if (ms_bundle_is(model_name))
-      pdie("got a bundle where a bare booster.ubj was expected; use: classify query.cg model.clfx", model_name);
-    XGCHK(XGBoosterCreate(NULL, 0, &booster));
-    XGCHK(XGBoosterLoadModel(booster, model_name));
-  }
-
-  bst_ulong num_feature = 0;
-  XGCHK(XGBoosterGetNumFeature(booster, &num_feature));
-  int P = (int)num_feature;                 /* booster's total feature count */
-
-  /* Models trained with --scalar-coverage carry ONE extra input after the
-   * pattern columns, so the pattern count is one less than num_feature. The
-   * model says so itself; guessing here would shift every column by one. */
-  int scalar_cov = ms_booster_has_scalar_cov(booster);
-  int n_pat = scalar_cov ? P - 1 : P;
-  if (n_pat < 1) pdie("booster has no pattern features", model_name);
-
-  int K = 0;
-  char **labels = ms_booster_get_labels(booster, &K);  /* NULL if not annotated */
-
-  /* Featurizing the query is the whole cost of scoring a .cg, and it is per
-   * record, so it threads. The threaded builder needs the .cg index to seek, so
-   * a stream ('-') or an unindexed file keeps the serial path -- and says so,
-   * rather than silently running 16x slower than asked. */
-  uint32_t *levels = NULL;
-  ms_matrix_t *m;
-  if (data_path) {
-    m = ms_msfm_to_matrix(data_path, NULL, &levels);
-  } else if (threads > 1) {
-    char *fidx = get_fname_index((char *)query_cg);
-    int have_idx = fidx && access(fidx, R_OK) == 0;
-    free(fidx);
-    if (have_idx) {
-      m = ms_matrix_build_threaded(query_cg, ref_mrmp, (uint32_t)n_pat, threads, &levels);
-    } else {
-      fprintf(stderr, "[methscope] classify: --threads needs a .cg index; "
-              "falling back to the single-threaded scan\n");
-      m = ms_matrix_build(query_cg, ref_mrmp);
-    }
-  } else {
-    m = ms_matrix_build(query_cg, ref_mrmp);
-  }
-  /* Resolve the model's feature columns BY NAME.
-   *
-   * Taking the first n_pat columns positionally is wrong whenever the query
-   * artifact is a fused multi-set .msfm: that layout is set-major, so each
-   * set's Pna background sits between pattern blocks rather than after them,
-   * and a positional cut both admits backgrounds and drops the tail sets. The
-   * booster records the names it was trained on, so gather exactly those. */
-  {
-    int n_stored = 0;
-    char **fn = ms_booster_get_features(booster, &n_stored);
-    if (fn) {
-      if (n_stored != n_pat)
-        pdie("model feature list disagrees with its own feature count", model_name);
-      int *idx = malloc((size_t)n_stored * sizeof(int));
-      if (!idx) pdie("out of memory", NULL);
-      for (int c = 0; c < n_stored; ++c) {
-        idx[c] = -1;
-        for (int q = 0; q < m->n_patterns; ++q)
-          if (!strcmp(fn[c], m->pattern_names[q])) { idx[c] = q; break; }
-        if (idx[c] < 0)
-          pdie("query is missing a feature the model needs", fn[c]);
-      }
-      ms_matrix_select(m, idx, n_stored);
-      free(idx);
-      for (int c = 0; c < n_stored; ++c) free(fn[c]);
-      free(fn);
-    } else if (m->n_patterns != n_pat) {
-      /* Pre-2026-08 model: no name list, so the columns can only be taken
-       * positionally, which is exactly the case that used to go wrong quietly.
-       * Say so rather than scoring on a guess. */
-      fprintf(stderr, "[methscope] classify: model predates feature-name "
-              "recording and the query has %d patterns for %d the model wants; "
-              "taking the first %d BY POSITION, which is only correct if the "
-              "artifact is single-set. Retrain to remove this ambiguity.\n",
-              m->n_patterns, n_pat, n_pat);
-    }
-  }
-  if (m->n_patterns < n_pat)
-    pdie("reference .mrmp has fewer patterns than the booster expects", ref_mrmp);
-
-  /* Reproduce the training feature coding.
-   *
-   * classify --data reads a .msfm whose pattern columns are already coded, but
-   * this path built them with ms_matrix_build(), which returns a continuous
-   * mean. Scoring a model trained on {0,1,NA} against betas in [0,1] is a
-   * silent feature-space mismatch, and it does not degrade gracefully: measured
-   * at 2 of 42 cells correct, 39 of 43 collapsed onto a single class. */
-  {
-    char *how = ms_booster_get_binarize(booster);
-    if (how && !data_path)
-      /* Refuse rather than answer confidently and wrongly. Coding is only half
-       * of it: ms_matrix_build_threaded() also passes `patterns = n_pat` to the
-       * featurizer, so the .cg route RE-SELECTS the top-N patterns by rank
-       * instead of using the model's own columns -- measured at 1.20% of CpGs
-       * carrying a pattern against the artifact's 7.69%. Both selections are
-       * named P1..PN, so the MS_ATTR_FEATURES check matches and nothing errors:
-       * right names, wrong CpGs, 0 of 40 cells correct. Until scoring
-       * featurizes against the model's exact artifact, this path cannot honour
-       * a model trained through a .msfm. */
-      pdie("this model was trained on binarised features and scoring a .cg "
-           "cannot yet reproduce that feature space (it re-selects patterns by "
-           "rank); featurize first with classify-featurize and pass --data",
+    /* The flat single-booster format is gone. It was one booster over one MRMP
+     * set, and everything it did the routing tree does with a 1-node tree --
+     * except that the flat scoring path never learned to featurize a .cg
+     * against the model's own artifact. It called ms_matrix_build_threaded(),
+     * which hardcoded continuous coding and RE-SELECTED the top-N patterns by
+     * rank, so a binarised model had to refuse the .cg route and demand a
+     * prebuilt .msfm. Two featurizers implementing one rule is the failure this
+     * codebase keeps hitting; deleting the second is cheaper than teaching it
+     * what predict_tree() already knows. */
+    if (strcmp(kind, "xgboost") == 0)
+      pdie("this is a flat single-booster model — a format methscope no longer "
+           "scores. Retrain with `classify-train --data <msfm>`, which builds a "
+           "routing-tree bundle (a single-node tree if nothing splits)",
            model_name);
-    if (how && !strcmp(how, "0.5")) {
-      if (data_path) {
-        /* already coded by the featurizer -- re-cutting is a no-op on {0,1} but
-         * would turn a 0.5-valued CONTINUOUS artifact into NA, so don't. */
-      } else {
-        uint64_t nbin = 0, ntie = 0;
-        for (size_t k = 0; k < (size_t)m->n_cells * m->n_patterns; ++k) {
-          double b = m->M[k];
-          if (b != b) continue;                       /* already missing */
-          if (b == 0.5) { m->M[k] = 0.0 / 0.0; m->N[k] = 0; ++ntie; ++nbin; continue; }
-          m->M[k] = b > 0.5 ? 1.0 : 0.0; ++nbin;
-        }
-        fprintf(stderr, "[methscope] classify: binarised %" PRIu64 " feature(s) "
-                "at 0.5 to match the model (%" PRIu64 " tie(s) -> NA)\n", nbin, ntie);
-      }
-    } else if (how && !strcmp(how, "pattern")) {
-      if (!data_path)
-        pdie("model was trained with --thresh-pattern, whose cuts are per-pattern "
-             "and derived from the reference; score it with --data <.msfm> built "
-             "the same way, not from a .cg", model_name);
-    } else if (!how && !data_path) {
-      /* Pre-2026-08-09 model: continuous features, and this path is continuous
-       * too, so they agree. Nothing to do, and nothing to warn about. */
-    }
-    free(how);
+    pdie("unknown model framework 'kind' "
+         "(expected tree/violation/threshold/logistic)", kind);
   }
-
-  /* Pack the first n_pat columns into a float matrix; NaN stays missing. */
-  bst_ulong nrow = (bst_ulong)m->n_cells;
-  bst_ulong ncol = (bst_ulong)P;
-  float *data = malloc((size_t)nrow * ncol * sizeof(float));
-  if (!data) pdie("out of memory (predict matrix)", NULL);
-  for (int r = 0; r < m->n_cells; ++r) {
-    const double *src = m->M + (size_t)r * m->n_patterns;
-    float        *dst = data + (size_t)r * P;
-    for (int c = 0; c < n_pat; ++c) dst[c] = (float)src[c]; /* NaN -> NaN */
-    if (scalar_cov) {
-      /* Same quantity classify-featurize stores: covered CpGs over every
-       * pattern. Recomputed from N when scoring a .cg directly, so the two
-       * input paths agree. */
-      double total = 0;
-      if (levels) total = (double)levels[r];
-      else {
-        const int *n = m->N + (size_t)r * m->n_patterns;
-        for (int c = 0; c < m->n_patterns; ++c) if (n[c] > 0) total += n[c];
-      }
-      dst[n_pat] = (float)log1p(total);
-    }
-  }
-
-  DMatrixHandle  dmat;
-  XGCHK(XGDMatrixCreateFromMat(data, nrow, ncol, NAN, &dmat));
-
-  bst_ulong    out_len;
-  const float *out;
-  XGCHK(XGBoosterPredict(booster, dmat, 0, 0, 0, &out_len, &out));
-  int K_pred = (int)(out_len / nrow);       /* classes the booster actually emits */
-  if (out_len != nrow * (bst_ulong)K_pred || K_pred < 1)
-    pdie("unexpected prediction length", model_name);
-  if (labels && K != K_pred)
-    pdie("embedded label count does not match the booster's num_class", model_name);
-  K = K_pred;
-
-  /* Taxonomy path per class, parsed from the model's own attribute so a
-   * prediction is self-describing and needs no side table. */
-  static const char *LEVEL_NAME[4] = {"compartment", "lineage", "group", "subtype"};
-  int lvl_col = -1;
-  char **hier = NULL;              /* K * 4 entries, class-index order */
-  if (with_levels || one_level) {
-    if (one_level) {
-      for (int c = 0; c < 4; ++c)
-        if (!strcmp(one_level, LEVEL_NAME[c])) lvl_col = c;
-      if (lvl_col < 0)
-        pdie("--level must be compartment, lineage, group or subtype", one_level);
-    }
-    char *raw = ms_booster_get_hier(booster);
-    if (!raw)
-      pdie("model carries no hierarchy; retrain with `classify-train --hierarchy`",
-           model_name);
-    hier = calloc((size_t)K * 4, sizeof(char *));
-    if (!hier) pdie("out of memory (hierarchy)", NULL);
-    char *save = NULL;
-    for (char *line = strtok_r(raw, "\n", &save); line;
-         line = strtok_r(NULL, "\n", &save)) {
-      char *f[5] = {0}; int nf = 0;
-      for (char *p2 = line; nf < 5; ) {
-        f[nf++] = p2;
-        char *t = strchr(p2, '\t');
-        if (!t) break;
-        *t = 0; p2 = t + 1;
-      }
-      if (nf < 5 || !labels) continue;
-      for (int c = 0; c < K; ++c)
-        if (!strcmp(labels[c], f[0]))
-          for (int j = 0; j < 4; ++j) hier[(size_t)c * 4 + j] = strdup(f[j + 1]);
-    }
-    free(raw);
-    /* a class the table omits reports NA rather than an empty column */
-    for (size_t k = 0; k < (size_t)K * 4; ++k)
-      if (!hier[k]) hier[k] = strdup("NA");
-  }
-
-  /* Without embedded labels (un-annotated booster), fall back to numeric names. */
-  char numbuf[16];
-  #define LABEL(c) (labels ? labels[c] : (snprintf(numbuf, sizeof(numbuf), "%d", (c)), numbuf))
-
-  FILE *fout = (out_path && strcmp(out_path, "-") != 0)
-                 ? fopen(out_path, "w") : stdout;
-  if (!fout) pdie("cannot open output", out_path);
-
-  if (!no_header) {
-    fputs("cell\tprediction_label\tconfidence", fout);
-    if (with_levels)
-      for (int c = 0; c < 4; ++c) fprintf(fout, "\t%s", LEVEL_NAME[c]);
-    else if (lvl_col >= 0) fprintf(fout, "\t%s", LEVEL_NAME[lvl_col]);
-    if (with_probs)
-      for (int c = 0; c < K; ++c) fprintf(fout, "\t%s", LABEL(c));
-    fputc('\n', fout);
-  }
-
-  for (int r = 0; r < m->n_cells; ++r) {
-    const float *p = out + (size_t)r * K;
-    int   arg  = 0;
-    float best = -1.0f;
-    for (int c = 0; c < K; ++c) if (p[c] >= best) { best = p[c]; arg = c; } /* ties -> last */
-    double conf = confidence_score(p, K);
-    fprintf(fout, "%s\t%s\t%.6f", m->cell_names[r], LABEL(arg), conf);
-    if (with_levels)
-      for (int c = 0; c < 4; ++c) fprintf(fout, "\t%s", hier[(size_t)arg * 4 + c]);
-    else if (lvl_col >= 0) fprintf(fout, "\t%s", hier[(size_t)arg * 4 + lvl_col]);
-    if (with_probs)
-      for (int c = 0; c < K; ++c) fprintf(fout, "\t%.6f", p[c]);
-    fputc('\n', fout);
-  }
-  #undef LABEL
-
-  if (fout != stdout) fclose(fout);
-  free(data); free(levels);
-  XGDMatrixFree(dmat);
-  XGBoosterFree(booster);
-  if (labels) { for (int c = 0; c < K; ++c) free(labels[c]); free(labels); }
-  ms_matrix_free(m);
-  if (tmp_mrmp) { unlink(tmp_mrmp); free(tmp_mrmp); }
-  return 0;
+  return 1;   /* not reached */
 }
