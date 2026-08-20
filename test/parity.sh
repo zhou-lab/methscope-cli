@@ -22,9 +22,13 @@ if [ ! -f "$MODEL" ]; then
 fi
 
 Q="$MS_REPO/inst/extdata/example.cg"
-echo "== methscope predict / matrix =="
-./methscope predict --probs -o "$OUT/c_pred.tsv"   "$Q" "$MODEL"
-./methscope matrix         -o "$OUT/c_matrix.tsv" "$Q" "$MODEL"
+echo "== methscope classify =="
+./methscope classify --probs -o "$OUT/c_pred.tsv" "$Q" "$MODEL"
+# The feature-matrix leg is gone: `predict` was renamed to `classify` in
+# 7716c50 and this script was never updated, so it had already been failing
+# here; `matrix` has since been removed outright because the .refx it wrote
+# had no reader left. Nothing in the C tree emits that TSV now, so the R
+# comparison below covers the probabilities only.
 
 echo "== R reference =="
 MS_REPO="$MS_REPO" OUT_DIR="$OUT" Rscript test/r_reference.R

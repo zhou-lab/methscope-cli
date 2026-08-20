@@ -484,7 +484,7 @@ bundle_report:;
   char role[160];
   if      (is_updec2) snprintf(role, sizeof role, "whole-genome upscale decoder - run via `upscale`");
   else if (is_updec)  snprintf(role, sizeof role, "upscale decoder - run via `upscale`");
-  else if (is_refx)   snprintf(role, sizeof role, "deconvolution reference - run via `deconv`");
+  else if (is_refx)   snprintf(role, sizeof role, "deconvolution reference (legacy .refx; deconv reads .msdref)");
   else if (is_linear) snprintf(role, sizeof role, "%s linear classifier - run via `classify`", kind ? kind : "linear");
   else if (is_vio)    snprintf(role, sizeof role,
                         "violation rule (unfitted) - run via `classify`");

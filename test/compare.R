@@ -12,6 +12,11 @@ cat(sprintf("predict: %d/%d labels agree, max|conf diff|=%.2e\n", lab_ok, nrow(m
 if (lab_ok != nrow(m) || conf_d > 1e-4) { cat("  -> FAIL\n"); fail <- 1 }
 
 ## ---- feature matrix ----
+## The C side no longer emits this: `matrix` was removed with the .refx path.
+## Skip rather than fail, so the probability comparison above still runs.
+if (!file.exists(file.path(OUT, "c_matrix.tsv"))) {
+  cat("matrix: skipped (no c_matrix.tsv; the `matrix` command was removed)\n")
+} else {
 cm <- as.matrix(read.table(file.path(OUT, "c_matrix.tsv"), header = TRUE, sep = "\t",
                            row.names = 1, check.names = FALSE))
 rm_ <- as.matrix(read.table(file.path(OUT, "r_matrix.tsv"), header = TRUE, sep = "\t",
@@ -25,6 +30,7 @@ d <- abs(A - B); d <- max(d[!is.na(d)])
 cat(sprintf("matrix: %d cells x %d patterns, colorder=%s, NA-agree=%.3f, max|beta diff|=%.2e\n",
             length(cells), length(pats), order_ok, na_ok, d))
 if (!order_ok || na_ok < 1 || d > 2e-3) { cat("  -> FAIL\n"); fail <- 1 }
+}
 
 cat(if (fail) "PARITY: FAIL\n" else "PARITY: PASS\n")
 quit(status = fail)

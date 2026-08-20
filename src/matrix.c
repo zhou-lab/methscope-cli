@@ -316,21 +316,4 @@ void ms_mrmp_trim(const char *in_cm, char *const *keep_names, int n_keep,
   free_cdata(&out); free_cdata(&d);
 }
 
-void ms_matrix_write_tsv(const ms_matrix_t *m, FILE *out, int header) {
-  if (header) {
-    fputs("cell", out);
-    for (int j = 0; j < m->n_patterns; ++j) fprintf(out, "\t%s", m->pattern_names[j]);
-    fputc('\n', out);
-  }
-  for (int i = 0; i < m->n_cells; ++i) {
-    fputs(m->cell_names[i], out);
-    const double *row = m->M + (size_t)i * m->n_patterns;
-    for (int j = 0; j < m->n_patterns; ++j) {
-      if (isnan(row[j])) fputs("\tNA", out);
-      else               fprintf(out, "\t%.6g", row[j]);
-    }
-    fputc('\n', out);
-  }
-}
-
 /* ------------------------------------------------------------------ */

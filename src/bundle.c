@@ -168,7 +168,7 @@ const char *ms_mrmp_resolve(const char *path, char **tmp_out) {
 
      A .mrmp does not: it is the artifact, not the runtime mask. Callers that
      want EVERY set of a chain expand it themselves (classify-featurize does).
-     This is the single-set path -- deconv, build-reference -- so it materializes
+     This is the single-set path -- deconv, deconv-build-ref -- so it materializes
      the FIRST block as a temp .cm and hands that back, which is what the
      (path, tmp_out) contract and ms_mrmp_cleanup() were always for. */
   FILE *f = fopen(path, "rb");

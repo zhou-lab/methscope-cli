@@ -364,6 +364,7 @@ typedef struct {
   uint32_t  mincov;
   char    **name;
   uint32_t *row;              /* n_keep, ascending, into the full row space */
+  int       has_depth;        /* v2 carries counts; v1 does not */
   uint16_t *mu;               /* n_class * n_keep, class-major: M<<8 | U.
                                * beta and depth are DERIVED (d2_b / d2_dep), so
                                * neither is stored -- two bytes carry both. */
@@ -419,10 +420,14 @@ static void d2ref_load(const char *path, d2ref_t *R) {
     d2die("truncated M/U block", path);
   fclose(f);
   d2_lut_init();
+  R->has_depth = (ver == 2);
   if (ver == 1) {
-    /* A v1 artifact stored a bare beta and no counts. Re-encode it as M/U with
-     * a fixed pseudo-depth so one code path serves both; depth-dependent rules
-     * are then simply never satisfied, which is honest -- v1 has no depth. */
+    /* A v1 artifact stored a bare beta and no counts. Re-encode it as M/U so
+     * one code path serves both -- but the pair sums to 255 whatever the beta,
+     * so d2_dep() reports 255 everywhere and any depth test would PASS
+     * unconditionally. That is the opposite of honest, so has_depth records
+     * the truth and every depth-dependent rule consults it rather than
+     * believing the reconstructed counts. */
     size_t n = (size_t)R->n_class * R->n_keep;
     for (size_t j = 0; j < n; ++j) {
       uint16_t b = R->mu[j];
@@ -442,7 +447,8 @@ static void d2ref_load(const char *path, d2ref_t *R) {
     "(%.0f MB%s), qfilter %.2f,%.2f\n", ver,
     R->n_class, (unsigned long long)R->n_keep,
     (double)((size_t)R->n_class * R->n_keep * 2) / 1e6,
-    ver == 2 ? " incl. depth" : ", no depth", R->qlo, R->qhi);
+    ver == 2 ? " incl. depth" : ", NO depth: --rescue-min-depth inactive",
+    R->qlo, R->qhi);
 }
 
 static void d2ref_free(d2ref_t *R) {
@@ -498,7 +504,7 @@ typedef struct {
   double   *wscale;           /* per-pattern influence multiplier, 1 by default */
   double   *rsum;             /* n_pat * nall, reference beta sums */
   double   *qsum;             /* n_pat, query beta sums */
-  uint32_t  n_pat, kw, ns, nall;
+  uint32_t  n_pat, kw, nall;
 } d2pan_t;
 
 static void d2pan_free(d2pan_t *p) {
@@ -573,7 +579,7 @@ static void d2pan_build(const d2ref_t *R, const d2q_t *Q,
                         double rgap, uint32_t rdepth, d2pan_t *out) {
   const uint32_t kw = (ns + 63) >> 6;
   memset(out, 0, sizeof *out);
-  out->kw = kw; out->ns = ns; out->nall = R->n_class;
+  out->kw = kw; out->nall = R->n_class;
   uint32_t cap = 4096;
   out->key  = d2alloc((size_t)cap * kw, sizeof(uint64_t), "keys");
   out->n    = d2alloc(cap, sizeof(uint64_t), "counts");
@@ -667,7 +673,7 @@ static void d2pan_build(const d2ref_t *R, const d2q_t *Q,
              * applies to the PAIR only -- the other classes are along for
              * context and a thin one there costs nothing. This is the whole
              * reason the artifact carries M/U instead of a bare beta. */
-            if (rdepth &&
+            if (rdepth && R->has_depth &&
                 ((uint32_t)d2_dep(R->mu[(size_t)sel[a] * R->n_keep + j]) < rdepth ||
                  (uint32_t)d2_dep(R->mu[(size_t)sel[b2] * R->n_keep + j]) < rdepth))
               continue;
@@ -739,7 +745,8 @@ static void d2pan_build(const d2ref_t *R, const d2q_t *Q,
    * rather than averaging out, so a class whose column is noisier loses mass to
    * a correlated class whose column is cleaner. That is the shape of the
    * one-directional T.Cell.CD8 -> T.Cell.CD4 leak: present in the plain global
-   * fit, shrinking as satellites add CpGs, untouched by every downstream knob.
+   * fit, shrinking as more pair CpGs are admitted, and untouched by every
+ * downstream knob.
    *
    * The legacy .refx has no such noise -- its design values were computed once,
    * at build time, over every reference CpG in the pattern. This second pass
@@ -957,7 +964,7 @@ static void d2ws_init(const d2ref_t *R, d2ws_t *w) {
   w->x    = d2alloc(R->n_class, sizeof(double), "proportions");
   w->x2   = d2alloc(R->n_class, sizeof(double), "round proportions");
   w->xf   = d2alloc(R->n_class, sizeof(double), "full vector");
-  w->xadj = d2alloc(R->n_class, sizeof(double), "adjudication solve");
+  w->xadj = d2alloc(R->n_class, sizeof(double), "final solve");
 }
 
 static void d2ws_free(d2ws_t *w) {
@@ -1045,8 +1052,9 @@ static void d2_fit_gaps(const d2ref_t *R, const d2q_t *Q,
         uint16_t va = R->mu[(size_t)sel[pa[p]] * R->n_keep + j];
         uint16_t vb = R->mu[(size_t)sel[pb[p]] * R->n_keep + j];
         if (!va || !vb) continue;
-        if (rdepth && ((uint32_t)d2_dep(va) < rdepth ||
-                       (uint32_t)d2_dep(vb) < rdepth)) continue;
+        if (rdepth && R->has_depth &&
+            ((uint32_t)d2_dep(va) < rdepth ||
+             (uint32_t)d2_dep(vb) < rdepth)) continue;
         int32_t d = (int32_t)d2_b(va) - (int32_t)d2_b(vb);
         if (d < 0) d = -d;
         uint32_t bin = (uint32_t)((double)d / 65534.0 * D2_GBINS);
@@ -1218,9 +1226,8 @@ static void d2_record(const d2ref_t *Rr, const d2opt_t *o, d2ws_t *w,
           }
         }
       }
-      /* --no-narrow: skip the rebuild rounds and hang the satellites off the
-       * GLOBAL panel, so the scope stays every class. Isolates what the
-       * satellites are worth on their own, without the narrowing. */
+      /* --no-narrow: skip the rebuild rounds entirely and keep every class, so
+       * the answer is the global fit. Isolates what the narrowing is worth. */
       for (uint32_t round = 2; narrow && !o->force_scope && round <= max_round;
            ++round) {
         uint32_t n_sel2 = 0;
@@ -1282,11 +1289,6 @@ static void d2_record(const d2ref_t *Rr, const d2opt_t *o, d2ws_t *w,
         }
         double we = wexp[(round - 1) < (uint32_t)n_wexp
                          ? (round - 1) : (uint32_t)(n_wexp - 1)];
-        /* Satellites in EVERY round, not just round 1 and the final solve.
-         * Measured: 0.057 vs 0.063 TVD at 2^20 and 0.035 vs 0.036 at 2^22.
-         * seg2 is credited with each pair's satellite CpGs at the same time, so
-         * the pruning below judges a confuser on the evidence the solve was
-         * actually given rather than on the base panel alone. */
           if (o->design_out) {      /* same dump, base panel only */
             FILE *df = fopen(o->design_out, round == 2 ? "w" : "a");
             if (!df) d2die("cannot open --design-out", o->design_out);
@@ -1441,15 +1443,10 @@ static void d2_record(const d2ref_t *Rr, const d2opt_t *o, d2ws_t *w,
      * that actually survived and solves that. Removing it cost 0.062 -> 0.118
      * TVD on the immune cohort, with the pair split going 0.035 -> 0.102.
      *
-     * It goes through d2_union_sats like every other solve, so --sat-share
-     * applies here too; when it built its own union inline the cap silently
-     * did nothing and the sweep read flat across a 20x range.
      *
-     * It runs whether or not satellites are wanted. Gating it on "a satellite
-     * was built" meant that any record whose settled scope held no confusable
-     * pair -- and EVERY record under --no-adjudicate -- silently kept the
-     * round-1 GLOBAL fit as its answer, so an adaptive-only arm measured the
-     * global one instead. */
+     * It runs unconditionally. It was once gated on "a satellite was built",
+     * which meant any record whose settled scope held no confusable pair
+     * silently kept the round-1 GLOBAL fit as its answer. */
     {
       uint32_t n_fin = 0;
       for (uint32_t c = 0; c < R.n_class; ++c) if (inscope[c]) sel2[n_fin++] = c;
@@ -1580,12 +1577,12 @@ int main_deconv(int argc, char *argv[]) {
   double wexp[16]; int n_wexp = 1; wexp[0] = 0.5;
   /* Absolute, in MEASURED CpGs, because that is what reaches the solve.
    *
-   * 50, measured on the global panel. On t1_4_32 the panel offers ~17 CpGs to
+   * 200. Measured on the global panel: on t1_4_32 it offers ~17 CpGs to
    * tell T.Cell.CD8 from T.Cell.CD4 -- 18 survive the 33-class conjunction out
    * of the 217 the pair actually holds -- and CD8 was fitted at exactly 0.000
-   * because CD4 took its mass. A floor of 50 retains it; 10 does not, and 20 is
-   * the edge. Set above that edge rather than on it, since the count moves with
-   * coverage and with --delta-mean-top. */
+   * because CD4 took its mass. A floor of 20 is the edge and 50 retains it;
+   * 200 sits well clear, since the count moves with coverage and with
+   * --delta-mean-top, and 100 vs 200 gave byte-identical trajectories. */
   uint64_t max_seg = 200;
   double mass_floor = 0.005;
   int verbose = 0, i = 1;
@@ -1653,7 +1650,7 @@ int main_deconv(int argc, char *argv[]) {
 "  Options\n"
 "    -o FILE        output TSV, one row per query record (default stdout)\n"
 "    --delta-mean-top N  per BINSTRING keep only the N measured CpGs with the\n"
-"                   cleanest class gap (default 1000; 0 = keep all, and fewer\n"
+"                   cleanest class gap (default 0 = keep all; fewer\n"
 "                   than N when the q-filter admits fewer). Bounds a\n"
 "                   pattern's influence, which is linear in its CpG count,\n"
 "                   and improves the pattern: its beta then averages its best\n"
@@ -1663,13 +1660,14 @@ int main_deconv(int argc, char *argv[]) {
 "                   both enter the scope; the relation is closed, making the\n"
 "                   scope a union of connected components. ABSOLUTE, because\n"
 "                   an absolute CpG count is what reaches the solve.\n"
-"                   Default 50: the global panel offers ~17 CpGs for\n"
+"                   Default 200: the global panel offers ~17 CpGs for\n"
 "                   CD4 vs CD8 on a 2^20 immune mixture, where the pair\n"
 "                   itself holds 217.\n"
 "    --mass-floor F  a class seeds the scope at >= F (default 0.005). Not 0:\n"
 "                   NNLS hands out arbitrary exact zeros among collinear\n"
 "                   columns.\n"
-"    --nthreads N   deconvolve N records in parallel (default 1). The\n"
+"    --nthreads N   deconvolve N records in parallel (default 1; --threads\n"
+"                   is an alias). The\n"
 "                   reference is shared, so memory grows by the per-thread\n"
 "                   workspace (~16 MB) rather than linearly. Needs a\n"
 "                   <query>.idx to seek by; -v, --panel-out and --scope-out\n"
@@ -1707,17 +1705,33 @@ int main_deconv(int argc, char *argv[]) {
 "    --rescue-floor G  never relax a pair past this gap (default 0.15), so a\n"
 "                   pair with no real evidence cannot admit noise.\n"
 "    --rescue-min-depth N  require N reads on BOTH classes of the pair before\n"
-"                   its gap is believed (default 0 = off; needs a v2 .msdref,\n"
+"                   its gap is believed (default 10; 0 = off. Needs a v2 .msdref,\n"
 "                   which carries M/U rather than a bare beta). The other\n"
 "                   classes carry no depth requirement -- they are context.\n"
+"                   Default 10; 0 = off. Inactive on a v1 reference.\n"
 "    --rescue-qfilter LO,HI  the wider band (default 0.40,0.60)\n"
-"    --no-narrow    skip the rebuild rounds; satellites attach to the global\n"
-"                   panel over every class\n"
+"    --no-narrow    skip the rebuild rounds and fit the global panel over\n"
+"                   every class\n"
 "    --max-round N  cap on rebuild rounds (default 8); it stops early\n"
 "                   when the class set stops changing\n"
 "    --scope-out F  write the settled scope, 1/0 per class per record\n"
+"    --weight-exponent E  row weight is n^E (default 0.5 = sqrt(n), the\n"
+"                   precision weight). The solve squares it, so influence is\n"
+"                   n^2E. --unweighted is E = 0; both measured WORSE than the\n"
+"                   default at every rung.\n"
+"    --force-scope C[,C..]  use exactly these classes, skipping discovery. A\n"
+"                   diagnostic: it answers whether a narrow panel is weak\n"
+"                   because the scope is wrong or because it is narrow.\n"
+"    --eval-x SPEC  print the objective at hand-given compositions beside the\n"
+"                   fitted one, as \"Cls=frac,Cls=frac;Cls=frac,...\". Answers\n"
+"                   what NNLS cannot: is the answer wrong because the solver\n"
+"                   missed the optimum, or because the panel scores the wrong\n"
+"                   composition better? Needs -v.\n"
+"    --design-out F  dump the exact system handed to the solve -- one row per\n"
+"                   pattern, its weight, the observed value and every scope\n"
+"                   class's profile -- so the fit can be redone outside.\n"
 "    --min-cpg N    drop a pattern seen on fewer than N measured CpGs\n"
-"                   (default 1)\n"
+"                   (default 5)\n"
 "    --pair-count A,B  report how many MEASURED CpGs segregate classes A and\n"
 "                   B on their own, and how many of those survive the\n"
 "                   all-classes admission conjunction\n"

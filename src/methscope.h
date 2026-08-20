@@ -62,7 +62,6 @@ void         ms_matrix_select(ms_matrix_t *m, const int *idx, int n);
 
 ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm);
 void         ms_matrix_free(ms_matrix_t *m);
-void         ms_matrix_write_tsv(const ms_matrix_t *m, FILE *out, int header);
 
 /**
  * Write a trimmed copy of an MRMP reference (.cm) keeping only the states named
