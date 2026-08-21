@@ -839,14 +839,7 @@ int main_train(int argc, char *argv[]) {
       char tbuf[16]; snprintf(tbuf, sizeof(tbuf), "%d", nt);
       XGCHK(XGBoosterSetParam(booster, "nthread", tbuf));
       { char c1[32], c2[32];
-        /* Read once; every node gets a copy. A tree has no single booster to hang
-   * this on, and `classify` reads it back from whichever node made the call,
-   * so the taxonomy has to travel with all of them -- the same reason the
-   * class-label list is set per node. */
-  char *hier_buf = hier_path ? slurp_file(hier_path, "cannot open --hierarchy")
-                             : NULL;
-
-  fprintf(stderr, "\n[methscope] classify-train\n\n");
+        fprintf(stderr, "\n[methscope] classify-train\n\n");
         fprintf(stderr, "  %-14s %s records x %s patterns, %d classes\n", "data",
                 commafmt_tr((uint64_t)m->n_cells, c1),
                 commafmt_tr((uint64_t)npattern, c2), K);

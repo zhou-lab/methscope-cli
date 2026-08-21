@@ -288,7 +288,7 @@ static void write_msfm(const char *out, const ms_matrix_t *m, char **lab) {
   uint32_t nr = (uint32_t)m->n_cells, np = (uint32_t)m->n_patterns;
 
   /* class table = sorted unique labels, so the stored id IS the class index a
-   * model will use (train.c derives the same order independently). */
+   * model will use (classify_train.c derives the same order independently). */
   uint32_t nk = 0;
   char **uniq = NULL;
   uint16_t *cid = xmal((size_t)nr * 2, "class ids");

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /* MSFMAT1 -- a featurized record x pattern matrix, shared by the writer
- * (msfm.c) and its consumers (train.c, predict.c) so the two cannot drift.
+ * (msfm.c) and its consumers (classify_train.c, classify.c) so the two cannot drift.
  *
  * This is a `.msur` stripped to what a LABEL model needs. The upscale msur is
  * dominated by things only a CpG-level decoder uses -- the embedded truth
