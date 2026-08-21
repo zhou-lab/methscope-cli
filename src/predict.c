@@ -157,10 +157,13 @@ typedef struct {
   int           parent;          /* index, -1 for the root */
 } tnode_t;
 
-/* The featurize mode is not recorded anywhere, so recover it: only one mode
- * makes every node's layout width equal its booster's feature count. Trying
- * them is also a check -- a bundle whose boosters disagree with every mode is
- * mispaired with its chain, which is exactly what must not score silently. */
+/* The LAYOUT mode is not recorded anywhere, so recover it: only one mode makes
+ * every node's layout width equal its booster's feature count. Trying them is
+ * also a check -- a bundle whose boosters disagree with every mode is mispaired
+ * with its chain, which is exactly what must not score silently.
+ *
+ * Only the layout. The feature CODING is recorded and is read separately by
+ * tree_binarize(); the width test cannot see it. */
 static uint32_t tree_mode(const char *bundle, tnode_t *nd, uint32_t n) {
   static const uint32_t TRY[] = { MSFM_FLAG_RANK_ONLY, 0u, MSFM_FLAG_RANK_ADD,
                                   MSFM_FLAG_CONTRAST_ONLY, MSFM_FLAG_CONTRAST_ADD };
@@ -275,6 +278,47 @@ static void taxo_free(taxo_t *tx) {
   free(tx->lab); free(tx->lvl);
 }
 
+/* The feature CODING, unlike the layout above, IS recorded: classify-train
+ * writes it onto every node (bmeta.h, MS_ATTR_BINARIZE). Read it rather than
+ * assume, because binarising does not change a node's column count, so
+ * tree_mode()'s width test is blind to it -- a model trained with
+ * --thresh-pattern or --continuous-features would be scored against a flat 0.5
+ * cut, silently. Measured in the other direction, that mismatch put 2 of 42
+ * cells right, with 39 of 43 collapsing onto one class.
+ *
+ * Absent means continuous: every model trained before 2026-08-09 predates the
+ * attribute. Both shipped models record "0.5", which is what the .cg path used
+ * to hardcode, so this changes nothing for them.
+ *
+ * Nodes must AGREE. One query pass codes the columns every node then reads, so
+ * a bundle whose boosters were trained under different codings cannot be scored
+ * coherently -- refuse rather than pick one. */
+static int tree_binarize(const tnode_t *nd, uint32_t n, const char *bundle) {
+  int mode = -1;
+  for (uint32_t k = 0; k < n; ++k) {
+    char *how = ms_booster_get_binarize(nd[k].bst);
+    int m = !how ? 0
+          : !strcmp(how, "0.5") ? 1
+          : !strcmp(how, "pattern") ? 2 : -2;
+    char msg[320];
+    if (m == -2) {
+      snprintf(msg, sizeof msg, "node %.120s records feature coding '%.60s', "
+               "which this build does not know (expected '0.5' or 'pattern')",
+               nd[k].name, how);
+      free(how); pdie(msg, bundle);
+    }
+    free(how);
+    if (mode < 0) { mode = m; continue; }
+    if (m != mode) {
+      snprintf(msg, sizeof msg, "node %.120s was trained with a different "
+               "feature coding than an earlier node; one query pass cannot code "
+               "the columns both ways", nd[k].name);
+      pdie(msg, bundle);
+    }
+  }
+  return mode < 0 ? 0 : mode;
+}
+
 static int predict_tree(const char *query_cg, const char *bundle,
                         const char *data_path, unsigned threads,
                         const char *out_path, int no_header,
@@ -340,6 +384,7 @@ static int predict_tree(const char *query_cg, const char *bundle,
     if (found != 1) pdie("tree must have exactly one root", bundle); }
 
   const uint32_t mode = tree_mode(bundle, nd, n);
+  const int bin_feat = tree_binarize(nd, n, bundle);
 
   /* one pass over the query, every node's columns for every cell -- or none at
    * all when a prebuilt matrix is handed over. A .msfm featurized against this
@@ -392,7 +437,7 @@ static int predict_tree(const char *query_cg, const char *bundle,
   }
   uint32_t *col0 = malloc(nall * sizeof(uint32_t));
   ms_msfm_build_sampled_multi(query_cg, rr, base, blen2, np, nall, &one, 1,
-                              1 /* -b */, 0, 20260812, threads, 1 /* 0.5 cut */,
+                              1 /* -b */, 0, 20260812, threads, bin_feat,
                               (mode & MSFM_FLAG_CONTRAST_ONLY) ? 2 :
                               (mode & MSFM_FLAG_CONTRAST_ADD)  ? 1 : 0,
                               (mode & MSFM_FLAG_RANK_ONLY) ? 2 :
