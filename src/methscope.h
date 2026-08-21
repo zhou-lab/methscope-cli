@@ -80,8 +80,8 @@ void ms_mrmp_trim(const char *in_cm, char *const *keep_names, int n_keep,
  *   <mrmp>.mrmp            the MRMP pattern definition (a YAME .cm)
  *   <mrmp>-<panel>.ubj     an XGBoost booster with class labels embedded as
  *                          attributes (see bmeta.h)
- * For deconvolution the reference is a `.refx` whose `model` section is a
- * celltype x pattern signature TSV (built by `matrix --refx`).
+ * Deconvolution does not use a bundle: its reference is a standalone .msdref
+ * (see deconv.c), built by `deconv-build-ref`.
  * Booster-attribute helpers live in bmeta.h (they need <xgboost/c_api.h>). */
 
 /* ------------------------------------------------------------------ */

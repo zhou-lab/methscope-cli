@@ -238,8 +238,7 @@ static int bundle_usage(void) {
     "  Works for any model; by convention the output extension names the ROLE:\n"
     "    a classifier          -> model.clfx    (classify)\n"
     "    an upscale decoder    -> model.updecx  (upscale)\n"
-    "    a deconv reference    -> panel.refx    (deconv)\n"
-    "  All three are the same MSBNDL1 container and are detected by magic, not by\n"
+    "  Both are the same MSBNDL1 container and are detected by magic, not by\n"
     "  name; '.ubjx' is the former classifier extension and is still accepted.\n"
     "\n"
     "Options:\n"
@@ -374,18 +373,17 @@ char *ms_bundle_kind(const char *path) {
 /* Every bundle is the same MSBNDL1 container and is DETECTED by magic
  * (ms_bundle_is), so this list is only about what a writer will accept as an
  * output name. The extensions name the model's role: .clfx classifier, .updecx
- * upscale decoder, .refx deconvolution reference. ".ubjx" was the classifier's
+ * upscale decoder. ".ubjx" was the classifier's
  * former name -- it described the payload format (a UBJSON booster) rather than
  * the role, and stopped being true the moment the threshold/logistic
  * frameworks shipped a plain-text model section under it. Kept accepted
  * indefinitely: detection never depended on it, so nothing is gained by
- * breaking existing files or scripts. ".refx" was missing here entirely, which
- * is the drift that having three names for one container invites. */
+ * breaking existing files or scripts. ".refx" was the deconvolution reference
+ * before .msdref replaced it; nothing produces or reads one now. */
 int ms_path_is_bundle_ext(const char *path) {
   size_t n = strlen(path);
   return (n >= 5 && strcmp(path + n - 5, ".clfx")   == 0) ||
          (n >= 7 && strcmp(path + n - 7, ".updecx") == 0) ||
-         (n >= 5 && strcmp(path + n - 5, ".refx")   == 0) ||
          (n >= 5 && strcmp(path + n - 5, ".ubjx")   == 0);  /* legacy */
 }
 
@@ -484,7 +482,7 @@ static int unbundle_usage(void) {
     "  methscope unbundle [-o <model_out>] [--mrmp <mrmp_out>] <bundle>\n"
     "\n"
     "Purpose:\n"
-    "  Unpack a bundle (.clfx / .updecx / .refx) into its inner model, its MRMP,\n"
+    "  Unpack a bundle (.clfx / .updecx) into its inner model, its MRMP,\n"
     "  and (if present) the output-CpG mask.\n"
     "\n"
     "  With no -o/--mrmp, output names are derived from the bundle path (the\n"
@@ -492,7 +490,6 @@ static int unbundle_usage(void) {
     "  the model, and add sibling suffixes for the rest --\n"
     "    foo.clfx   -> foo.model + foo.mrmp  (+ foo.outcpg.cm if present)\n"
     "    foo.updecx -> foo.updec + foo.mrmp\n"
-    "    foo.refx   -> foo.ref   + foo.mrmp\n"
     "\n"
     "Options:\n"
     "  -o <model_out>    write the inner model here (default: derived, see above).\n"

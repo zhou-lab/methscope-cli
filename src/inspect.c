@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * `inspect` — describe a model bundle (.clfx / .updecx / .refx) without running
+ * `inspect` — describe a model bundle (.clfx / .updecx) without running
  * inference: the framework mark (kind), the on-disk section layout (each section's
  * offset + size + a short description of its contents), and a breakdown of the
  * `model` section by framework:
  *   xgboost            -> num_feature + embedded labels
  *   threshold/logistic -> method, labels, bias, scale, per-feature weight/mean
- *   refx               -> cell types x patterns + the cell-type labels
  *   upscale (UPDEC1)   -> n_in / n_hidden / n_out from the decoder header
  */
 #include <stdio.h>
@@ -39,7 +38,7 @@ static int inspect_usage(void) {
     "Purpose:\n"
     "  Describe any methscope artifact without running it. The format is detected\n"
     "  from its magic:\n"
-    "    .clfx/.updecx/.refx  bundle: kind mark, section layout, model breakdown\n"
+    "    .clfx/.updecx        bundle: kind mark, section layout, model breakdown\n"
     "    .mrmp   MRMPIDX1  pattern set: dimensions, binstring parameters, top ranks\n"
     "    .msui   MSUIDX1   processing-unit index: units, memberships, CpG split\n"
     "    .msur   MSURAW2/3 training msur: cells, replicates, embedded truth\n"
@@ -427,8 +426,6 @@ bundle_report:;
   int is_updec  = (mlen >= 6  && memcmp(mbuf, "UPDEC1", 6) == 0);
   int is_linear = (mlen >= 16 && memcmp(mbuf, "methscope-linear", 16) == 0);
   int is_vio    = (mlen >= 19 && memcmp(mbuf, "methscope-violation", 19) == 0);
-  int is_refx   = (kind && strcmp(kind, "refx") == 0) ||
-                  (mlen >= 5 && memcmp(mbuf, "cell\t", 5) == 0);
 
   /* bundled-MRMP state count (used in both the layout and the model summary) */
   size_t rlen = 0;
@@ -444,13 +441,6 @@ bundle_report:;
   free(rbuf);
 
   /* framework-specific dims parsed once (reused by the layout + the model block) */
-  int refx_cells = 0, refx_pat = 0;
-  if (is_refx) {
-    for (size_t k = 0; k < mlen && ((char *)mbuf)[k] != '\n'; ++k)
-      if (((char *)mbuf)[k] == '\t') refx_pat++;                 /* header tabs = #patterns */
-    int lines = 0; for (size_t k = 0; k < mlen; ++k) if (((char *)mbuf)[k] == '\n') lines++;
-    refx_cells = lines > 0 ? lines - 1 : 0;                      /* rows minus header */
-  }
   int32_t ud[3] = {0, 0, 0};
   if (is_updec && mlen >= 20) memcpy(ud, (char *)mbuf + 8, 12);  /* magic(8) then n_in,n_hidden,n_out */
   /* violation dims straight off the spec: labels from the tab count on the
@@ -473,7 +463,6 @@ bundle_report:;
   char mdesc[160];
   if      (is_updec2) snprintf(mdesc, sizeof mdesc, "UPDEC2 whole-genome unit decoder (%u units)", u2.n_units);
   else if (is_updec)  snprintf(mdesc, sizeof mdesc, "UPDEC1 MLP decoder (%d->%d->%d)", ud[0], ud[1], ud[2]);
-  else if (is_refx)   snprintf(mdesc, sizeof mdesc, "refx signature TSV (%d cell types x %d patterns)", refx_cells, refx_pat);
   else if (is_linear) snprintf(mdesc, sizeof mdesc, "methscope-linear text spec");
   else if (is_vio)    snprintf(mdesc, sizeof mdesc,
                         "methscope-violation text spec (%d classes x %d patterns)",
@@ -484,7 +473,6 @@ bundle_report:;
   char role[160];
   if      (is_updec2) snprintf(role, sizeof role, "whole-genome upscale decoder - run via `upscale`");
   else if (is_updec)  snprintf(role, sizeof role, "upscale decoder - run via `upscale`");
-  else if (is_refx)   snprintf(role, sizeof role, "deconvolution reference (legacy .refx; deconv reads .msdref)");
   else if (is_linear) snprintf(role, sizeof role, "%s linear classifier - run via `classify`", kind ? kind : "linear");
   else if (is_vio)    snprintf(role, sizeof role,
                         "violation rule (unfitted) - run via `classify`");
@@ -583,26 +571,6 @@ bundle_report:;
         printf("      %-10s %d\n", "n_in",     ud[0]);
         printf("      %-10s %d\n", "n_hidden", ud[1]);
         printf("      %-10s %d\n", "n_out",    ud[2]);
-      } else if (is_refx) {
-        printf("      %-10s %d\n", "cell types", refx_cells);
-        printf("      %-10s %d\n", "patterns",   refx_pat);
-        char **cts = malloc((refx_cells ? refx_cells : 1) * sizeof *cts);
-        if (!cts) idie("out of memory", NULL);
-        int nct = 0; size_t p = 0; int line = 0;
-        while (p < mlen && nct < refx_cells) {         /* first field of each data row */
-          size_t e = p; while (e < mlen && ((char *)mbuf)[e] != '\n') e++;
-          if (line > 0 && e > p) {
-            size_t f = p; while (f < e && ((char *)mbuf)[f] != '\t') f++;
-            char *s = malloc(f - p + 1);
-            if (!s) idie("out of memory", NULL);
-            memcpy(s, (char *)mbuf + p, f - p); s[f - p] = '\0';
-            cts[nct++] = s;
-          }
-          p = e + 1; line++;
-        }
-        printf("      %-10s ", "labels"); print_labels(cts, nct);
-        for (int j = 0; j < nct; ++j) free(cts[j]);
-        free(cts);
       } else if (is_linear) {
         linmodel_t *lm = ms_linmodel_parse(mbuf, mlen);
         printf("      %-10s %s\n",     "method",   lm->method);

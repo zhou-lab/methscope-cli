@@ -149,13 +149,18 @@ Options:
   --min-patterns n        violation: patterns required on each side (20)
   --top K                 violation: patterns to use, by rank (1000)
   --probs        Append one column per class with its predicted probability.
+                 NOT available on a routing tree: each node scores its own
+                 class subset and a routed cell is scored by several, so
+                 there is no one distribution to report. Whether it should
+                 be the leaf's, or the product along the path, is undecided.
   --levels       Append the predicted label's whole taxonomy path
                  (compartment, lineage, group, subtype).
   --level NAME   Append just one level -- compartment | lineage | group |
                  subtype. Use this to score against a cohort labelled only
                  that coarsely: collapse the prediction to the level the
                  truth resolves to, and compare there.
-                 Both need a model trained with `classify-train --hierarchy`.
+                 Both need a model trained with `classify-train --hierarchy`,
+                 and report NA for a label the taxonomy omits.
   --no-header    Suppress the header line.
   --threads T    Featurize with T workers (default 1). Cells are partitioned
                  across workers, each seeking its own records, so this needs
@@ -212,9 +217,9 @@ Usage: methscope deconv [options] <query.cg> <ref.msdref> -o <out.tsv>
                    this query measured. n and qsum stay measured-only. Noise
                    in the design matrix attenuates coefficients toward zero,
                    so a noisier column loses mass to a cleaner correlated
-                   one; the legacy .refx has no such noise because its design
-                   values were computed once at build time. Costs a second
-                   pass over the kept rows.
+                   one. The retired .refx reference had no such noise, its
+                   design values having been computed once at build time.
+                   Costs a second pass over the kept rows.
     --rescue-below N  a pair the rebuilt panel separates by fewer than N
                    measured CpGs is WEAK; the panel is then rebuilt so that a
                    CpG splitting a weak pair is admitted under a wider rule
@@ -284,7 +289,7 @@ Usage:
 Purpose:
   Describe any methscope artifact without running it. The format is detected
   from its magic:
-    .clfx/.updecx/.refx  bundle: kind mark, section layout, model breakdown
+    .clfx/.updecx        bundle: kind mark, section layout, model breakdown
     .mrmp   MRMPIDX1  pattern set: dimensions, binstring parameters, top ranks
     .msui   MSUIDX1   processing-unit index: units, memberships, CpG split
     .msur   MSURAW2/3 training msur: cells, replicates, embedded truth

@@ -5,7 +5,6 @@
  * run without a separate .mrmp. The `x` extension suffix marks the bundled form:
  *   .ubj   (cell-type booster / linear model) -> .ubjx   (run by `predict`)
  *   .updec (upscale block decoder)            -> .updecx  (run by `upscale`)
- *   .ref   (celltype x pattern signature TSV) -> .refx    (run by `deconv`)
  *
  * layout — the MRMP .cm is the FIRST bytes of the file, so `yame` (and any tool
  * reading a .cm) can read a bundle directly: yame stops at the .cm's BGZF EOF marker
@@ -31,7 +30,6 @@
  *                             spec (threshold/logistic). Class labels live INSIDE
  *                             the .ubj as XGBoost attributes, not a separate section.
  *                  .updecx -> a .updec MLP decoder (little-endian float32 weights).
- *                  .refx   -> the celltype x pattern beta signature (a TSV).
  *   "outcpg"     (upscale only, optional) a genome-wide mask of the imputed CpG
  *                locations; if present, `upscale` writes a whole-genome .cg. The
  *                format allows repeated (outcpg, model) pairs for a multi-block
@@ -39,7 +37,6 @@
  *   "kind"       the framework mark string:
  *                  .ubjx   -> "xgboost" | "threshold" | "logistic"  (REQUIRED;
  *                             `predict` rejects an unmarked bundle).
- *                  .refx   -> "refx".
  *                  .updecx has no kind (dispatched by the `upscale` subcommand).
  *
  * A wrong pairing (e.g. a .updecx fed to `predict`) fails on the inner model's own
@@ -89,7 +86,7 @@ void ms_mrmp_cleanup(char *tmp);
 /* Pack an inner model file + its MRMP (+ optional outcpg mask) into an MSBNDL1
  * bundle at `out` (the on-disk form `bundle` writes): the MRMP .cm becomes the file
  * prefix, then the container with sections [kind] [outcpg] model. `kind` (e.g.
- * "xgboost"/"threshold"/"refx") is written as a "kind" section marking the model
+ * "xgboost"/"threshold") is written as a "kind" section marking the model
  * framework; pass NULL to omit it. `outcpg_path` may be NULL. Exits on I/O error. */
 void ms_bundle_pack(const char *out, const char *kind, const char *model_path,
                     const char *mrmp_path, const char *outcpg_path);
@@ -107,7 +104,7 @@ void ms_bundle_pack_tree(const char *out, const char *chain_path,
 char *ms_bundle_kind(const char *path);
 
 /* 1 if `path` carries a bundled-model extension: ".clfx" (classifier),
- * ".updecx" (upscale decoder), ".refx" (deconv reference), or the legacy
+ * ".updecx" (upscale decoder), or the legacy
  * ".ubjx". Detection of an actual bundle is by magic (ms_bundle_is); this only
  * governs what a writer accepts as an output name. */
 int ms_path_is_bundle_ext(const char *path);
