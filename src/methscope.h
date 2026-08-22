@@ -61,6 +61,11 @@ typedef struct ms_matrix_t {
 void         ms_matrix_select(ms_matrix_t *m, const int *idx, int n);
 
 ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm);
+/* Same, but columns ordered SET-MAJOR (every column of mask record k before any
+ * of record k+1, by pattern rank within each). That is the layout
+ * ms_mrmp_group_map_chain() writes at featurize time, so a model trained on a
+ * CHAIN must be fed this and not the default numeric-across-records order. */
+ms_matrix_t *ms_matrix_build_sets(const char *query_cg, const char *ref_cm);
 void         ms_matrix_free(ms_matrix_t *m);
 
 /**

@@ -48,12 +48,28 @@ static long pattern_numeric_key(const char *s) {
   return LONG_MAX - 1;
 }
 
-typedef struct { long key; int idx; } colkey_t;
+typedef struct { long key; int set; int idx; } colkey_t;
 static int cmp_colkey(const void *a, const void *b) {
   const colkey_t *x = a, *y = b;
   if (x->key < y->key) return -1;
   if (x->key > y->key) return 1;
   return x->idx - y->idx;            /* stable on ties */
+}
+
+/* SET-MAJOR: every column of set k before any column of set k+1, and within a
+ * set by pattern rank. This is the layout ms_mrmp_group_map_chain() produces at
+ * featurize time, so an upscaler trained on a chain must be fed this order.
+ *
+ * It is NOT the default, because classify-train and classify both call
+ * ms_matrix_build() and then ms_matrix_select() with indices resolved against
+ * whatever order it returned -- every shipped .clfx stores those indices, so
+ * changing the default order would silently repoint them. */
+static int cmp_colkey_setmajor(const void *a, const void *b) {
+  const colkey_t *x = a, *y = b;
+  if (x->set != y->set) return x->set - y->set;
+  if (x->key < y->key) return -1;
+  if (x->key > y->key) return 1;
+  return x->idx - y->idx;
 }
 
 /*
@@ -89,7 +105,8 @@ void ms_matrix_select(ms_matrix_t *m, const int *idx, int n) {
   m->n_patterns = n;
 }
 
-ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm) {
+static ms_matrix_t *matrix_build(const char *query_cg, const char *ref_cm,
+                                 int set_major) {
   config_t config = {0};
   config.fname_mask = (char *)ref_cm;
 
@@ -126,6 +143,7 @@ ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm) {
 
   size_t   n_raw = 0, rawcap = 0;     /* number of state-columns (set on cell 0) */
   char   **raw_names = NULL;          /* length n_raw, summarize order           */
+  int     *raw_set = NULL;            /* which mask record each column came from */
   double  *raw_row = NULL;            /* scratch row, length rawcap              */
   int     *raw_Ncnt = NULL;           /* scratch N_overlap row, length rawcap    */
   double  *Mraw = NULL;               /* n_cells x n_raw, raw column order        */
@@ -158,13 +176,16 @@ ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm) {
           if (col == rawcap) {
             rawcap = rawcap ? rawcap * 2 : 1024;
             raw_names = realloc(raw_names, rawcap * sizeof(char *));
+            raw_set   = realloc(raw_set,   rawcap * sizeof(int));
             raw_row   = realloc(raw_row,   rawcap * sizeof(double));
             raw_Ncnt  = realloc(raw_Ncnt,  rawcap * sizeof(int));
-            if (!raw_names || !raw_row || !raw_Ncnt) mdie("out of memory (columns)", NULL);
+            if (!raw_names || !raw_row || !raw_Ncnt || !raw_set)
+              mdie("out of memory (columns)", NULL);
           }
           /* Both guards matter: strdup(NULL) is undefined, and an unchecked
            * strdup would store NULL for the sort key to walk into. */
           raw_names[col] = strdup(st[j].sm ? st[j].sm : "");
+          raw_set[col] = (int)k;
           if (!raw_names[col]) mdie("out of memory (column name)", NULL);
         }
         raw_row[col]  = v;
@@ -197,14 +218,19 @@ ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm) {
   free(c_masks); free(mask_names);
   cleanSampleNames2(snames_mask);
   cleanSampleNames2(snames_qry);
-  free(raw_row); free(raw_Ncnt);
+  free(raw_row); free(raw_Ncnt); free(raw_set);
   if (n_cells == 0 || n_raw == 0) mdie("no data produced", query_cg);
 
   /* ---- order columns by numeric pattern id (R parity) ---- */
   colkey_t *ck = malloc(n_raw * sizeof(colkey_t));
   if (!ck) mdie("out of memory (colkey)", NULL);
-  for (size_t i = 0; i < n_raw; ++i) { ck[i].key = pattern_numeric_key(raw_names[i]); ck[i].idx = (int)i; }
-  qsort(ck, n_raw, sizeof(colkey_t), cmp_colkey);
+  for (size_t i = 0; i < n_raw; ++i) {
+    ck[i].key = pattern_numeric_key(raw_names[i]);
+    ck[i].set = raw_set ? raw_set[i] : 0;
+    ck[i].idx = (int)i;
+  }
+  qsort(ck, n_raw, sizeof(colkey_t),
+        set_major ? cmp_colkey_setmajor : cmp_colkey);
 
   char  **pattern_names = malloc(n_raw * sizeof(char *));
   double *M = malloc(n_cells * n_raw * sizeof(double));
@@ -317,3 +343,14 @@ void ms_mrmp_trim(const char *in_cm, char *const *keep_names, int n_keep,
 }
 
 /* ------------------------------------------------------------------ */
+
+/* The default order: numeric pattern id across every record, which is what the
+ * classifier's stored feature indices were resolved against. */
+ms_matrix_t *ms_matrix_build(const char *query_cg, const char *ref_cm) {
+  return matrix_build(query_cg, ref_cm, 0);
+}
+
+/* Set-major, for a chain-featurized upscaler -- see cmp_colkey_setmajor(). */
+ms_matrix_t *ms_matrix_build_sets(const char *query_cg, const char *ref_cm) {
+  return matrix_build(query_cg, ref_cm, 1);
+}
