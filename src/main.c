@@ -55,7 +55,7 @@ static int usage(void) {
   fprintf(stderr, "\n%sUpscaling%s %s(imputation)%s\n", B, R, D, R);
   CMD("upscale",      "Impute genome-wide CpG methylation from a sparse methylome");
   CMD("upscale-featurize", "Build the MSURAW2/3 training msur from a truth .cg");
-  CMD("upscale-set-units", "Build the MSUIDX1 processing-unit index from a .mrmp");
+  CMD("upscale-set-units", "Build the MSUIDX1 processing-unit index from the reference store");
   CMD("upscale-train","Train the whole-genome upscale decoder (CUDA)");
 
   fprintf(stderr, "\n%sModel bundles%s\n", B, R);
