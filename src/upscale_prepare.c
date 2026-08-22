@@ -216,6 +216,27 @@ static void *cell_worker(void *arg) {
   return NULL;
 }
 
+/* One cell's truth row: every CpG converted from packed M/U to a uint16 beta
+ * code. This is n_cpg divides and llrounds per cell -- ~970 million for a
+ * 33-cell store -- and it runs whatever --reps asks for, which is why featurize
+ * costs the same at 1 replicate as at 48. It is neither disk- nor
+ * replicate-bound: reading the store takes 2.4 s, converting it takes most of a
+ * minute.
+ *
+ * Rows are independent, so they convert in parallel; only the write must stay
+ * in cell order, so a wave converts `nthreads` rows and then writes them. */
+typedef struct { cdata_t *c; uint16_t *row; uint64_t n_cpg; } truth_ctx_t;
+
+static void *truth_worker(void *arg) {
+  truth_ctx_t *w = arg;
+  for (uint64_t i = 0; i < w->n_cpg; ++i) {
+    uint64_t mu = f3_get_mu(w->c, i);
+    /* u16 code = beta*65534; 65535 (UINT16_MAX) = missing */
+    w->row[i] = mu ? (uint16_t)llround(MU2beta(mu) * 65534.0) : UINT16_MAX;
+  }
+  return NULL;
+}
+
 /* ---------------- one replicate, in isolation ---------------------------- */
 
 /* What a replicate needs, split into shared read-only and per-worker. Nothing
@@ -563,21 +584,41 @@ int main_upscale_prepare(int argc, char *argv[]) {
 
   if (embed_truth) {
     fprintf(stderr, "[methscope] upscale-featurize: writing quantized truth matrix\n");
-    uint16_t *truth_row = xmalloc((size_t)n_cpg * sizeof(*truth_row), "truth u16 row");
+    /* Capped: each worker holds its own n_cpg-wide u16 row, so 16 workers over
+     * hg38 is ~940 MB of row buffers alone. 64 also bounds the hold[] below. */
+    uint32_t tw = (memory_cells && nthreads > 1) ? nthreads : 1;
+    if (tw > 64) tw = 64;
+    uint16_t **rows = xmalloc((size_t)tw * sizeof(*rows), "truth rows");
+    truth_ctx_t *tc = xmalloc((size_t)tw * sizeof(*tc), "truth workers");
+    pthread_t *tth = xmalloc((size_t)tw * sizeof(*tth), "truth threads");
+    for (uint32_t t = 0; t < tw; ++t)
+      rows[t] = xmalloc((size_t)n_cpg * sizeof(**rows), "truth u16 row");
     cfile_t tcf = {0}; if (!memory_cells) tcf = open_cfile((char *)truth);
-    for (uint32_t cell = 0; cell < n_cells; ++cell) {
-      cdata_t c = memory_cells ? memory_cells[cell] : read_cdata1(&tcf);
-      if (!memory_cells) { decompress_in_situ(&c); if (c.fmt != '3' || c.n != n_cpg) pdie("inconsistent truth record", truth); }
-      for (uint64_t i = 0; i < n_cpg; ++i) {
-        uint64_t mu = f3_get_mu(&c, i);
-        /* u16 code = beta*65534; 65535 (UINT16_MAX) = missing */
-        truth_row[i] = mu ? (uint16_t)llround(MU2beta(mu) * 65534.0) : UINT16_MAX;
+    for (uint32_t base = 0; base < n_cells; base += tw) {
+      uint32_t m = n_cells - base < tw ? n_cells - base : tw;
+      cdata_t hold[64];
+      for (uint32_t t = 0; t < m; ++t) {
+        cdata_t c = memory_cells ? memory_cells[base + t] : read_cdata1(&tcf);
+        if (!memory_cells) { decompress_in_situ(&c); if (c.fmt != '3' || c.n != n_cpg) pdie("inconsistent truth record", truth); }
+        hold[t] = c;
+        tc[t].c = memory_cells ? &memory_cells[base + t] : &hold[t];
+        tc[t].row = rows[t]; tc[t].n_cpg = n_cpg;
       }
-      write_or_die(fp, truth_row, (size_t)n_cpg * sizeof(*truth_row), out);
-      if (!memory_cells) free_cdata(&c);
+      if (m == 1) truth_worker(&tc[0]);
+      else {
+        for (uint32_t t = 0; t < m; ++t)
+          if (pthread_create(&tth[t], NULL, truth_worker, &tc[t]))
+            pdie("cannot create truth worker", NULL);
+        for (uint32_t t = 0; t < m; ++t) pthread_join(tth[t], NULL);
+      }
+      for (uint32_t t = 0; t < m; ++t) {          /* ordered write */
+        write_or_die(fp, rows[t], (size_t)n_cpg * sizeof(**rows), out);
+        if (!memory_cells) free_cdata(&hold[t]);
+      }
     }
     if (!memory_cells) bgzf_close(tcf.fh);
-    free(truth_row);
+    for (uint32_t t = 0; t < tw; ++t) free(rows[t]);
+    free(rows); free(tc); free(tth);
   }
 
   uint32_t *eligible = memory_cells ? NULL : xmalloc((size_t)n_cpg * sizeof(*eligible), "sampling workspace");
