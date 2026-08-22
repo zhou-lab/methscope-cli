@@ -65,22 +65,59 @@ static double yame_rand01(ms_rng_t *r) {
   return (double)v / ((double)RAND_MAX + 1.0);
 }
 
-static void partial_fisher_yates(uint32_t *a, uint64_t n, uint64_t k,
-                                 uint32_t *swap_j, ms_rng_t *rng) {
+/* Copy-on-write view of the eligible array.
+ *
+ * The shuffle mutates `a` and restore_partial_shuffle() puts it back: fine
+ * serially, a data race the moment two replicates run at once, since every
+ * replicate shuffles the SAME per-cell array. Copying is no better -- a
+ * well-covered cell has ~26 M eligible CpGs, so a per-thread copy per
+ * (replicate, cell) would cost more than the work it parallelises.
+ *
+ * At most `k` swaps happen, touching at most 2k of n positions, so an overlay
+ * of the changed entries is tiny (~116 k slots against 26 M) and leaves `a`
+ * read-only. Open addressing, power-of-two capacity, no deletes. */
+typedef struct { uint64_t *pos; uint32_t *val; uint64_t cap, mask; } cow_t;
+
+static void cow_init(cow_t *c, uint64_t k) {
+  uint64_t cap = 16; while (cap < 4 * (k + 1)) cap <<= 1;
+  c->cap = cap; c->mask = cap - 1;
+  c->pos = xmalloc(cap * sizeof(*c->pos), "shuffle overlay keys");
+  c->val = xmalloc(cap * sizeof(*c->val), "shuffle overlay values");
+  for (uint64_t i = 0; i < cap; ++i) c->pos[i] = UINT64_MAX;
+}
+static void cow_free(cow_t *c) { free(c->pos); free(c->val); }
+static void cow_reset(cow_t *c) {
+  for (uint64_t i = 0; i < c->cap; ++i) c->pos[i] = UINT64_MAX;
+}
+static inline uint64_t cow_slot(const cow_t *c, uint64_t p) {
+  uint64_t h = (p * 1099511628211ULL) & c->mask;
+  while (c->pos[h] != UINT64_MAX && c->pos[h] != p) h = (h + 1) & c->mask;
+  return h;
+}
+static inline uint32_t cow_get(const cow_t *c, const uint32_t *a, uint64_t p) {
+  uint64_t h = cow_slot(c, p);
+  return c->pos[h] == p ? c->val[h] : a[p];
+}
+static inline void cow_set(cow_t *c, uint64_t p, uint32_t v) {
+  uint64_t h = cow_slot(c, p);
+  c->pos[h] = p; c->val[h] = v;
+}
+
+/* The swap sequence a plain in-place Fisher-Yates would perform -- same
+ * randoms, same j, same resulting a[0..k) -- written to the overlay instead of
+ * the array, so `a` stays read-only and no restore pass is needed. */
+static void partial_fisher_yates_cow(const uint32_t *a, uint64_t n, uint64_t k,
+                                     ms_rng_t *rng, cow_t *c, uint32_t *out) {
   if (k > n) k = n;
+  cow_reset(c);
   for (uint64_t i = 0; i < k; ++i) {
     uint64_t j = i + (uint64_t)(yame_rand01(rng) * (double)(n - i));
-    swap_j[i] = (uint32_t)j;
-    uint32_t t = a[i]; a[i] = a[j]; a[j] = t;
+    uint32_t ti = cow_get(c, a, i), tj = cow_get(c, a, j);
+    cow_set(c, i, tj); cow_set(c, j, ti);
+    out[i] = tj;
   }
 }
 
-static void restore_partial_shuffle(uint32_t *a, uint32_t k,
-                                    const uint32_t *swap_j) {
-  while (k) {
-    --k; uint32_t j = swap_j[k], t = a[k]; a[k] = a[j]; a[j] = t;
-  }
-}
 
 static int pnum(const char *s) {
   if (!s || (s[0] != 'P' && s[0] != 'p')) return 0;
@@ -419,7 +456,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
   uint32_t *count = xmalloc((size_t)ncol * sizeof(*count), "MRMP counts");
   float *beta = xmalloc((size_t)ncol * sizeof(*beta), "feature beta");
   uint32_t *selected = xmalloc((size_t)max_sample * sizeof(*selected), "sampled positions");
-  uint32_t *swap_j = xmalloc((size_t)max_sample * sizeof(*swap_j), "sampling swaps");
+  cow_t cow; cow_init(&cow, max_sample);
   /* Only allocated when some replicate is dense enough to prefer a bitmap. */
   uint64_t bitmap_bytes = msur_bitmap_bytes(n_cpg);
   unsigned char *bitmap = NULL;
@@ -454,11 +491,11 @@ int main_upscale_prepare(int argc, char *argv[]) {
       if (!memory_cells)
         for (uint64_t i = 0; i < n_cpg; ++i) if (f3_get_mu(&c, i)) cell_eligible[ne++] = (uint32_t)i;
       if (ne < sample) pdie("cell has fewer eligible CpGs than --sample", truth);
-      partial_fisher_yates(cell_eligible, ne, sample, swap_j, &rng);
+      partial_fisher_yates_cow(cell_eligible, ne, sample, &rng, &cow, selected);
       memset(sum, 0, (size_t)ncol * sizeof(*sum));
       memset(count, 0, (size_t)ncol * sizeof(*count));
       for (uint32_t k = 0; k < sample; ++k) {
-        uint64_t pos = cell_eligible[k]; selected[k] = (uint32_t)pos;
+        uint64_t pos = selected[k];
         /* The binarise draw is per CpG, NOT per set: one observed read gives
          * one call, and every set that contains this CpG must see the same
          * one. Drawing inside the set loop would consume n_sets randoms per
@@ -488,7 +525,6 @@ int main_upscale_prepare(int argc, char *argv[]) {
       } else {
         write_or_die(fp, selected, (size_t)sample * sizeof(*selected), out);
       }
-      restore_partial_shuffle(cell_eligible, sample, swap_j);
       if (!memory_cells) free_cdata(&c);
     }
     if (!memory_cells) {
@@ -520,7 +556,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
     free(memory_cells);
     free(memory_eligible); free(memory_n_eligible);
   }
-  free(group); free(eligible); free(sum); free(count); free(beta); free(selected); free(swap_j);
+  free(group); free(eligible); free(sum); free(count); free(beta); free(selected); cow_free(&cow);
   fprintf(stderr, "[methscope] upscale-featurize: wrote %s and %s\n", out, manifest);
   return 0;
 }
