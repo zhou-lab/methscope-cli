@@ -29,19 +29,6 @@ typedef struct {
   uint32_t patience;
   uint32_t batch;
   uint32_t eval_rows;
-  /* Which cells the early-stop signal is measured on. VAL is the default and
-   * the honest one. TRAIN exists to answer "is a val split worth its samples"
-   * -- with val folded into training there is nothing held out to stop on, so
-   * the epsilon/patience test runs against a fixed sample of TRAINING rows
-   * instead. That detects convergence, never overfitting; use it knowing so. */
-  int stop_on_train;
-  /* Improvement threshold for the early-stop test. An eval counts as progress
-   * only if it beats the best by more than this. Fixed at 1e-7 historically,
-   * which is ~1.7e-6 of a typical 0.06 MAE -- fine when a step touches half a
-   * unit's CpGs, wrong when it touches 0.08% of them, because per-eval progress
-   * then shrinks toward the threshold and genuine improvement reads as a
-   * plateau. Scale it down for large units. */
-  double stop_eps;
   uint32_t threads;   /* CPU backend: worker threads over units */
   uint64_t seed;
   int device;

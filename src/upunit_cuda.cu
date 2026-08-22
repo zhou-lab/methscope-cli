@@ -215,11 +215,7 @@ extern "C" int ms_upunit_train_cuda(const ms_upunit_config_t*c){
   std::vector<uint64_t>unit_test_n(ih->n_units,0);
   uint32_t trained=0,resumed=0,processed=0;
   for(uint32_t ui=0;ui<ih->n_units;++ui){if(!selected[ui])continue;const MsuiUnit&u=units[ui];bool pure=(u.flags&1)!=0,pna=(u.flags&2)!=0,direct=c->mixed_direct&&!pure;int R=direct?0:(pure?(int)c->pure_bottleneck:(int)c->mixed_bottleneck),O=u.cpg_count;char path[4096];ckpath(path,sizeof(path),c->work_dir,ui);std::vector<float>best;float bestmae=NAN;uint32_t beststep=0;
-    /* The stop signal. --stop-on train measures it on a FIXED sample of
-     * training rows, so every cell can train when nothing is held out --
-     * that plateau shows convergence, not generalization. */
-    const std::vector<uint32_t>&stopcells=c->stop_on_train?train:val;
-    std::vector<EvalRow>ev=make_eval(h,data.p,cpg,u,stopcells,c->eval_rows,c->batch,c->seed+101+ui);if(ev.empty())die(c->stop_on_train?"could not form training stop rows":"could not form validation rows");for(const auto&er:ev)unit_n[ui]+=er.id.size();
+    std::vector<EvalRow>ev=make_eval(h,data.p,cpg,u,val,c->eval_rows,c->batch,c->seed+101+ui);if(ev.empty())die("could not form validation rows");for(const auto&er:ev)unit_n[ui]+=er.id.size();
     if(load_checkpoint(path,ui,isum,runsum,direct?0:1,R,c->activation,O,I,best,bestmae,beststep)){++resumed;unit_mae[ui]=bestmae;unit_step[ui]=beststep;++processed;continue;}
     std::vector<float>bias(O);for(int o=0;o<O;++o)bias[o]=all_bias[cpg[u.output_offset+o]];
     Net net=make_net(direct,I,R,O,bias,c->seed^((uint64_t)ui<<32));
@@ -232,7 +228,7 @@ extern "C" int ms_upunit_train_cuda(const ms_upunit_config_t*c){
     if(!B)die("unit has no covered training target in any sampled cell");size_t row=(size_t)rep*h->n_cells+cell;const float*x=dX+row*I;CU(cudaMemcpy(w.id,bid.data(),B*4,cudaMemcpyHostToDevice));CU(cudaMemcpy(w.y,by.data(),B*4,cudaMemcpyHostToDevice));float ib1=1/(1-std::pow(.9f,(float)step)),ib2=1/(1-std::pow(.999f,(float)step)),lr=c->learning_rate,wd=c->weight_decay;
       if(direct)direct_back<<<blocks(B),THREADS>>>(x,net.E.t,net.E.m,net.E.v,net.b.t,net.b.m,net.b.v,w.id,w.y,B,I,lr,wd,ib1,ib2);
       else{gemv(bh,net.A.t,x,w.z,R,I);addact<<<blocks(R),THREADS>>>(w.z,net.a.t,R,c->activation);CU(cudaMemset(w.dz,0,R*4));factor_back<<<blocks(B),THREADS>>>(w.z,net.E.t,net.E.m,net.E.v,net.b.t,net.b.m,net.b.v,w.id,w.y,w.dz,B,R,lr,wd,ib1,ib2);actback<<<blocks(R),THREADS>>>(w.dz,w.z,R,c->activation);adam_outer<<<blocks((size_t)R*I),THREADS>>>(net.A.t,net.A.m,net.A.v,w.dz,x,R,I,lr,wd,ib1,ib2);adam_vec<<<blocks(R),THREADS>>>(net.a.t,net.a.m,net.a.v,w.dz,R,lr,0,ib1,ib2);}
-      if(step%c->eval_every==0){v=eval(bh,net,w,dX,ev,c->activation);if(v+c->stop_eps<bestmae){bestmae=v;beststep=step;best=flatten(net);bad=0;}else if(step>=c->min_steps)++bad;if(step>=c->min_steps&&bad>=c->patience)break;}
+      if(step%c->eval_every==0){v=eval(bh,net,w,dX,ev,c->activation);if(v+1e-7<bestmae){bestmae=v;beststep=step;best=flatten(net);bad=0;}else if(step>=c->min_steps)++bad;if(step>=c->min_steps&&bad>=c->patience)break;}
     }
       /* TEST rows, scored on the kept weights. Reported only: nothing here
        * feeds selection, which stays on val. This is what lets a val-stopped

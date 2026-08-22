@@ -87,10 +87,11 @@ void ms_upsplit_load(const char *who, const char *path, uint32_t n_cells,
     sdie(who, msg, path);
   }
   free(seen);
-    /* val may be empty: `upscale-train --stop-on train` folds it into training
-     * and measures the stop signal on training rows instead. train may not. */
-    if (!count[MS_UPSPLIT_TRAIN])
-      sdie(who, "train must be non-empty", path);
+    /* Both are required: training needs rows, and early stopping measures on
+     * held-out cells. A run that folds val into train was measured and dropped
+     * -- see the 20260822 org entry -- so an empty val is a mistake, not a mode. */
+    if (!count[MS_UPSPLIT_TRAIN] || !count[MS_UPSPLIT_VAL])
+      sdie(who, "train and val must both be non-empty", path);
   fprintf(stderr, "[methscope] %s: split %s train=%u val=%u test=%u\n",
           who, path, count[MS_UPSPLIT_TRAIN], count[MS_UPSPLIT_VAL],
           count[MS_UPSPLIT_TEST]);
