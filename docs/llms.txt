@@ -172,7 +172,10 @@ Options:
   -h             Show this help message.
 
 Output columns:
-  cell  prediction_label  confidence  [<class1> <class2> ... with --probs]
+  cell  prediction_label  confidence  certainty  [<class1> ... with --probs]
+  confidence = P(called class); certainty = 1 - H(p)/log(K), 0 at a
+  uniform posterior and 1 at a decided one. `violation` has no posterior
+  and reports a margin instead.
 
 
 ### methscope deconv

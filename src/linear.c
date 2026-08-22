@@ -244,7 +244,12 @@ int ms_linmodel_score(const linmodel_t *lm, const double *betas,
   }
   double p1 = 1.0 / (1.0 + exp(-s / lm->scale));
   double p0 = 1.0 - p1;
-  /* Shannon confidence (matches predict's xgboost path, K=2). */
+  /* Normalized Shannon CERTAINTY: 0 at a coin flip, 1 at p=0 or 1. Reported
+   * alongside P(called class), not instead of it -- the two answer different
+   * questions and a single "confidence" column conflated them. (An earlier
+   * comment here claimed this matched the xgboost path; it never did. That
+   * path takes the max posterior, so p=0.9 printed 0.900 for a tree and
+   * 0.531 here, and a shared threshold meant two different things.) */
   double ent = -(p0 * log(p0 + 1e-10) + p1 * log(p1 + 1e-10));
   double conf = 1.0 - ent / log(2.0);
   if (conf < 0.0) conf = 0.0;

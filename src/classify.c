@@ -4,7 +4,8 @@
  * can be any class the model was trained on (cell type, sex, ...). Builds the
  * record x pattern matrix from the query and the MRMP reference (<ref.mrmp>, a
  * YAME .cm), runs the XGBoost booster (with class labels embedded as
- * attributes), and reports a per-record label plus a Shannon-entropy confidence.
+ * attributes), and reports a per-record label with both P(called class) and
+ * a normalized-entropy certainty.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -87,7 +88,10 @@ static int predict_usage(void) {
     "  -h             Show this help message.\n"
     "\n"
     "Output columns:\n"
-    "  cell  prediction_label  confidence  [<class1> <class2> ... with --probs]\n"
+    "  cell  prediction_label  confidence  certainty  [<class1> ... with --probs]\n"
+    "  confidence = P(called class); certainty = 1 - H(p)/log(K), 0 at a\n"
+    "  uniform posterior and 1 at a decided one. `violation` has no posterior\n"
+    "  and reports a margin instead.\n"
     "\n");
   return 1;
 }
@@ -105,7 +109,7 @@ static int predict_linear(const char *query_cg, const char *ref_mrmp,
                  ? fopen(out_path, "w") : stdout;
   if (!fout) pdie("cannot open output", out_path);
   if (!no_header) {
-    fputs("cell\tprediction_label\tconfidence", fout);
+    fputs("cell\tprediction_label\tconfidence\tcertainty", fout);
     if (with_probs) fprintf(fout, "\t%s\t%s", lm->label0, lm->label1);
     fputc('\n', fout);
   }
@@ -116,7 +120,8 @@ static int predict_linear(const char *query_cg, const char *ref_mrmp,
     for (int c = 0; c < lm->n_feat; ++c) betas[c] = src[c];
     double p1, conf;
     int cls = ms_linmodel_score(lm, betas, &p1, &conf);
-    fprintf(fout, "%s\t%s\t%.6f", m->cell_names[r], cls ? lm->label1 : lm->label0, conf);
+    fprintf(fout, "%s\t%s\t%.6f\t%.6f", m->cell_names[r],
+            cls ? lm->label1 : lm->label0, p1 >= 0.5 ? p1 : 1.0 - p1, conf);
     if (with_probs) fprintf(fout, "\t%.6f\t%.6f", 1.0 - p1, p1);
     fputc('\n', fout);
   }
@@ -193,10 +198,20 @@ static uint32_t tree_mode(const char *bundle, tnode_t *nd, uint32_t n) {
   return 0;
 }
 
-/* argmax of one node's booster over the rows given, into out_lab/out_conf. */
+/* argmax of one node's booster over the rows given.
+ *
+ * TWO numbers, because they answer different questions and were previously
+ * conflated under one column name across the three frameworks. out_conf is
+ * P(called class) -- how likely the winner is. out_cert is 1 - H(p)/log(K),
+ * which is 0 at a uniform posterior and 1 at certainty -- how decisive the
+ * call was against the alternatives it was chosen over. A 2-class node at
+ * p=0.6 gives conf 0.600 and cert 0.029; the second says "barely decided",
+ * which the first cannot. K is this NODE's class count, since that is the
+ * decision actually being described. */
 static void tree_score(tnode_t *nd, const uint16_t *beta, uint32_t ncol_all,
                        const uint32_t *row, uint32_t nrow,
-                       char **out_lab, double *out_conf, const char *bundle) {
+                       char **out_lab, double *out_conf, double *out_cert,
+                       const char *bundle) {
   if (!nrow) return;
   const uint32_t W = nd->cs->total;
   float *data = malloc((size_t)nrow * W * sizeof(float));
@@ -220,6 +235,13 @@ static void tree_score(tnode_t *nd, const uint16_t *beta, uint32_t ncol_all,
     for (int c = 1; c < K; ++c) if (o[(size_t)r * K + c] > o[(size_t)r * K + best]) best = c;
     out_lab[row[r]]  = (nd->lab && best < nd->K) ? nd->lab[best] : nd->cls[best];
     out_conf[row[r]] = o[(size_t)r * K + best];
+    double ent = 0.0;
+    for (int c = 0; c < K; ++c) {
+      double q = o[(size_t)r * K + c];
+      if (q > 0.0) ent -= q * log(q);
+    }
+    double cert = (K > 1) ? 1.0 - ent / log((double)K) : 1.0;
+    out_cert[row[r]] = cert < 0.0 ? 0.0 : (cert > 1.0 ? 1.0 : cert);
   }
   XGDMatrixFree(dm);
   free(data);
@@ -459,6 +481,7 @@ static int predict_tree(const char *query_cg, const char *bundle,
 
   char  **lab  = calloc(ncells, sizeof(char *));
   double *conf = calloc(ncells, sizeof(double));
+  double *cert = calloc(ncells, sizeof(double));
   uint32_t *cur = malloc((size_t)ncells * sizeof(uint32_t));
   uint32_t *nxt = malloc((size_t)ncells * sizeof(uint32_t));
   if (!lab || !conf || !cur || !nxt) pdie("out of memory (tree)", NULL);
@@ -474,7 +497,7 @@ static int predict_tree(const char *query_cg, const char *bundle,
       uint32_t m2 = 0;
       for (uint32_t r = 0; r < ncells; ++r) if (at[r] == k && !lab[r]) cur[m2++] = r;
       if (!m2) continue;
-      tree_score(&nd[k], beta, ncol, cur, m2, lab, conf, bundle);
+      tree_score(&nd[k], beta, ncol, cur, m2, lab, conf, cert, bundle);
       for (uint32_t j = 0; j < m2; ++j) {
         uint32_t r = cur[j]; int dest = -1;
         for (uint32_t c = 0; c < n && dest < 0; ++c) {
@@ -504,13 +527,14 @@ static int predict_tree(const char *query_cg, const char *bundle,
   FILE *fo = out_path ? fopen(out_path, "w") : stdout;
   if (!fo) pdie("cannot open output", out_path);
   if (!no_header) {
-    fputs("cell\tprediction_label\tconfidence", fo);
+    fputs("cell\tprediction_label\tconfidence\tcertainty", fo);
     if (with_levels)      for (int c = 0; c < 4; ++c) fprintf(fo, "\t%s", LEVEL_NAME[c]);
     else if (lvl_col >= 0) fprintf(fo, "\t%s", LEVEL_NAME[lvl_col]);
     fputc('\n', fo);
   }
   for (uint32_t r = 0; r < ncells; ++r) {
-    fprintf(fo, "%s\t%s\t%.6f", cellname[r], lab[r] ? lab[r] : "NA", conf[r]);
+    fprintf(fo, "%s\t%s\t%.6f\t%.6f", cellname[r], lab[r] ? lab[r] : "NA",
+            conf[r], cert[r]);
     if (with_levels)
       for (int c = 0; c < 4; ++c) fprintf(fo, "\t%s", taxo_get(&tx, lab[r], c));
     else if (lvl_col >= 0) fprintf(fo, "\t%s", taxo_get(&tx, lab[r], lvl_col));
@@ -563,7 +587,9 @@ static int predict_violation(const char *query_cg, const char *ref_mrmp,
   FILE *fout = (out_path && strcmp(out_path, "-") != 0) ? fopen(out_path, "w") : stdout;
   if (!fout) pdie("cannot open output", out_path);
   if (!no_header) {
-    fputs("cell\tprediction_label\tconfidence", fout);
+    /* `margin`, not `confidence`: the violation rule has no posterior, and
+     * naming it confidence put a third unrelated quantity in that column. */
+    fputs("cell\tprediction_label\tmargin", fout);
     if (with_probs)
       for (int k = 0; k < vm->n_label; ++k) fprintf(fout, "\t%s", vm->labels[k]);
     fputc('\n', fout);
