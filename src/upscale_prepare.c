@@ -4,6 +4,8 @@
  * The input .cg remains the immutable truth store.  This command writes only
  * deterministic YAME-compatible sampled CpG positions and MRMP summaries, so
  * it deliberately does not create downsampled .cg files or replicated TSVs. */
+/* random_r/initstate_r are GNU extensions; needed before any header. */
+#define _GNU_SOURCE
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -44,16 +46,30 @@ static uint64_t parse_u64(const char *s, const char *what) {
 
 /* Exact arithmetic used by YAME/src/dsample.c.  Keeping it here, rather than
  * changing the random protocol, lets an msur be checked against existing
- * `yame dsample -s SEED -r 1 -N N` simulations on this platform. */
-static double yame_rand01(void) {
-  return (double)rand() / ((double)RAND_MAX + 1.0);
+ * `yame dsample -s SEED -r 1 -N N` simulations on this platform.
+ *
+ * The state is EXPLICIT rather than libc's global, because rand() is not
+ * thread-safe and the replicate loop is the obvious axis to parallelise. This
+ * is not a protocol change: glibc's rand()/srand() are random()/srandom() over
+ * a 128-byte TYPE_3 state, so initstate_r() with the same size and seed yields
+ * the identical sequence -- verified value-for-value before this was written. */
+typedef struct { char st[128]; struct random_data d; } ms_rng_t;
+
+static void ms_rng_seed(ms_rng_t *r, unsigned seed) {
+  memset(&r->d, 0, sizeof r->d);
+  initstate_r(seed, r->st, sizeof r->st, &r->d);
+}
+
+static double yame_rand01(ms_rng_t *r) {
+  int32_t v; random_r(&r->d, &v);
+  return (double)v / ((double)RAND_MAX + 1.0);
 }
 
 static void partial_fisher_yates(uint32_t *a, uint64_t n, uint64_t k,
-                                 uint32_t *swap_j) {
+                                 uint32_t *swap_j, ms_rng_t *rng) {
   if (k > n) k = n;
   for (uint64_t i = 0; i < k; ++i) {
-    uint64_t j = i + (uint64_t)(yame_rand01() * (double)(n - i));
+    uint64_t j = i + (uint64_t)(yame_rand01(rng) * (double)(n - i));
     swap_j[i] = (uint32_t)j;
     uint32_t t = a[i]; a[i] = a[j]; a[j] = t;
   }
@@ -423,7 +439,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
       "[methscope] upscale-featurize: simulation %u/%u (sample %u%s%s)\n",
       r + 1, total_reps, sample, binarize ? ", binarized" : "",
       rep_bitmap ? ", bitmap" : "");
-    srand(r + 1); /* exact historical convention: --seed 1..N */
+    ms_rng_t rng; ms_rng_seed(&rng, r + 1);  /* historical: --seed 1..N */
     cfile_t cf = {0};
     if (!memory_cells) cf = open_cfile((char *)truth);
     for (uint32_t cell = 0; cell < n_cells; ++cell) {
@@ -438,7 +454,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
       if (!memory_cells)
         for (uint64_t i = 0; i < n_cpg; ++i) if (f3_get_mu(&c, i)) cell_eligible[ne++] = (uint32_t)i;
       if (ne < sample) pdie("cell has fewer eligible CpGs than --sample", truth);
-      partial_fisher_yates(cell_eligible, ne, sample, swap_j);
+      partial_fisher_yates(cell_eligible, ne, sample, swap_j, &rng);
       memset(sum, 0, (size_t)ncol * sizeof(*sum));
       memset(count, 0, (size_t)ncol * sizeof(*count));
       for (uint32_t k = 0; k < sample; ++k) {
@@ -452,7 +468,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
         for (uint32_t sx = 0; sx < n_sets; ++sx) {
           uint16_t g = group[(uint64_t)sx * n_cpg + pos];
           if (!g) continue;
-          if (binarize && !drawn) { b = yame_rand01() < b ? 1.0 : 0.0; drawn = 1; }
+          if (binarize && !drawn) { b = yame_rand01(&rng) < b ? 1.0 : 0.0; drawn = 1; }
           sum[g - 1] += b; ++count[g - 1];
         }
       }
