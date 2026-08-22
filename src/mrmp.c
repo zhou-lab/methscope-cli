@@ -1706,30 +1706,14 @@ typedef struct {
   uint64_t n_kept;   /* CpGs surviving selection */
 } subset_block_t;
 
-/* Build a complete MRMPIDX1 for `ns` named classes of `store`, in memory.
- *
- * The binstring parameters come from the GLOBAL artifact's header rather than
- * from flags of their own. A satellite that resolved CpGs on a different rule
- * than the global it supplements would put two incompatible pattern definitions
- * in one pooled feature vector, and there is no flag combination a user could
- * pass that makes that a good idea.
- *
- * The pass order differs from mrmp-build. There, every cut is a property of the
- * CpG alone, so a failing CpG is dropped before it is ever interned and the
- * counts are post-filter by construction. The union rule is not: top-N by
- * delta_mean is PER BINSTRING, so the binstrings must exist first. Hence
- * build -> select -> RECOUNT. The recount is not bookkeeping: mrmp-pool ranks
- * columns by exactly these counts, so a pattern still advertising the CpGs
- * selection took away would win slots it cannot fill. */
-static void build_subset_block(const char *store, uint32_t ns,
-                               char *const *label, const int64_t *voff,
-                               const mrmp_header_t *gh,
-                               const ms_select_opt_t *sel,
-                               const char *set_name,
-                               subset_block_t *out) {
-  const uint32_t mincov = gh->mincov;
-  const float beta_thr = gh->beta_threshold, max_ambig = gh->max_ambig_frac,
-              min_fold = gh->min_major_fold;
+/* ---------------- store -> per-CpG binstring (shared) --------------------- */
+
+/* mrmp-build's first two passes, exported so upscale-set-units resolves CpGs by
+ * the same rule rather than a second copy of it. See mrmp.h. */
+void ms_binstring_map(const char *store, uint32_t ns, char *const *label,
+                      const int64_t *voff, uint32_t mincov, float beta_thr,
+                      float max_ambig, float min_fold,
+                      int inc_all0, int inc_all1, ms_binstring_map_t *out) {
   const uint32_t stride = (ns + 7) >> 3, nw = mrmp_key_words(ns);
 
   /* Pass 1: the meth/ambig bit planes, over the chosen records only. */
@@ -1758,14 +1742,12 @@ static void build_subset_block(const char *store, uint32_t ns,
   }
   bgzf_close(cf.fh);
 
-  /* Pass 2: resolve, intern, and remember each CpG's pattern. Kept rather than
-   * re-derived (as mrmp-build does) because selection rewrites it twice and a
-   * third resolve pass would cost more than the 4 bytes per CpG. */
+  /* Pass 2: resolve, intern, remember. */
   uint64_t *pna_key = xcalloc(nw, sizeof(uint64_t), "pna key");
   for (uint32_t s = 0; s < ns; ++s)
     pna_key[s / MRMP_TRITS_PER_WORD] = pna_key[s / MRMP_TRITS_PER_WORD] * 3 + 2;
   phash_t h; phash_init(&h, 1u << 12, nw);
-  uint64_t pat_cap = 1u << 12, n_pat = 0;
+  uint64_t pat_cap = 1u << 12, n_pat = 0, pna_cpg = 0;
   uint64_t *pkeys = xcalloc(pat_cap * nw, sizeof(uint64_t), "pattern keys");
   uint64_t *pcount = xcalloc(pat_cap, sizeof(uint64_t), "pattern counts");
   uint32_t *pidx = xcalloc(n_cpg, sizeof(uint32_t), "cpg -> pattern");
@@ -1775,9 +1757,9 @@ static void build_subset_block(const char *store, uint32_t ns,
     int is_pna;
     resolve_cpg(meth, ambig, i, ns, stride, n_cpg,
                 min_fold, max_ambig, pna_key, &is_pna, key,
-                sel->inc_all0, sel->inc_all1);
+                inc_all0, inc_all1);
     if (is_pna) {
-      pidx[i] = MRMP_PNA_MEMBERSHIP;
+      pidx[i] = MRMP_PNA_MEMBERSHIP; ++pna_cpg;
     } else {
       if (n_pat == pat_cap) {
         pat_cap <<= 1;
@@ -1791,7 +1773,67 @@ static void build_subset_block(const char *store, uint32_t ns,
     for (uint32_t w = 0; w < nw; ++w)
       checksum = (checksum ^ key[w]) * 1099511628211ULL;
   }
-  free(meth); free(ambig); free(h.keys); free(h.slot); free(key);
+  free(meth); free(ambig); free(h.keys); free(h.slot); free(key); free(pna_key);
+
+  out->n_samples = ns; out->n_cpg = n_cpg; out->n_pat = n_pat;
+  out->keys = pkeys;   out->count = pcount; out->cpg_pat = pidx;
+  out->pna_cpg = pna_cpg; out->checksum = checksum;
+}
+
+void ms_binstring_map_free(ms_binstring_map_t *m) {
+  if (!m) return;
+  free(m->keys); free(m->count); free(m->cpg_pat);
+  m->keys = NULL; m->count = NULL; m->cpg_pat = NULL;
+  m->n_pat = 0; m->n_cpg = 0;
+}
+
+/* Build a complete MRMPIDX1 for `ns` named classes of `store`, in memory.
+ *
+ * The binstring parameters come from the GLOBAL artifact's header rather than
+ * from flags of their own. A satellite that resolved CpGs on a different rule
+ * than the global it supplements would put two incompatible pattern definitions
+ * in one pooled feature vector, and there is no flag combination a user could
+ * pass that makes that a good idea.
+ *
+ * The pass order differs from mrmp-build. There, every cut is a property of the
+ * CpG alone, so a failing CpG is dropped before it is ever interned and the
+ * counts are post-filter by construction. The union rule is not: top-N by
+ * delta_mean is PER BINSTRING, so the binstrings must exist first. Hence
+ * build -> select -> RECOUNT. The recount is not bookkeeping: mrmp-pool ranks
+ * columns by exactly these counts, so a pattern still advertising the CpGs
+ * selection took away would win slots it cannot fill. */
+static void build_subset_block(const char *store, uint32_t ns,
+                               char *const *label, const int64_t *voff,
+                               const mrmp_header_t *gh,
+                               const ms_select_opt_t *sel,
+                               const char *set_name,
+                               subset_block_t *out) {
+  const uint32_t mincov = gh->mincov;
+  const float beta_thr = gh->beta_threshold, max_ambig = gh->max_ambig_frac,
+              min_fold = gh->min_major_fold;
+  const uint32_t nw = mrmp_key_words(ns);
+
+  /* Passes 1-2 are ms_binstring_map(): planes, then resolve/intern. Shared with
+   * upscale-set-units so the two cannot drift on what a binstring is. The map
+   * KEEPS each CpG's pattern rather than re-deriving it (as mrmp-build does),
+   * because selection rewrites it twice and a third resolve pass would cost
+   * more than the 4 bytes per CpG. */
+  ms_binstring_map_t bm;
+  ms_binstring_map(store, ns, label, voff, mincov, beta_thr, max_ambig,
+                   min_fold, sel->inc_all0, sel->inc_all1, &bm);
+  const uint64_t n_cpg = bm.n_cpg;
+  uint64_t n_pat = bm.n_pat, pat_cap = bm.n_pat ? bm.n_pat : 1;
+  uint64_t *pkeys = bm.keys, *pcount = bm.count;
+  uint32_t *pidx = bm.cpg_pat;
+  uint64_t checksum = bm.checksum;
+  (void)pat_cap;
+  /* ownership moves here: the three arrays are freed below (pidx/pcount with
+   * the selection scratch, pkeys with the write), so ms_binstring_map_free()
+   * must NOT also run on `bm`. */
+  uint64_t *pna_key = xcalloc(nw, sizeof(uint64_t), "pna key");
+  for (uint32_t s2 = 0; s2 < ns; ++s2)
+    pna_key[s2 / MRMP_TRITS_PER_WORD] = pna_key[s2 / MRMP_TRITS_PER_WORD] * 3 + 2;
+  cfile_t cf;
 
   /* Provisional ranking, needed only so ms_mrmp_select can address a binstring
    * by rank; the ranking that ships is recomputed below on the kept counts. */

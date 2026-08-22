@@ -178,6 +178,35 @@ static inline uint64_t mrmp_pattern_stride(uint32_t n_samples) {
 /* Builds every node of a routing tree; --flat gives one MRMP over every
  * class, which is what this command meant before (a tree of one level). */
 int main_mrmp_build(int argc, char *argv[]);
+
+/* ---------------- store -> per-CpG binstring, the ONE rule ----------------
+ *
+ * Every CpG of `store`'s `ns` named records resolved to its base-3 binstring
+ * key, with the distinct keys interned and counted. This is mrmp-build's own
+ * first two passes, lifted out so a second consumer cannot drift from it:
+ * `upscale-set-units` needs exactly this map and nothing else the artifact
+ * carries, and two implementations of one rule is the failure this codebase
+ * keeps hitting (see the P1..PN featurizer bug, 2026-08-15).
+ *
+ * inc_all0 / inc_all1 keep the CONSTANT binstrings -- a CpG every class calls
+ * the same way. A classifier drops them (they separate nothing); an upscaler
+ * must keep them, or half the genome lands in the PNA pile as singletons. */
+typedef struct {
+  uint32_t  n_samples;
+  uint64_t  n_cpg;
+  uint64_t  n_pat;      /* distinct non-PNA keys */
+  uint64_t *keys;       /* n_pat * mrmp_key_words(n_samples) */
+  uint64_t *count;      /* n_pat, CpGs per key */
+  uint32_t *cpg_pat;    /* n_cpg, index into keys[] or MRMP_PNA_MEMBERSHIP */
+  uint64_t  pna_cpg;
+  uint64_t  checksum;   /* FNV-1a over every CpG's key, in genomic order */
+} ms_binstring_map_t;
+
+void ms_binstring_map(const char *store, uint32_t ns, char *const *label,
+                      const int64_t *voff, uint32_t mincov, float beta_thr,
+                      float max_ambig, float min_fold,
+                      int inc_all0, int inc_all1, ms_binstring_map_t *out);
+void ms_binstring_map_free(ms_binstring_map_t *m);
 /* One 2-class satellite per (thin class, partner), as one chain.
  * Thin == store labels minus the global's, so the split needs no side file. */
 /* One 2-class satellite per (class, near neighbour) over the classes the global
