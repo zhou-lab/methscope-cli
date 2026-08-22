@@ -191,6 +191,18 @@ int main_mrmp_build(int argc, char *argv[]);
  * inc_all0 / inc_all1 keep the CONSTANT binstrings -- a CpG every class calls
  * the same way. A classifier drops them (they separate nothing); an upscaler
  * must keep them, or half the genome lands in the PNA pile as singletons. */
+/* Record names in FILE order, with each record's BGZF virtual offset, from
+ * <ref>.idx. File order IS the binstring's digit order, so this must not be
+ * re-derived through a hash whose iteration order is arbitrary. Caller frees
+ * the names, the array, and *off_out. */
+char **ms_read_store_index(const char *ref, uint32_t *n_out, int64_t **off_out);
+
+/* binstring defaults, matching YAME rowop.c (main_rowop getopt defaults) */
+#define MS_BS_DEF_MINCOV       1u
+#define MS_BS_DEF_BETA_THRESH  0.5f
+#define MS_BS_DEF_MAX_AMBIG    1.0f   /* 1.0 == off */
+#define MS_BS_DEF_MIN_FOLD     10.0f
+
 typedef struct {
   uint32_t  n_samples;
   uint64_t  n_cpg;

@@ -192,8 +192,8 @@ static uint32_t phash_intern(phash_t *h, const uint64_t *key,
  * because that returns a khash whose iteration order is arbitrary, and file
  * order IS the binstring's digit order -- a permuted walk would silently
  * relabel every pattern. */
-static char **read_store_index(const char *ref, uint32_t *n_out,
-                               int64_t **off_out) {
+char **ms_read_store_index(const char *ref, uint32_t *n_out,
+                           int64_t **off_out) {
   char idx[PATH_MAX];
   if (snprintf(idx, sizeof(idx), "%s.idx", ref) >= (int)sizeof(idx))
     die("reference path too long", ref);
@@ -2766,7 +2766,7 @@ int main_mrmp_build(int argc, char *argv[]) {
   if (!force && !dry) { struct stat st; if (!stat(out, &st)) die("output exists (use --force)", out); }
 
   uint32_t nstore = 0; int64_t *voff = NULL;
-  char **slab = read_store_index(store, &nstore, &voff);
+  char **slab = ms_read_store_index(store, &nstore, &voff);
   if (nstore < 2) die("reference holds fewer than two classes", store);
   uint32_t *idx = xcalloc(nstore, sizeof(uint32_t), "root idx");
   for (uint32_t k = 0; k < nstore; ++k) idx[k] = k;

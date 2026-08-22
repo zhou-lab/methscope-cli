@@ -228,6 +228,7 @@ static uint64_t file_size(const char *path) {
 static int usage(void) {
   ms_help(stderr,
     "Usage: methscope upscale-set-units [options] IN.mrmp OUT.msui\n"
+    "       methscope upscale-set-units --store REF.cg [options] OUT.msui\n"
     "       methscope upscale-set-units --binstrings F --pattern-counts F \\\n"
     "                                   [options] OUT.msui\n\n"
     "Build the whole-genome processing-unit index used by UPDEC2. Real MRMP\n"
@@ -235,6 +236,14 @@ static int usage(void) {
     "singleton memberships packed after all real memberships.\n\n"
     "  IN.mrmp               MRMPIDX1 artifact from `methscope mrmp-build`\n"
     "  OUT.msui              output MSUIDX1 index\n\n"
+    "  --store REF.cg        derive each CpG's binstring from the reference\n"
+    "                        store itself -- no .mrmp, and the CONSTANT\n"
+    "                        binstrings are kept, so every CpG has a real\n"
+    "                        membership rather than landing in PNA. OUT.msui\n"
+    "                        is then the only positional.\n"
+    "  --mincov N            store mode: min per-class coverage (default 1)\n"
+    "  --beta-threshold B    store mode: call a class methylated above B\n"
+    "                        (default 0.5). Must match mrmp-build's.\n"
     "  --binstrings FILE     legacy: one 35-symbol 0/1/2 string per genomic CpG\n"
     "  --pattern-counts FILE legacy: full `uniq -c` pattern-count table\n"
     "  --unit-cpgs N         target CpGs per unit (default 16384)\n"
@@ -245,12 +254,23 @@ static int usage(void) {
 
 int main_upscale_set_units(int argc, char **argv) {
   const char *binstrings = NULL, *counts_path = NULL, *out_path = NULL;
-  const char *mrmp_path = NULL, *pos[2] = {NULL, NULL};
+  const char *mrmp_path = NULL, *store_path = NULL, *pos[2] = {NULL, NULL};
   int npos = 0;
   uint32_t target = 16384;
+  uint32_t mincov = MS_BS_DEF_MINCOV;
+  float beta_thr = MS_BS_DEF_BETA_THRESH;
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
       usage(); return 0;
+    } else if (!strcmp(argv[i], "--store") && i + 1 < argc) {
+      store_path = argv[++i];
+    } else if (!strcmp(argv[i], "--mincov") && i + 1 < argc) {
+      const char *e; uint64_t x = parse_u64(argv[++i], &e, "--mincov");
+      if (*e || !x || x > UINT32_MAX) fail("invalid --mincov");
+      mincov = (uint32_t)x;
+    } else if (!strcmp(argv[i], "--beta-threshold") && i + 1 < argc) {
+      beta_thr = (float)atof(argv[++i]);
+      if (!(beta_thr > 0.0f && beta_thr < 1.0f)) fail("--beta-threshold must be in (0,1)");
     } else if (!strcmp(argv[i], "--binstrings") && i + 1 < argc) {
       binstrings = argv[++i];
     } else if (!strcmp(argv[i], "--pattern-counts") && i + 1 < argc) {
@@ -274,7 +294,15 @@ int main_upscale_set_units(int argc, char **argv) {
   }
   /* The output is always the last positional; the artifact is the first, and
    * is absent only in the legacy two-text-file mode. */
-  if (binstrings || counts_path) {
+  if (store_path) {
+    if (binstrings || counts_path)
+      fail("--store replaces --binstrings/--pattern-counts; give one or the other");
+    if (npos != 1) {
+      usage();
+      fail("--store mode takes only OUT.msui (the store replaces IN.mrmp)");
+    }
+    out_path = pos[0];
+  } else if (binstrings || counts_path) {
     if (!binstrings || !counts_path) {
       usage();
       fail("legacy mode needs both --binstrings and --pattern-counts");
@@ -308,7 +336,52 @@ int main_upscale_set_units(int argc, char **argv) {
   const mrmp_header_t *mh = NULL;
   const uint32_t *membership = NULL;
   void *mmap_base = NULL; size_t mmap_bytes = 0; int mmap_fd = -1;
-  if (mrmp_path) {
+  ms_binstring_map_t bm = {0};
+  if (store_path) {
+    /* Units are an OUTPUT partition: every CpG must land in one, so the
+     * constant binstrings are KEPT (inc_all0/inc_all1 = 1). mrmp-build drops
+     * them because a CpG every class calls the same way separates nothing --
+     * true for a classifier, and the reason a selected .mrmp cannot define
+     * units. The rule itself is ms_binstring_map(), shared with mrmp-build. */
+    uint32_t ns = 0; int64_t *voff = NULL;
+    char **lab = ms_read_store_index(store_path, &ns, &voff);
+    if (!ns) fail_path("reference index is empty", store_path);
+    if (ns > MSUI_PATTERN_LEN_MAX)
+      fail("MRMP sample count must be 1..40 (the base-3 uint64 key limit)");
+    g_pattern_len = ns;
+    pk = pna_key();                       /* depends on g_pattern_len */
+    ms_binstring_map(store_path, ns, lab, voff, mincov, beta_thr,
+                     MS_BS_DEF_MAX_AMBIG, MS_BS_DEF_MIN_FOLD, 1, 1, &bm);
+    for (uint32_t k = 0; k < ns; ++k) free(lab[k]);
+    free(lab); free(voff);
+
+    /* group index == intern index, so bm.cpg_pat indexes groups directly. */
+    for (uint64_t r = 0; r < bm.n_pat; ++r) {
+      group_t g = {.key = bm.keys[r], .output_offset = 0,
+                   .count = (uint32_t)bm.count[r], .seen = 0,
+                   .unit = UINT32_MAX, .pna = 0};
+      if (!bm.count[r] || bm.count[r] > UINT32_MAX)
+        fail("membership count is outside uint32 range");
+      groups_push(&groups, g);
+      total += bm.count[r];
+      checksum = checksum_add(checksum, g.key, g.count);
+    }
+    group_t pg = {.key = pk, .output_offset = 0, .count = (uint32_t)bm.pna_cpg,
+                  .seen = 0, .unit = UINT32_MAX, .pna = 1};
+    groups_push(&groups, pg);
+    pna_group = (uint32_t)(groups.n - 1);
+    total += bm.pna_cpg;
+    checksum = checksum_add(checksum, pk, bm.pna_cpg);
+    if (total != bm.n_cpg) fail("binstring counts do not cover all CpGs");
+    if (groups.n < 2) fail("no real memberships");
+    n_real_groups = groups.n - 1;
+    /* NOT pre-ranked the way an artifact's candidates are: rank here, exactly
+     * as the text path does. */
+    order = xmalloc(n_real_groups * sizeof(*order));
+    for (size_t i = 0; i < n_real_groups; ++i) order[i] = (uint32_t)i;
+    sort_ctx = &groups;
+    qsort(order, n_real_groups, sizeof(*order), group_cmp);
+  } else if (mrmp_path) {
     mmap_fd = open(mrmp_path, O_RDONLY);
     if (mmap_fd < 0) fail_path("cannot open MRMP artifact", mrmp_path);
     struct stat st;
@@ -444,7 +517,26 @@ int main_upscale_set_units(int argc, char **argv) {
 
   uint32_t *cpg = xmalloc((size_t)total * sizeof(*cpg));
   uint64_t genomic = 0, pna_seen = 0;
-  if (mrmp_path) {
+  if (store_path) {
+    /* cpg_pat is in genomic order, so CpGs land inside each unit in genomic
+     * order exactly as the binstring scan would place them. */
+    for (uint64_t i = 0; i < bm.n_cpg; ++i) {
+      uint32_t r = bm.cpg_pat[i];
+      uint64_t dest;
+      if (r == MRMP_PNA_MEMBERSHIP) {
+        dest = n_real_cpg + pna_seen++;
+        ++groups.a[pna_group].seen;
+      } else {
+        if (r >= n_real_groups) fail("binstring index out of range");
+        group_t *g = &groups.a[r];
+        if (g->seen >= g->count) fail("binstring frequency exceeds count");
+        dest = g->output_offset + g->seen;
+        ++g->seen;
+      }
+      cpg[dest] = (uint32_t)i;
+    }
+    genomic = bm.n_cpg;
+  } else if (mrmp_path) {
     /* membership rank is in genomic order, so CpGs land inside each unit in
      * genomic order exactly as the binstring scan would place them. */
     for (uint64_t i = 0; i < mh->n_cpg; ++i) {
@@ -479,6 +571,7 @@ int main_upscale_set_units(int argc, char **argv) {
     }
     if (ferror(f) || fclose(f)) fail_path("error reading binstring table", binstrings);
   }
+  ms_binstring_map_free(&bm);            /* scatter done; groups own the counts */
   if (genomic != total || pna_seen != n_pna_cpg)
     fail("binstring and pattern-count totals disagree");
   for (size_t i = 0; i < groups.n; ++i)
