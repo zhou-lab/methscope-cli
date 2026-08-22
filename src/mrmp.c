@@ -1219,6 +1219,31 @@ void ms_mrmp_group_map_at(const char *artifact, uint64_t base, uint16_t *group,
   mrmp_close(&r);
 }
 
+uint32_t ms_mrmp_group_map_chain(const char *chain, uint16_t *group,
+                                 uint64_t n_cpg, uint32_t patterns_per_set,
+                                 uint32_t *col0, uint32_t *n_sets_out) {
+  ms_mrmpset_t *ch = ms_mrmpset_open(chain);
+  uint32_t total = 0;
+  for (uint32_t s = 0; s < ch->n_sets; ++s) {
+    col0[s] = total;
+    uint16_t *g = group + (uint64_t)s * n_cpg;
+    ms_mrmp_group_map_at(chain, ch->block_off[s], g, n_cpg, patterns_per_set);
+    /* the set's own width: how many distinct ids it actually emitted */
+    uint32_t k = 0;
+    for (uint64_t i = 0; i < n_cpg; ++i) if (g[i] > k) k = g[i];
+    /* shift into the global column space so the caller can just concatenate */
+    if (total)
+      for (uint64_t i = 0; i < n_cpg; ++i) if (g[i]) g[i] = (uint16_t)(g[i] + total);
+    total += k;
+    if (total > UINT16_MAX - 1)
+      die("chain feature columns exceed the uint16 group format", chain);
+  }
+  col0[ch->n_sets] = total;
+  *n_sets_out = ch->n_sets;
+  ms_mrmpset_free(ch);
+  return total;
+}
+
 uint32_t ms_mrmp_thresholds_at(const char *path, uint64_t base, uint64_t blk_bytes,
                                uint32_t n_want, float *out) {
   mrmp_reader_t r; mrmp_open_at(&r, path, base, blk_bytes);

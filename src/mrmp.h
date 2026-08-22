@@ -264,6 +264,23 @@ void ms_mrmp_write_mask_at(const char *artifact, uint64_t base,
  * n_want and returns how many were written; 0 if the artifact predates
  * MRMP_FLAG_THRESH. A NaN entry marks a pattern whose two groups are not both
  * populated -- unusable, and consumers drop it rather than guess. */
+/* Chain-aware group map: one uint16 column id per (set, CpG), laid out
+ * set-major as group[s * n_cpg + i]. Ids are GLOBAL -- set s occupies columns
+ * [col0[s], col0[s] + K_s) with 1-based ids, 0 meaning "this CpG reaches no
+ * feature in this set" -- so a caller accumulates every set into one vector by
+ * concatenation and needs no per-set bookkeeping beyond col0[].
+ *
+ * A CpG lands in one pattern PER SET, which is the whole point: a tree's leaf
+ * resolves classes its root cannot, and the flat map can express only one of
+ * them. Returns the total column count and fills col0[0..n_sets].
+ *
+ * Constant binstrings are absent by construction, not filtered here: mrmp-build
+ * routes all-0 and all-1 to PNA unless --include-all-0/1 is given, so a node
+ * contributes only patterns that separate something within its own subset. */
+uint32_t ms_mrmp_group_map_chain(const char *chain, uint16_t *group,
+                                 uint64_t n_cpg, uint32_t patterns_per_set,
+                                 uint32_t *col0, uint32_t *n_sets_out);
+
 uint32_t ms_mrmp_thresholds_at(const char *path, uint64_t base, uint64_t blk_bytes,
                                uint32_t n_want, float *out);
 

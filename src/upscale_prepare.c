@@ -234,8 +234,26 @@ int main_upscale_prepare(int argc, char *argv[]) {
    * feature.  Prefer the MRMPIDX1 artifact, so this map and the mask the model
    * ends up bundling derive from one source and cannot disagree; an
    * already-exported categorical .cm is still accepted. */
-  uint16_t *group = xmalloc((size_t)n_cpg * sizeof(*group), "MRMP group map");
+  /* A CHAIN featurizes as the concatenation of its sets: a CpG lands in one
+   * pattern PER SET, so a tree's leaf contributes columns its root cannot
+   * express. n_sets * n_cpg uint16 is 823 MB for a 14-set chain over hg38 --
+   * paid once, then reused for every replicate. Constant binstrings never
+   * appear: mrmp-build routes all-0 and all-1 to PNA unless asked otherwise,
+   * so a node contributes only what separates something in its own subset. */
+  uint32_t n_sets = 1, *col0 = NULL, ncol = patterns;
   if (ms_mrmp_is_artifact(mrmp)) {
+    ms_mrmpset_t *probe = ms_mrmpset_open(mrmp);
+    n_sets = probe->n_sets;
+    ms_mrmpset_free(probe);
+  }
+  uint16_t *group = xmalloc((size_t)(n_sets > 1 ? n_sets : 1) * n_cpg * sizeof(*group),
+                            "MRMP group map");
+  if (n_sets > 1) {
+    col0 = xmalloc((size_t)(n_sets + 1) * sizeof(*col0), "chain column offsets");
+    ncol = ms_mrmp_group_map_chain(mrmp, group, n_cpg, patterns, col0, &n_sets);
+    fprintf(stderr, "[methscope] upscale-featurize: chain of %u sets -> %u columns\n",
+            n_sets, ncol);
+  } else if (ms_mrmp_is_artifact(mrmp)) {
     ms_mrmp_group_map(mrmp, group, n_cpg, patterns);
   } else {
     cfile_t cmf = open_cfile((char *)mrmp);
@@ -303,7 +321,11 @@ int main_upscale_prepare(int argc, char *argv[]) {
   msur_header_t *hp = &h3.h;
   memcpy(hp->magic, v3 ? MSUR3_MAGIC : MSUR2_MAGIC, 8);
   hp->version = v3 ? 3u : 2u;
-  hp->n_cells = n_cells; hp->n_reps = total_reps; hp->n_patterns = patterns;
+  /* n_patterns is the COLUMN count, which for a chain is the concatenation
+   * width, not --patterns. upscale-train narrows against this number, so
+   * recording the flag instead would let it read 200 columns of a 658-wide
+   * record and silently mis-slice every row. */
+  hp->n_cells = n_cells; hp->n_reps = total_reps; hp->n_patterns = ncol;
   hp->n_cpg = n_cpg; hp->sampled_per_cell = max_sample;
   hp->flags = (embed_truth ? MSUR_F_TRUTH_U16 : 0)
     | (binarize ? MSUR_F_BINARIZED : 0)
@@ -377,9 +399,9 @@ int main_upscale_prepare(int argc, char *argv[]) {
   }
 
   uint32_t *eligible = memory_cells ? NULL : xmalloc((size_t)n_cpg * sizeof(*eligible), "sampling workspace");
-  double *sum = xmalloc((size_t)patterns * sizeof(*sum), "MRMP sums");
-  uint32_t *count = xmalloc((size_t)patterns * sizeof(*count), "MRMP counts");
-  float *beta = xmalloc((size_t)patterns * sizeof(*beta), "feature beta");
+  double *sum = xmalloc((size_t)ncol * sizeof(*sum), "MRMP sums");
+  uint32_t *count = xmalloc((size_t)ncol * sizeof(*count), "MRMP counts");
+  float *beta = xmalloc((size_t)ncol * sizeof(*beta), "feature beta");
   uint32_t *selected = xmalloc((size_t)max_sample * sizeof(*selected), "sampled positions");
   uint32_t *swap_j = xmalloc((size_t)max_sample * sizeof(*swap_j), "sampling swaps");
   /* Only allocated when some replicate is dense enough to prefer a bitmap. */
@@ -417,24 +439,27 @@ int main_upscale_prepare(int argc, char *argv[]) {
         for (uint64_t i = 0; i < n_cpg; ++i) if (f3_get_mu(&c, i)) cell_eligible[ne++] = (uint32_t)i;
       if (ne < sample) pdie("cell has fewer eligible CpGs than --sample", truth);
       partial_fisher_yates(cell_eligible, ne, sample, swap_j);
-      memset(sum, 0, (size_t)patterns * sizeof(*sum));
-      memset(count, 0, (size_t)patterns * sizeof(*count));
+      memset(sum, 0, (size_t)ncol * sizeof(*sum));
+      memset(count, 0, (size_t)ncol * sizeof(*count));
       for (uint32_t k = 0; k < sample; ++k) {
         uint64_t pos = cell_eligible[k]; selected[k] = (uint32_t)pos;
-        uint16_t g = group[pos];
-        if (g) {
-          double b = MU2beta(f3_get_mu(&c, pos));
-          /* One read at this CpG: the call is methylated or not, never a
-           * fraction.  Drawn only for CpGs that reach a feature, so the RNG is
-           * untouched when --binarize is off and existing msurs reproduce. */
-          if (binarize) b = yame_rand01() < b ? 1.0 : 0.0;
+        /* The binarise draw is per CpG, NOT per set: one observed read gives
+         * one call, and every set that contains this CpG must see the same
+         * one. Drawing inside the set loop would consume n_sets randoms per
+         * CpG and desynchronise the flat path's RNG stream. */
+        double b = MU2beta(f3_get_mu(&c, pos));
+        int drawn = 0;
+        for (uint32_t sx = 0; sx < n_sets; ++sx) {
+          uint16_t g = group[(uint64_t)sx * n_cpg + pos];
+          if (!g) continue;
+          if (binarize && !drawn) { b = yame_rand01() < b ? 1.0 : 0.0; drawn = 1; }
           sum[g - 1] += b; ++count[g - 1];
         }
       }
-      for (uint32_t g = 0; g < patterns; ++g) beta[g] = count[g] ? (float)(sum[g] / count[g]) : NAN;
+      for (uint32_t g = 0; g < ncol; ++g) beta[g] = count[g] ? (float)(sum[g] / count[g]) : NAN;
       qsort(selected, sample, sizeof(*selected), cmp_u32);
-      write_or_die(fp, beta, (size_t)patterns * sizeof(*beta), out);
-      write_or_die(fp, count, (size_t)patterns * sizeof(*count), out);
+      write_or_die(fp, beta, (size_t)ncol * sizeof(*beta), out);
+      write_or_die(fp, count, (size_t)ncol * sizeof(*count), out);
       /* Exactly `sample` entries -- no padding.  In v3 the replicate table
        * carries this record's length, so shorter levels cost nothing; dense
        * levels switch to a whole-genome bitmap, which is both smaller and O(1)
@@ -470,7 +495,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
       at += snprintf(level_list + at, sizeof(level_list) - (size_t)at,
                      k ? ",%u" : "%u", levels[k]);
   }
-  fprintf(mf, "format\t%s\nversion\t%u\ntruth_cg\t%s\nmrmp\t%s\nn_cells\t%u\nn_cpg\t%" PRIu64 "\nn_reps\t%u\nreps_per_level\t%u\nsample_levels\t%s\nsampled_per_cell\t%u\nbinarized\t%s\nn_patterns\t%u\ntruth_encoding\t%s\ngroups_offset\t%" PRIu64 "\ntruth_offset\t%" PRIu64 "\nrecords_offset\t%" PRIu64 "\nrecord_bytes\t%" PRIu64 "\nrandom_protocol\tYAME_dsample_partial_fisher_yates_rand_seed_1_to_n\nfeature_columns\tP1..P%u (PNA excluded)\n", v3 ? "MSURAW3" : "MSURAW2", hp->version, truth, mrmp, n_cells, n_cpg, total_reps, log_min ? total_reps : reps, level_list, max_sample, binarize ? "yes (one read per observed CpG)" : "no", patterns, embed_truth ? "uint16_beta_0_65534_missing_65535" : "external_cg", hp->groups_offset, hp->truth_offset, hp->records_offset, hp->record_bytes, patterns);
+  fprintf(mf, "format\t%s\nversion\t%u\ntruth_cg\t%s\nmrmp\t%s\nn_cells\t%u\nn_cpg\t%" PRIu64 "\nn_reps\t%u\nreps_per_level\t%u\nsample_levels\t%s\nsampled_per_cell\t%u\nbinarized\t%s\nn_patterns\t%u\ntruth_encoding\t%s\ngroups_offset\t%" PRIu64 "\ntruth_offset\t%" PRIu64 "\nrecords_offset\t%" PRIu64 "\nrecord_bytes\t%" PRIu64 "\nrandom_protocol\tYAME_dsample_partial_fisher_yates_rand_seed_1_to_n\nfeature_columns\tP1..P%u (PNA excluded; a CHAIN concatenates its sets, so this is the total across them)\n", v3 ? "MSURAW3" : "MSURAW2", hp->version, truth, mrmp, n_cells, n_cpg, total_reps, log_min ? total_reps : reps, level_list, max_sample, binarize ? "yes (one read per observed CpG)" : "no", ncol, embed_truth ? "uint16_beta_0_65534_missing_65535" : "external_cg", hp->groups_offset, hp->truth_offset, hp->records_offset, hp->record_bytes, ncol);
   if (fclose(mf)) pdie("error closing manifest", manifest);
   if (memory_cells) {
     for (uint32_t cell = 0; cell < n_cells; ++cell) {
