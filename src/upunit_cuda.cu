@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
+#include <limits>
 #include <thread>
 #include <time.h>
 #include "updec2.h"
@@ -107,6 +108,13 @@ static std::vector<EvalRow> make_eval(const MsurHeader*h,const uint8_t*base,cons
 struct Net{Param A,a,E,b;bool direct;int I,R,O;};
 static void destroy(Net&n){if(!n.direct){pfree(n.A);pfree(n.a);}pfree(n.E);pfree(n.b);}
 static std::vector<float> flatten(const Net&n){size_t z=(n.direct?(size_t)n.O*n.I:(size_t)n.R*n.I+n.R+(size_t)n.O*n.R)+n.O;std::vector<float>x(z);size_t q=0;auto cp=[&](const Param&p){CU(cudaMemcpy(x.data()+q,p.t,p.n*4,cudaMemcpyDeviceToHost));q+=p.n;};if(!n.direct){cp(n.A);cp(n.a);}cp(n.E);cp(n.b);return x;}
+/* Inverse of flatten(): push the best-on-val weights back onto the device, so a
+ * unit is scored with the parameters it keeps rather than whatever the final
+ * step happened to leave behind. */
+static void unflatten(Net&n,const std::vector<float>&x){
+  size_t q=0;auto cp=[&](Param&p){CU(cudaMemcpy(p.t,x.data()+q,p.n*4,cudaMemcpyHostToDevice));q+=p.n;};
+  if(!n.direct){cp(n.A);cp(n.a);}cp(n.E);cp(n.b);
+}
 static Net make_net(bool direct,int I,int R,int O,const std::vector<float>&bias,uint64_t s){
   Net n={};n.direct=direct;n.I=I;n.R=R;n.O=O;
   if(direct){n.E=prand((size_t)O*I,std::sqrt(6.0f/(I+1)),s^11);n.b=pcopy(bias);}
@@ -203,9 +211,15 @@ extern "C" int ms_upunit_train_cuda(const ms_upunit_config_t*c){
   for(unsigned ti=0;ti<nth;++ti)workers.emplace_back([&,ti](){uint64_t beg=ih->n_cpg*ti/nth,end=ih->n_cpg*(ti+1)/nth;for(uint32_t cell:train){const uint16_t*t=truth+(size_t)cell*h->n_cpg;for(uint64_t pos=beg;pos<end;++pos){uint16_t v=t[pos];if(v!=UINT16_MAX){all_bias[pos]+=(float)v/65534.0f;all_count[pos]++;}}}for(uint64_t pos=beg;pos<end;++pos){double p=all_count[pos]?all_bias[pos]/all_count[pos]:.5;p=std::max(.01,std::min(.99,p));all_bias[pos]=std::log(p/(1-p));}});
   for(auto&t:workers)t.join();all_count.clear();all_count.shrink_to_fit();std::fprintf(stderr,"[methscope] upscale-train: prepared genome-wide train-cell biases with %u CPU workers in %.1fs\n",nth,now()-bias_t0);
   double train_t0=now();uint32_t selected_count=0;std::vector<uint8_t>selected=unit_selection(c->pilot_units_path,ih->n_units,&selected_count);std::vector<float>unit_mae(ih->n_units,NAN);std::vector<uint32_t>unit_step(ih->n_units);std::vector<uint64_t>unit_n(ih->n_units);
+  std::vector<float>unit_test_mae(ih->n_units,std::numeric_limits<float>::quiet_NaN());
+  std::vector<uint64_t>unit_test_n(ih->n_units,0);
   uint32_t trained=0,resumed=0,processed=0;
   for(uint32_t ui=0;ui<ih->n_units;++ui){if(!selected[ui])continue;const MsuiUnit&u=units[ui];bool pure=(u.flags&1)!=0,pna=(u.flags&2)!=0,direct=c->mixed_direct&&!pure;int R=direct?0:(pure?(int)c->pure_bottleneck:(int)c->mixed_bottleneck),O=u.cpg_count;char path[4096];ckpath(path,sizeof(path),c->work_dir,ui);std::vector<float>best;float bestmae=NAN;uint32_t beststep=0;
-    std::vector<EvalRow>ev=make_eval(h,data.p,cpg,u,val,c->eval_rows,c->batch,c->seed+101+ui);if(ev.empty())die("could not form validation rows");for(const auto&er:ev)unit_n[ui]+=er.id.size();
+    /* The stop signal. --stop-on train measures it on a FIXED sample of
+     * training rows, so every cell can train when nothing is held out --
+     * that plateau shows convergence, not generalization. */
+    const std::vector<uint32_t>&stopcells=c->stop_on_train?train:val;
+    std::vector<EvalRow>ev=make_eval(h,data.p,cpg,u,stopcells,c->eval_rows,c->batch,c->seed+101+ui);if(ev.empty())die(c->stop_on_train?"could not form training stop rows":"could not form validation rows");for(const auto&er:ev)unit_n[ui]+=er.id.size();
     if(load_checkpoint(path,ui,isum,runsum,direct?0:1,R,c->activation,O,I,best,bestmae,beststep)){++resumed;unit_mae[ui]=bestmae;unit_step[ui]=beststep;++processed;continue;}
     std::vector<float>bias(O);for(int o=0;o<O;++o)bias[o]=all_bias[cpg[u.output_offset+o]];
     Net net=make_net(direct,I,R,O,bias,c->seed^((uint64_t)ui<<32));
@@ -218,12 +232,22 @@ extern "C" int ms_upunit_train_cuda(const ms_upunit_config_t*c){
     if(!B)die("unit has no covered training target in any sampled cell");size_t row=(size_t)rep*h->n_cells+cell;const float*x=dX+row*I;CU(cudaMemcpy(w.id,bid.data(),B*4,cudaMemcpyHostToDevice));CU(cudaMemcpy(w.y,by.data(),B*4,cudaMemcpyHostToDevice));float ib1=1/(1-std::pow(.9f,(float)step)),ib2=1/(1-std::pow(.999f,(float)step)),lr=c->learning_rate,wd=c->weight_decay;
       if(direct)direct_back<<<blocks(B),THREADS>>>(x,net.E.t,net.E.m,net.E.v,net.b.t,net.b.m,net.b.v,w.id,w.y,B,I,lr,wd,ib1,ib2);
       else{gemv(bh,net.A.t,x,w.z,R,I);addact<<<blocks(R),THREADS>>>(w.z,net.a.t,R,c->activation);CU(cudaMemset(w.dz,0,R*4));factor_back<<<blocks(B),THREADS>>>(w.z,net.E.t,net.E.m,net.E.v,net.b.t,net.b.m,net.b.v,w.id,w.y,w.dz,B,R,lr,wd,ib1,ib2);actback<<<blocks(R),THREADS>>>(w.dz,w.z,R,c->activation);adam_outer<<<blocks((size_t)R*I),THREADS>>>(net.A.t,net.A.m,net.A.v,w.dz,x,R,I,lr,wd,ib1,ib2);adam_vec<<<blocks(R),THREADS>>>(net.a.t,net.a.m,net.a.v,w.dz,R,lr,0,ib1,ib2);}
-      if(step%c->eval_every==0){v=eval(bh,net,w,dX,ev,c->activation);if(v+1e-7<bestmae){bestmae=v;beststep=step;best=flatten(net);bad=0;}else if(step>=c->min_steps)++bad;if(step>=c->min_steps&&bad>=c->patience)break;}
+      if(step%c->eval_every==0){v=eval(bh,net,w,dX,ev,c->activation);if(v+c->stop_eps<bestmae){bestmae=v;beststep=step;best=flatten(net);bad=0;}else if(step>=c->min_steps)++bad;if(step>=c->min_steps&&bad>=c->patience)break;}
     }
+      /* TEST rows, scored on the kept weights. Reported only: nothing here
+       * feeds selection, which stays on val. This is what lets a val-stopped
+       * arm and an all-cells-train arm be compared on ground neither used. */
+      if(!test.empty()){
+        std::vector<EvalRow>tv=make_eval(h,data.p,cpg,u,test,c->eval_rows,c->batch,c->seed+9001+ui);
+        if(!tv.empty()){unflatten(net,best);unit_test_mae[ui]=(float)eval(bh,net,w,dX,tv,c->activation);
+          /* sum the ROWS' target counts, as validation_n does -- a row is capped
+           * at --batch and at the unit size, so rows*cpg_count overcounts. */
+          for(const auto&er:tv)unit_test_n[ui]+=er.id.size();}
+      }
     save_checkpoint(path,ui,isum,runsum,direct?0:1,R,c->activation,O,I,best,bestmae,beststep);destroy(net);++trained;++processed;unit_mae[ui]=bestmae;unit_step[ui]=beststep;if(processed%10==0||processed==selected_count){double elapsed=now()-train_t0;std::fprintf(stderr,"[methscope] upscale-train: units %u/%u (trained=%u resumed=%u) last_val_mae=%.6f%s elapsed=%.1fs ETA=%.1fs\n",processed,selected_count,trained,resumed,bestmae,pna?" PNA":"",elapsed,elapsed/processed*(selected_count-processed));}
   }
   all_bias.clear();all_bias.shrink_to_fit();
-  if(c->pilot_units_path){char pp[4096];if(std::snprintf(pp,sizeof(pp),"%s/pilot.tsv",c->work_dir)>=(int)sizeof(pp))die("pilot path too long");FILE*f=fopen(pp,"w");if(!f)diep("cannot create pilot metrics",pp);std::fprintf(f,"unit\tclass\tcpgs\tmemberships\tmode\tbottleneck_dim\tbest_step\tvalidation_n\tvalidation_mae\n");for(uint32_t ui=0;ui<ih->n_units;++ui)if(selected[ui]){const MsuiUnit&u=units[ui];bool direct=c->mixed_direct&&!(u.flags&1);std::fprintf(f,"%u\t%s\t%u\t%u\t%s\t%u\t%u\t%llu\t%.9g\n",ui,(u.flags&2)?"PNA":(u.flags&1)?"pure":"mixed",u.cpg_count,u.membership_count,direct?"direct":"factor",direct?0:(u.flags&1)?c->pure_bottleneck:c->mixed_bottleneck,unit_step[ui],(unsigned long long)unit_n[ui],unit_mae[ui]);}if(fclose(f))diep("cannot close pilot metrics",pp);std::fprintf(stderr,"[methscope] upscale-train: wrote pilot metrics %s\n",pp);cudaFree(w.z);cudaFree(w.dz);cudaFree(w.y);cudaFree(w.id);cudaFree(w.met);cudaFree(dX);BL(cublasDestroy(bh));if(th)unmap(trunk);unmap(idx);unmap(data);return 2;}
+  if(c->pilot_units_path){char pp[4096];if(std::snprintf(pp,sizeof(pp),"%s/pilot.tsv",c->work_dir)>=(int)sizeof(pp))die("pilot path too long");FILE*f=fopen(pp,"w");if(!f)diep("cannot create pilot metrics",pp);std::fprintf(f,"unit\tclass\tcpgs\tmemberships\tmode\tbottleneck_dim\tbest_step\tvalidation_n\tvalidation_mae\ttest_n\ttest_mae\n");for(uint32_t ui=0;ui<ih->n_units;++ui)if(selected[ui]){const MsuiUnit&u=units[ui];bool direct=c->mixed_direct&&!(u.flags&1);std::fprintf(f,"%u\t%s\t%u\t%u\t%s\t%u\t%u\t%llu\t%.9g\t%llu\t%.9g\n",ui,(u.flags&2)?"PNA":(u.flags&1)?"pure":"mixed",u.cpg_count,u.membership_count,direct?"direct":"factor",direct?0:(u.flags&1)?c->pure_bottleneck:c->mixed_bottleneck,unit_step[ui],(unsigned long long)unit_n[ui],unit_mae[ui],(unsigned long long)unit_test_n[ui],unit_test_mae[ui]);}if(fclose(f))diep("cannot close pilot metrics",pp);std::fprintf(stderr,"[methscope] upscale-train: wrote pilot metrics %s\n",pp);cudaFree(w.z);cudaFree(w.dz);cudaFree(w.y);cudaFree(w.id);cudaFree(w.met);cudaFree(dX);BL(cublasDestroy(bh));if(th)unmap(trunk);unmap(idx);unmap(data);return 2;}
   uint64_t metadata_bytes=sizeof(ms_updec2_header_t)+(uint64_t)F*8+(uint64_t)ih->n_units*sizeof(ms_updec2_unit_t)+ih->n_cpg*4+(uint64_t)ih->n_real_memberships*sizeof(ms_updec2_membership_t);
   std::vector<ms_updec2_unit_t>od(ih->n_units);uint64_t po=metadata_bytes+trunk_floats*4;
   for(uint32_t ui=0;ui<ih->n_units;++ui){const MsuiUnit&u=units[ui];bool direct=c->mixed_direct&&!(u.flags&1);uint32_t R=direct?0:((u.flags&1)?c->pure_bottleneck:c->mixed_bottleneck);uint64_t nf=direct?(uint64_t)u.cpg_count*I+u.cpg_count:(uint64_t)R*I+R+(uint64_t)u.cpg_count*R+u.cpg_count;od[ui]={u.output_offset,po,nf*4,u.cpg_count,u.membership_count,(uint16_t)(direct?0:1),(uint16_t)R,u.flags};po+=nf*4;}

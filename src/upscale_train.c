@@ -74,7 +74,17 @@ static int usage(void) {
     "  --min-steps N            earliest stopping point (default 2000)\n"
     "  --max-steps N            maximum updates per unit (default 8000)\n"
     "  --eval-every N           validation interval (default 200)\n"
+    "  --stop-on val|train      cells the early-stop signal is measured on\n"
+    "                           (default val). `train` lets every sample train\n"
+    "                           and stops on a TRAINING-loss plateau, which sees\n"
+    "                           convergence but not overfitting; val may then\n"
+    "                           be empty.\n"
     "  --patience N             non-improving checks (default 8)\n"
+    "  --stop-epsilon X         an eval counts as progress only if it beats the\n"
+    "                           best by more than X (default 1e-7). A step samples\n"
+    "                           --batch CpGs of a unit, so on a multi-million-CpG\n"
+    "                           unit each output row moves rarely and per-eval\n"
+    "                           gains approach this floor -- lower it there.\n"
     "  --batch N                target CpGs per update (default 8192)\n"
     "  --eval-rows N            fixed validation rows per unit (default 8)\n"
     "  --learning-rate X        AdamW rate (default 0.001)\n"
@@ -113,7 +123,7 @@ int main_upscale_train(int argc, char **argv) {
    * the top-head units; these transfer-validated values recover ~0.004 MAE on
    * the external 2018_Zhou cohort. */
   c.min_steps = 2000; c.max_steps = 8000; c.eval_every = 200;
-  c.patience = 8; c.batch = 8192; c.eval_rows = 8;
+  c.patience = 8; c.batch = 8192; c.eval_rows = 8; c.stop_eps = 1e-7;
   c.seed = 1; c.device = 0; c.learning_rate = 1e-3; c.weight_decay = 1e-5;
 
   for (int i = 1; i < argc; ++i) {
@@ -124,6 +134,16 @@ int main_upscale_train(int argc, char **argv) {
     else if (!strcmp(a, "--mrmp") && i + 1 < argc) mrmp = argv[++i];
     else if (!strcmp(a, "-o") && i + 1 < argc) out = argv[++i];
     else if (!strcmp(a, "--work-dir") && i + 1 < argc) work = argv[++i];
+    else if (!strcmp(a, "--stop-on") && i + 1 < argc) {
+      const char *x = argv[++i];
+      if (!strcmp(x, "train")) c.stop_on_train = 1;
+      else if (!strcmp(x, "val")) c.stop_on_train = 0;
+      else terr("--stop-on takes val or train", x);
+    }
+    else if (!strcmp(a, "--stop-epsilon") && i + 1 < argc) {
+      c.stop_eps = real(argv[++i], a);
+      if (!(c.stop_eps >= 0.0)) terr("--stop-epsilon must be >= 0", a);
+    }
     else if (!strcmp(a, "--patterns") && i + 1 < argc) c.patterns = u32(argv[++i], a);
     else if (!strcmp(a, "--features") && i + 1 < argc) {
       const char *x = argv[++i];
