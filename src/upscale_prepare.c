@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <sys/stat.h>
 #include <time.h>
 
@@ -155,6 +156,12 @@ static int usage(void) {
     "                   Bernoulli(beta) draw, as `yame dsample -b` does\n"
     "  --patterns N     retain feature summaries P1..PN (default 1000)\n"
     "  --in-memory      inflate the truth store once and reuse it for all replicates\n"
+    "  --threads N      replicates in parallel (default 1). Needs --in-memory:\n"
+    "                   the streaming path reads records sequentially from one\n"
+    "                   handle. Output is byte-identical at any N -- each\n"
+    "                   replicate has always been seeded independently, so a\n"
+    "                   worker reproduces its own stream and buffers are written\n"
+    "                   in replicate order regardless of finishing order.\n"
     "  --manifest PATH  write provenance TSV (default OUT.msur.tsv)\n"
     "  -h, --help       show this help\n"
     "\n"
@@ -175,11 +182,89 @@ static void write_or_die(FILE *fp, const void *p, size_t n, const char *path) {
   if (n && fwrite(p, 1, n, fp) != n) pdie("write failed", path);
 }
 
+/* ---------------- one replicate, in isolation ---------------------------- */
+
+/* What a replicate needs, split into shared read-only and per-worker. Nothing
+ * here is written by more than one thread: the eligible arrays became
+ * read-only when the shuffle moved to an overlay, and the truth store is
+ * inflated once up front -- hence --in-memory being required for --threads > 1,
+ * since the streaming path reads records sequentially from one handle.
+ *
+ * Records go into a per-worker buffer rather than straight to the file, so the
+ * output keeps replicate-major order whichever worker finishes first. The seed
+ * was always srand(r+1), per replicate, so a worker reproduces its own stream
+ * exactly and --threads changes nothing but wall clock. */
+typedef struct {
+  uint32_t n_cells, ncol, n_sets;
+  uint64_t n_cpg, bitmap_bytes;
+  const uint16_t *group;
+  const cdata_t *cells;
+  uint32_t *const *eligible;
+  const uint64_t *n_eligible;
+  const uint32_t *rep_sample;
+  const msur_rep_t *reptab;
+  int binarize, v3;
+  double *sum; uint32_t *count; float *beta; uint32_t *selected;
+  cow_t cow; unsigned char *bitmap;
+  unsigned char *buf; size_t len, cap;
+  uint32_t rep;
+} rep_ctx_t;
+
+static void buf_put(rep_ctx_t *w, const void *p, size_t n) {
+  if (w->len + n > w->cap) {
+    while (w->cap < w->len + n) w->cap = w->cap ? w->cap * 2 : (1u << 20);
+    w->buf = realloc(w->buf, w->cap);
+    if (!w->buf) pdie("out of memory (replicate buffer)", NULL);
+  }
+  memcpy(w->buf + w->len, p, n); w->len += n;
+}
+
+static void *rep_worker(void *arg) {
+  rep_ctx_t *w = arg;
+  const uint32_t r = w->rep, sample = w->rep_sample[r];
+  const int rep_bitmap = w->v3 && w->reptab[r].flags == MSUR_ENC_BITMAP;
+  ms_rng_t rng; ms_rng_seed(&rng, r + 1);
+  w->len = 0;
+  for (uint32_t cell = 0; cell < w->n_cells; ++cell) {
+    cdata_t c = w->cells[cell];   /* by value; f3_get_mu takes non-const */
+    partial_fisher_yates_cow(w->eligible[cell], w->n_eligible[cell], sample,
+                             &rng, &w->cow, w->selected);
+    memset(w->sum, 0, (size_t)w->ncol * sizeof(*w->sum));
+    memset(w->count, 0, (size_t)w->ncol * sizeof(*w->count));
+    for (uint32_t k = 0; k < sample; ++k) {
+      uint64_t pos = w->selected[k];
+      double b = MU2beta(f3_get_mu(&c, pos));
+      int drawn = 0;
+      for (uint32_t sx = 0; sx < w->n_sets; ++sx) {
+        uint16_t g = w->group[(uint64_t)sx * w->n_cpg + pos];
+        if (!g) continue;
+        if (w->binarize && !drawn) { b = yame_rand01(&rng) < b ? 1.0 : 0.0; drawn = 1; }
+        w->sum[g - 1] += b; ++w->count[g - 1];
+      }
+    }
+    for (uint32_t g = 0; g < w->ncol; ++g)
+      w->beta[g] = w->count[g] ? (float)(w->sum[g] / w->count[g]) : NAN;
+    qsort(w->selected, sample, sizeof(*w->selected), cmp_u32);
+    buf_put(w, w->beta, (size_t)w->ncol * sizeof(*w->beta));
+    buf_put(w, w->count, (size_t)w->ncol * sizeof(*w->count));
+    if (rep_bitmap) {
+      memset(w->bitmap, 0, (size_t)w->bitmap_bytes);
+      for (uint32_t k = 0; k < sample; ++k)
+        w->bitmap[w->selected[k] >> 3] |= (unsigned char)(1u << (w->selected[k] & 7));
+      buf_put(w, w->bitmap, (size_t)w->bitmap_bytes);
+    } else {
+      buf_put(w, w->selected, (size_t)sample * sizeof(*w->selected));
+    }
+  }
+  return NULL;
+}
+
 int main_upscale_prepare(int argc, char *argv[]) {
   const char *out = NULL, *truth = NULL, *mrmp = NULL, *manifest = NULL;
   const char *pos[3] = {NULL, NULL, NULL};
   int npos = 0;
   uint32_t reps = 100, patterns = 1000;
+  uint32_t nthreads = 1;
   uint32_t levels[MSUR_MAX_LEVELS] = {29000}, n_levels = 1, max_sample = 29000;
   uint32_t log_min = 0, log_max = 0;   /* --sample-logrange */
   double log_skew = 0.5;               /* <1 leans dense; 1 = plain log-uniform */
@@ -226,6 +311,8 @@ int main_upscale_prepare(int argc, char *argv[]) {
       if (!end || *end || !(log_skew > 0)) pdie("--sample-skew must be > 0", argv[i]);
     }
     else if (!strcmp(argv[i], "--binarize")) binarize = 1;
+    else if (!strcmp(argv[i], "--threads") && i + 1 < argc)
+      nthreads = (uint32_t)parse_u64(argv[++i], "--threads");
     else if (!strcmp(argv[i], "--patterns") && i + 1 < argc) patterns = (uint32_t)parse_u64(argv[++i], "--patterns");
     else if (!strcmp(argv[i], "--in-memory")) in_memory = 1;
     else if (argv[i][0] == '-') { usage(); pdie("unrecognized or incomplete option", argv[i]); }
@@ -466,72 +553,55 @@ int main_upscale_prepare(int argc, char *argv[]) {
 
   if (v3) write_or_die(fp, reptab, (size_t)total_reps * sizeof(*reptab), out);
 
-  for (uint32_t r = 0; r < total_reps; ++r) {
-    /* Replicates run level-major, so r = level*reps + rep.  With one level this
-     * is the historical loop exactly, seeds and all, and a single-level msur
-     * is byte-identical to one built before --sample took a list. */
-    uint32_t sample = rep_sample[r];
-    int rep_bitmap = v3 && reptab[r].flags == MSUR_ENC_BITMAP;
-    fprintf(stderr,
-      "[methscope] upscale-featurize: simulation %u/%u (sample %u%s%s)\n",
-      r + 1, total_reps, sample, binarize ? ", binarized" : "",
-      rep_bitmap ? ", bitmap" : "");
-    ms_rng_t rng; ms_rng_seed(&rng, r + 1);  /* historical: --seed 1..N */
-    cfile_t cf = {0};
-    if (!memory_cells) cf = open_cfile((char *)truth);
-    for (uint32_t cell = 0; cell < n_cells; ++cell) {
-      cdata_t c = memory_cells ? memory_cells[cell] : read_cdata1(&cf);
-      if (!c.n) pdie("truth store changed while reading", truth);
-      if (!memory_cells) {
-        decompress_in_situ(&c);
-        if (c.fmt != '3' || c.n != n_cpg) pdie("inconsistent truth record", truth);
-      }
-      uint64_t ne = memory_cells ? memory_n_eligible[cell] : 0;
-      uint32_t *cell_eligible = memory_cells ? memory_eligible[cell] : eligible;
-      if (!memory_cells)
-        for (uint64_t i = 0; i < n_cpg; ++i) if (f3_get_mu(&c, i)) cell_eligible[ne++] = (uint32_t)i;
-      if (ne < sample) pdie("cell has fewer eligible CpGs than --sample", truth);
-      partial_fisher_yates_cow(cell_eligible, ne, sample, &rng, &cow, selected);
-      memset(sum, 0, (size_t)ncol * sizeof(*sum));
-      memset(count, 0, (size_t)ncol * sizeof(*count));
-      for (uint32_t k = 0; k < sample; ++k) {
-        uint64_t pos = selected[k];
-        /* The binarise draw is per CpG, NOT per set: one observed read gives
-         * one call, and every set that contains this CpG must see the same
-         * one. Drawing inside the set loop would consume n_sets randoms per
-         * CpG and desynchronise the flat path's RNG stream. */
-        double b = MU2beta(f3_get_mu(&c, pos));
-        int drawn = 0;
-        for (uint32_t sx = 0; sx < n_sets; ++sx) {
-          uint16_t g = group[(uint64_t)sx * n_cpg + pos];
-          if (!g) continue;
-          if (binarize && !drawn) { b = yame_rand01(&rng) < b ? 1.0 : 0.0; drawn = 1; }
-          sum[g - 1] += b; ++count[g - 1];
-        }
-      }
-      for (uint32_t g = 0; g < ncol; ++g) beta[g] = count[g] ? (float)(sum[g] / count[g]) : NAN;
-      qsort(selected, sample, sizeof(*selected), cmp_u32);
-      write_or_die(fp, beta, (size_t)ncol * sizeof(*beta), out);
-      write_or_die(fp, count, (size_t)ncol * sizeof(*count), out);
-      /* Exactly `sample` entries -- no padding.  In v3 the replicate table
-       * carries this record's length, so shorter levels cost nothing; dense
-       * levels switch to a whole-genome bitmap, which is both smaller and O(1)
-       * to test.  Either way the membership set is identical. */
-      if (rep_bitmap) {
-        memset(bitmap, 0, (size_t)bitmap_bytes);
-        for (uint32_t k = 0; k < sample; ++k)
-          bitmap[selected[k] >> 3] |= (unsigned char)(1u << (selected[k] & 7));
-        write_or_die(fp, bitmap, (size_t)bitmap_bytes, out);
-      } else {
-        write_or_die(fp, selected, (size_t)sample * sizeof(*selected), out);
-      }
-      if (!memory_cells) free_cdata(&c);
-    }
-    if (!memory_cells) {
-      cdata_t end = read_cdata1(&cf); if (end.n) pdie("truth store changed while reading", truth); free_cdata(&end);
-      bgzf_close(cf.fh);
-    }
+  /* Replicates run level-major, so r = level*reps + rep. Each has always been
+   * seeded independently (srand(r+1)), so they can run concurrently and the
+   * file is identical at any --threads: waves of `nthreads` replicates are
+   * computed into per-worker buffers and flushed in replicate order. */
+  if (nthreads > 1 && !memory_cells)
+    pdie("--threads needs --in-memory (the streaming path is sequential)", NULL);
+  if (nthreads > total_reps) nthreads = total_reps;
+  if (!nthreads) nthreads = 1;
+
+  rep_ctx_t *wk = xmalloc((size_t)nthreads * sizeof(*wk), "replicate workers");
+  pthread_t *th = xmalloc((size_t)nthreads * sizeof(*th), "worker threads");
+  for (uint32_t t = 0; t < nthreads; ++t) {
+    memset(&wk[t], 0, sizeof(wk[t]));
+    wk[t].n_cells = n_cells; wk[t].ncol = ncol; wk[t].n_sets = n_sets;
+    wk[t].n_cpg = n_cpg; wk[t].bitmap_bytes = bitmap_bytes;
+    wk[t].group = group; wk[t].cells = memory_cells;
+    wk[t].eligible = memory_eligible; wk[t].n_eligible = memory_n_eligible;
+    wk[t].rep_sample = rep_sample; wk[t].reptab = reptab;
+    wk[t].binarize = binarize; wk[t].v3 = v3;
+    wk[t].sum = xmalloc((size_t)ncol * sizeof(double), "worker sums");
+    wk[t].count = xmalloc((size_t)ncol * sizeof(uint32_t), "worker counts");
+    wk[t].beta = xmalloc((size_t)ncol * sizeof(float), "worker beta");
+    wk[t].selected = xmalloc((size_t)max_sample * sizeof(uint32_t), "worker positions");
+    cow_init(&wk[t].cow, max_sample);
+    wk[t].bitmap = bitmap ? xmalloc((size_t)bitmap_bytes, "worker bitmap") : NULL;
   }
+  for (uint32_t base = 0; base < total_reps; base += nthreads) {
+    uint32_t m = total_reps - base < nthreads ? total_reps - base : nthreads;
+    for (uint32_t t = 0; t < m; ++t) {
+      wk[t].rep = base + t;
+      fprintf(stderr,
+              "[methscope] upscale-featurize: simulation %u/%u (sample %u%s)\n",
+              base + t + 1, total_reps, rep_sample[base + t],
+              binarize ? ", binarized" : "");
+    }
+    if (m == 1) { rep_worker(&wk[0]); }
+    else {
+      for (uint32_t t = 0; t < m; ++t)
+        if (pthread_create(&th[t], NULL, rep_worker, &wk[t]))
+          pdie("cannot create worker thread", NULL);
+      for (uint32_t t = 0; t < m; ++t) pthread_join(th[t], NULL);
+    }
+    for (uint32_t t = 0; t < m; ++t) write_or_die(fp, wk[t].buf, wk[t].len, out);
+  }
+  for (uint32_t t = 0; t < nthreads; ++t) {
+    free(wk[t].sum); free(wk[t].count); free(wk[t].beta); free(wk[t].selected);
+    cow_free(&wk[t].cow); free(wk[t].bitmap); free(wk[t].buf);
+  }
+  free(wk); free(th);
   if (fclose(fp)) pdie("error closing output", out);
 
   char auto_manifest[PATH_MAX];
