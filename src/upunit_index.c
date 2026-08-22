@@ -24,6 +24,13 @@
  * from the .mrmp artifact (or the width of a binstring line). The MSUIDX1
  * header has always carried it; only this builder assumed 35, which is what
  * the whole-genome Zhou reference happens to use. */
+/* A membership's `pattern_key` is a base-3 packing of the binstring, which fits
+ * a uint64 only up to 40 classes (3^41 > 2^64). Nothing anywhere INTERPRETS the
+ * key -- upunit_index writes it, upscale-train copies it into the .updecx, and
+ * no reader decodes it -- so above 40 the field carries a 64-bit hash of the
+ * trits instead. Same width, same layout, both formats unchanged, and an
+ * artifact at <= 40 classes is still byte-identical to what earlier builds
+ * produced. MSUI_PATTERN_LEN_MAX is now the packing limit, not a class limit. */
 #define MSUI_PATTERN_LEN_MAX 40u
 static uint32_t g_pattern_len = 35u;
 #define MSUI_UNIT_PURE 1u
@@ -133,7 +140,42 @@ static uint64_t encode_pattern(const char *s) {
   return key;
 }
 
+/* Identity for a binstring given as `len` trits (0/1/2). Base-3 packing when it
+ * fits a uint64, so artifacts at <= 40 classes keep the exact bytes earlier
+ * builds wrote; a 64-bit FNV-1a of the trits above that. Only ever compared and
+ * stored, never decoded, so the two schemes need not agree. */
+static uint64_t trits_key(const uint8_t *t, uint32_t len) {
+  if (len <= MSUI_PATTERN_LEN_MAX) {
+    uint64_t key = 0;
+    for (uint32_t i = 0; i < len; ++i) key = key * 3 + t[i];
+    return key;
+  }
+  uint64_t h = 1469598103934665603ULL;
+  for (uint32_t i = 0; i < len; ++i) h = (h ^ t[i]) * 1099511628211ULL;
+  return h;
+}
+
+/* Unpack the base-3 key words mrmp-build produces back into one trit per class.
+ * Class s lives in word s/MRMP_TRITS_PER_WORD, appended most-significant-first,
+ * so a word holding `cnt` classes is decoded from the last of them backwards. */
+static void key_words_to_trits(const uint64_t *key, uint32_t ns, uint8_t *out) {
+  const uint32_t nw = mrmp_key_words(ns);
+  for (uint32_t w = 0; w < nw; ++w) {
+    uint32_t lo = w * MRMP_TRITS_PER_WORD;
+    uint32_t hi = lo + MRMP_TRITS_PER_WORD; if (hi > ns) hi = ns;
+    uint64_t v = key[w];
+    for (uint32_t i = hi; i > lo; --i) { out[i - 1] = (uint8_t)(v % 3); v /= 3; }
+  }
+}
+
 static uint64_t pna_key(void) {
+  if (g_pattern_len > MSUI_PATTERN_LEN_MAX) {
+    uint8_t *t = xmalloc(g_pattern_len);
+    memset(t, 2, g_pattern_len);
+    uint64_t k = trits_key(t, g_pattern_len);
+    free(t);
+    return k;
+  }
   uint64_t key = 0;
   for (uint32_t i = 0; i < g_pattern_len; ++i) key = key * 3 + 2;
   return key;
@@ -346,8 +388,6 @@ int main_upscale_set_units(int argc, char **argv) {
     uint32_t ns = 0; int64_t *voff = NULL;
     char **lab = ms_read_store_index(store_path, &ns, &voff);
     if (!ns) fail_path("reference index is empty", store_path);
-    if (ns > MSUI_PATTERN_LEN_MAX)
-      fail("MRMP sample count must be 1..40 (the base-3 uint64 key limit)");
     g_pattern_len = ns;
     pk = pna_key();                       /* depends on g_pattern_len */
     ms_binstring_map(store_path, ns, lab, voff, mincov, beta_thr,
@@ -356,8 +396,11 @@ int main_upscale_set_units(int argc, char **argv) {
     free(lab); free(voff);
 
     /* group index == intern index, so bm.cpg_pat indexes groups directly. */
+    const uint32_t nw = mrmp_key_words(ns);
+    uint8_t *trits = xmalloc(ns);
     for (uint64_t r = 0; r < bm.n_pat; ++r) {
-      group_t g = {.key = bm.keys[r], .output_offset = 0,
+      key_words_to_trits(bm.keys + r * nw, ns, trits);
+      group_t g = {.key = trits_key(trits, ns), .output_offset = 0,
                    .count = (uint32_t)bm.count[r], .seen = 0,
                    .unit = UINT32_MAX, .pna = 0};
       if (!bm.count[r] || bm.count[r] > UINT32_MAX)
@@ -366,6 +409,7 @@ int main_upscale_set_units(int argc, char **argv) {
       total += bm.count[r];
       checksum = checksum_add(checksum, g.key, g.count);
     }
+    free(trits);
     group_t pg = {.key = pk, .output_offset = 0, .count = (uint32_t)bm.pna_cpg,
                   .seen = 0, .unit = UINT32_MAX, .pna = 1};
     groups_push(&groups, pg);
