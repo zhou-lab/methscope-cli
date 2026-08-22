@@ -131,6 +131,167 @@ static int cmp_u32(const void *a, const void *b) {
   return (x > y) - (x < y);
 }
 
+static void write_or_die(FILE *fp, const void *p, size_t n, const char *path) {
+  if (n && fwrite(p, 1, n, fp) != n) pdie("write failed", path);
+}
+
+/* ---------------- worker pool over samples -------------------------------- */
+
+/* Profiling the serial version put 52% of cycles in zlib's inflate_fast, inside
+ * read_cdata1 -> bgzf_read. Threading everything AROUND that returned 1.4x at
+ * best, because the inflate stayed on one handle.
+ *
+ * The store's .idx carries a BGZF virtual offset per record, so a worker can
+ * seek straight to a sample. A POOL rather than a wave: each worker opens its
+ * handle ONCE and pulls cell indices off a shared counter until they run out.
+ * That is n_threads opens instead of n_cells, and no barrier -- a worker that
+ * finishes a sparse cell early takes the next one instead of idling. */
+typedef struct {
+  const char *truth; uint64_t n_cpg;
+  const int64_t *voff; uint32_t n_cells;
+  cdata_t *cells; uint32_t **eligible; uint64_t *n_eligible;
+  /* the truth row is converted here too, from the record this worker just
+   * inflated, so the store is never inflated a second time for it */
+  int embed; uint16_t *row; FILE *fp; const char *out;
+  pthread_mutex_t *mu; pthread_cond_t *cv; uint32_t *next, *turn;
+} pool_ctx_t;
+
+static void *pool_worker(void *arg) {
+  pool_ctx_t *w = arg;
+  cfile_t cf = open_cfile((char *)w->truth);       /* once per worker */
+  for (;;) {
+    pthread_mutex_lock(w->mu);
+    uint32_t cell = (*w->next)++;
+    pthread_mutex_unlock(w->mu);
+    if (cell >= w->n_cells) break;
+
+    if (bgzf_seek(cf.fh, w->voff[cell], SEEK_SET) != 0)
+      pdie("cannot seek truth store", w->truth);
+    cdata_t c = read_cdata1(&cf);
+    if (!c.n) pdie("truth store record is empty", w->truth);
+    decompress_in_situ(&c);
+    if (c.fmt != '3' || c.n != w->n_cpg) pdie("inconsistent truth record", w->truth);
+
+    /* TWO passes, deliberately: sizing exactly costs a second walk, but growing
+     * a ~100 MB array instead measured 1.7x slower (161.6 s against 95.1 s) --
+     * a realloc that cannot extend in place copies the whole thing. */
+    uint64_t ne = 0;
+    for (uint64_t i = 0; i < w->n_cpg; ++i) ne += f3_get_mu(&c, i) != 0;
+    uint32_t *e = xmalloc((size_t)ne * sizeof(uint32_t), "eligible CpGs");
+    uint64_t q = 0;
+    for (uint64_t i = 0; i < w->n_cpg; ++i)
+      if (f3_get_mu(&c, i)) e[q++] = (uint32_t)i;
+
+    w->cells[cell] = c; w->eligible[cell] = e; w->n_eligible[cell] = ne;
+
+    if (!w->embed) continue;
+    for (uint64_t i = 0; i < w->n_cpg; ++i) {
+      uint64_t mu = f3_get_mu(&c, i);
+      /* u16 code = beta*65534; 65535 (UINT16_MAX) = missing */
+      w->row[i] = mu ? (uint16_t)llround(MU2beta(mu) * 65534.0) : UINT16_MAX;
+    }
+    /* the truth section is laid out by cell, so writes are ordered; cells are
+     * handed out in order, so a worker rarely waits long for its turn */
+    pthread_mutex_lock(w->mu);
+    while (*w->turn != cell) pthread_cond_wait(w->cv, w->mu);
+    write_or_die(w->fp, w->row, (size_t)w->n_cpg * sizeof(*w->row), w->out);
+    ++*w->turn;
+    pthread_cond_broadcast(w->cv);
+    pthread_mutex_unlock(w->mu);
+  }
+  bgzf_close(cf.fh);
+  return NULL;
+}
+
+
+/* ---------------- one replicate ------------------------------------------- */
+
+/* srand(r+1) was always per replicate, so replicates never depended on each
+ * other; with the RNG state explicit (ms_rng_t) and the eligible arrays made
+ * read-only by the copy-on-write shuffle, they simply run concurrently. Records
+ * go to a per-worker buffer and are flushed in replicate order, so the file is
+ * byte-identical at any thread count. */
+typedef struct {
+  uint32_t n_cells, ncol, n_sets;
+  uint64_t n_cpg, bitmap_bytes;
+  const uint16_t *group;
+  const cdata_t *cells;
+  uint32_t *const *eligible;
+  const uint64_t *n_eligible;
+  const uint32_t *rep_sample;
+  const msur_rep_t *reptab;
+  int binarize, v3;
+  double *sum; uint32_t *count; float *beta; uint32_t *selected;
+  cow_t cow; unsigned char *bitmap;
+  unsigned char *buf; size_t len, cap;
+  pthread_mutex_t *mu; uint32_t *next, *total_reps;
+  FILE *fp; const char *out;
+  pthread_cond_t *cv; uint32_t *turn;
+} rep_ctx_t;
+
+static void rbuf_put(rep_ctx_t *w, const void *p, size_t n) {
+  if (w->len + n > w->cap) {
+    while (w->cap < w->len + n) w->cap = w->cap ? w->cap * 2 : (1u << 20);
+    w->buf = realloc(w->buf, w->cap);
+    if (!w->buf) pdie("out of memory (replicate buffer)", NULL);
+  }
+  memcpy(w->buf + w->len, p, n); w->len += n;
+}
+
+static void *rep_worker(void *arg) {
+  rep_ctx_t *w = arg;
+  for (;;) {
+    pthread_mutex_lock(w->mu);
+    uint32_t r = (*w->next)++;
+    pthread_mutex_unlock(w->mu);
+    if (r >= *w->total_reps) break;
+
+    const uint32_t sample = w->rep_sample[r];
+    const int rep_bitmap = w->v3 && w->reptab[r].flags == MSUR_ENC_BITMAP;
+    ms_rng_t rng; ms_rng_seed(&rng, r + 1);
+    w->len = 0;
+    for (uint32_t cell = 0; cell < w->n_cells; ++cell) {
+      cdata_t c = w->cells[cell];
+      partial_fisher_yates_cow(w->eligible[cell], w->n_eligible[cell], sample,
+                               &rng, &w->cow, w->selected);
+      memset(w->sum, 0, (size_t)w->ncol * sizeof(*w->sum));
+      memset(w->count, 0, (size_t)w->ncol * sizeof(*w->count));
+      for (uint32_t k = 0; k < sample; ++k) {
+        uint64_t pos = w->selected[k];
+        /* the binarise draw is per CpG, not per set: one read, one call */
+        double b = MU2beta(f3_get_mu(&c, pos));
+        int drawn = 0;
+        for (uint32_t sx = 0; sx < w->n_sets; ++sx) {
+          uint16_t g = w->group[(uint64_t)sx * w->n_cpg + pos];
+          if (!g) continue;
+          if (w->binarize && !drawn) { b = yame_rand01(&rng) < b ? 1.0 : 0.0; drawn = 1; }
+          w->sum[g - 1] += b; ++w->count[g - 1];
+        }
+      }
+      for (uint32_t g = 0; g < w->ncol; ++g)
+        w->beta[g] = w->count[g] ? (float)(w->sum[g] / w->count[g]) : NAN;
+      qsort(w->selected, sample, sizeof(*w->selected), cmp_u32);
+      rbuf_put(w, w->beta, (size_t)w->ncol * sizeof(*w->beta));
+      rbuf_put(w, w->count, (size_t)w->ncol * sizeof(*w->count));
+      if (rep_bitmap) {
+        memset(w->bitmap, 0, (size_t)w->bitmap_bytes);
+        for (uint32_t k = 0; k < sample; ++k)
+          w->bitmap[w->selected[k] >> 3] |= (unsigned char)(1u << (w->selected[k] & 7));
+        rbuf_put(w, w->bitmap, (size_t)w->bitmap_bytes);
+      } else {
+        rbuf_put(w, w->selected, (size_t)sample * sizeof(*w->selected));
+      }
+    }
+    pthread_mutex_lock(w->mu);
+    while (*w->turn != r) pthread_cond_wait(w->cv, w->mu);
+    write_or_die(w->fp, w->buf, w->len, w->out);
+    ++*w->turn;
+    pthread_cond_broadcast(w->cv);
+    pthread_mutex_unlock(w->mu);
+  }
+  return NULL;
+}
+
 static int usage(void) {
   ms_help(stderr,
     "Usage: methscope upscale-featurize [options] TRUTH.cg IN.mrmp OUT.msur\n\n"
@@ -156,12 +317,10 @@ static int usage(void) {
     "                   Bernoulli(beta) draw, as `yame dsample -b` does\n"
     "  --patterns N     retain feature summaries P1..PN (default 1000)\n"
     "  --in-memory      inflate the truth store once and reuse it for all replicates\n"
-    "  --threads N      replicates in parallel (default 1). Needs --in-memory:\n"
-    "                   the streaming path reads records sequentially from one\n"
-    "                   handle. Output is byte-identical at any N -- each\n"
-    "                   replicate has always been seeded independently, so a\n"
-    "                   worker reproduces its own stream and buffers are written\n"
-    "                   in replicate order regardless of finishing order.\n"
+    "  --threads N      inflate and scan N samples at once (default 1). Needs\n"
+    "                   --in-memory and a <store>.idx, since each worker opens\n"
+    "                   its own handle and seeks to its sample. Output is\n"
+    "                   byte-identical at any N.\n"
     "  --manifest PATH  write provenance TSV (default OUT.msur.tsv)\n"
     "  -h, --help       show this help\n"
     "\n"
@@ -178,141 +337,6 @@ static int usage(void) {
   return 1;
 }
 
-static void write_or_die(FILE *fp, const void *p, size_t n, const char *path) {
-  if (n && fwrite(p, 1, n, fp) != n) pdie("write failed", path);
-}
-
-/* One cell's inflate-and-scan, the prologue's real cost: decompress_in_situ
- * plus two passes over all n_cpg rows to size and fill its eligible list. Both
- * are per-cell and independent, so they thread; only read_cdata1() cannot, as
- * the records come sequentially off one handle. Hence the wave: read `nthreads`
- * records serially, inflate and scan them together, repeat. Compressed data in
- * flight stays bounded to one wave. */
-typedef struct {
-  cdata_t *c; uint32_t **eligible; uint64_t *n_eligible;
-  uint64_t n_cpg; const char *truth;
-} cell_ctx_t;
-
-static void *cell_worker(void *arg) {
-  cell_ctx_t *w = arg;
-  decompress_in_situ(w->c);
-  if (w->c->fmt != '3' || w->c->n != w->n_cpg)
-    pdie("inconsistent truth record", w->truth);
-  /* TWO passes, deliberately. Counting first to size the array exactly looks
-   * wasteful -- it walks all n_cpg rows twice -- and replacing it with a single
-   * growing pass measured 1.7x SLOWER (161.6 s against 95.1 s at one thread,
-   * 103.7 against 64.3 at sixteen). The count pass reads memory already
-   * resident with a predictable branch; growing instead means repeated realloc
-   * of a ~100 MB array, and a realloc that cannot extend in place copies the
-   * whole thing. Operation counts said one pass should win; memory traffic
-   * decided otherwise. */
-  uint64_t ne = 0;
-  for (uint64_t i = 0; i < w->n_cpg; ++i) ne += f3_get_mu(w->c, i) != 0;
-  uint32_t *e = xmalloc((size_t)ne * sizeof(uint32_t), "eligible CpGs");
-  uint64_t q = 0;
-  for (uint64_t i = 0; i < w->n_cpg; ++i)
-    if (f3_get_mu(w->c, i)) e[q++] = (uint32_t)i;
-  *w->eligible = e; *w->n_eligible = ne;
-  return NULL;
-}
-
-/* One cell's truth row: every CpG converted from packed M/U to a uint16 beta
- * code. This is n_cpg divides and llrounds per cell -- ~970 million for a
- * 33-cell store -- and it runs whatever --reps asks for, which is why featurize
- * costs the same at 1 replicate as at 48. It is neither disk- nor
- * replicate-bound: reading the store takes 2.4 s, converting it takes most of a
- * minute.
- *
- * Rows are independent, so they convert in parallel; only the write must stay
- * in cell order, so a wave converts `nthreads` rows and then writes them. */
-typedef struct { cdata_t *c; uint16_t *row; uint64_t n_cpg; } truth_ctx_t;
-
-static void *truth_worker(void *arg) {
-  truth_ctx_t *w = arg;
-  for (uint64_t i = 0; i < w->n_cpg; ++i) {
-    uint64_t mu = f3_get_mu(w->c, i);
-    /* u16 code = beta*65534; 65535 (UINT16_MAX) = missing */
-    w->row[i] = mu ? (uint16_t)llround(MU2beta(mu) * 65534.0) : UINT16_MAX;
-  }
-  return NULL;
-}
-
-/* ---------------- one replicate, in isolation ---------------------------- */
-
-/* What a replicate needs, split into shared read-only and per-worker. Nothing
- * here is written by more than one thread: the eligible arrays became
- * read-only when the shuffle moved to an overlay, and the truth store is
- * inflated once up front -- hence --in-memory being required for --threads > 1,
- * since the streaming path reads records sequentially from one handle.
- *
- * Records go into a per-worker buffer rather than straight to the file, so the
- * output keeps replicate-major order whichever worker finishes first. The seed
- * was always srand(r+1), per replicate, so a worker reproduces its own stream
- * exactly and --threads changes nothing but wall clock. */
-typedef struct {
-  uint32_t n_cells, ncol, n_sets;
-  uint64_t n_cpg, bitmap_bytes;
-  const uint16_t *group;
-  const cdata_t *cells;
-  uint32_t *const *eligible;
-  const uint64_t *n_eligible;
-  const uint32_t *rep_sample;
-  const msur_rep_t *reptab;
-  int binarize, v3;
-  double *sum; uint32_t *count; float *beta; uint32_t *selected;
-  cow_t cow; unsigned char *bitmap;
-  unsigned char *buf; size_t len, cap;
-  uint32_t rep;
-} rep_ctx_t;
-
-static void buf_put(rep_ctx_t *w, const void *p, size_t n) {
-  if (w->len + n > w->cap) {
-    while (w->cap < w->len + n) w->cap = w->cap ? w->cap * 2 : (1u << 20);
-    w->buf = realloc(w->buf, w->cap);
-    if (!w->buf) pdie("out of memory (replicate buffer)", NULL);
-  }
-  memcpy(w->buf + w->len, p, n); w->len += n;
-}
-
-static void *rep_worker(void *arg) {
-  rep_ctx_t *w = arg;
-  const uint32_t r = w->rep, sample = w->rep_sample[r];
-  const int rep_bitmap = w->v3 && w->reptab[r].flags == MSUR_ENC_BITMAP;
-  ms_rng_t rng; ms_rng_seed(&rng, r + 1);
-  w->len = 0;
-  for (uint32_t cell = 0; cell < w->n_cells; ++cell) {
-    cdata_t c = w->cells[cell];   /* by value; f3_get_mu takes non-const */
-    partial_fisher_yates_cow(w->eligible[cell], w->n_eligible[cell], sample,
-                             &rng, &w->cow, w->selected);
-    memset(w->sum, 0, (size_t)w->ncol * sizeof(*w->sum));
-    memset(w->count, 0, (size_t)w->ncol * sizeof(*w->count));
-    for (uint32_t k = 0; k < sample; ++k) {
-      uint64_t pos = w->selected[k];
-      double b = MU2beta(f3_get_mu(&c, pos));
-      int drawn = 0;
-      for (uint32_t sx = 0; sx < w->n_sets; ++sx) {
-        uint16_t g = w->group[(uint64_t)sx * w->n_cpg + pos];
-        if (!g) continue;
-        if (w->binarize && !drawn) { b = yame_rand01(&rng) < b ? 1.0 : 0.0; drawn = 1; }
-        w->sum[g - 1] += b; ++w->count[g - 1];
-      }
-    }
-    for (uint32_t g = 0; g < w->ncol; ++g)
-      w->beta[g] = w->count[g] ? (float)(w->sum[g] / w->count[g]) : NAN;
-    qsort(w->selected, sample, sizeof(*w->selected), cmp_u32);
-    buf_put(w, w->beta, (size_t)w->ncol * sizeof(*w->beta));
-    buf_put(w, w->count, (size_t)w->ncol * sizeof(*w->count));
-    if (rep_bitmap) {
-      memset(w->bitmap, 0, (size_t)w->bitmap_bytes);
-      for (uint32_t k = 0; k < sample; ++k)
-        w->bitmap[w->selected[k] >> 3] |= (unsigned char)(1u << (w->selected[k] & 7));
-      buf_put(w, w->bitmap, (size_t)w->bitmap_bytes);
-    } else {
-      buf_put(w, w->selected, (size_t)sample * sizeof(*w->selected));
-    }
-  }
-  return NULL;
-}
 
 int main_upscale_prepare(int argc, char *argv[]) {
   const char *out = NULL, *truth = NULL, *mrmp = NULL, *manifest = NULL;
@@ -379,6 +403,12 @@ int main_upscale_prepare(int argc, char *argv[]) {
     pdie("need TRUTH.cg, IN.mrmp, and OUT.msur", NULL);
   }
   if (!reps || (!log_min && !n_levels) || !patterns) return usage();
+  /* Both pools read the inflated records, so without --in-memory memory_cells
+   * is NULL and the replicate pool dereferences it. Refuse up front: this used
+   * to SEGFAULT, because the guard lived in the replicate loop and was lost
+   * when the pool moved inside the in_memory block. */
+  if (nthreads > 1 && !in_memory)
+    pdie("--threads needs --in-memory (the streaming path is sequential)", NULL);
   if ((uint64_t)reps * n_levels > UINT32_MAX) pdie("too many replicates", NULL);
 
   /* Per-replicate sample sizes.  Either the small fixed ladder (--sample, reps
@@ -411,17 +441,23 @@ int main_upscale_prepare(int argc, char *argv[]) {
       sizeof(msur_rep_t) != 24) pdie("unexpected msur header layout", NULL);
   if (patterns > UINT16_MAX - 1) pdie("--patterns exceeds uint16 group format", NULL);
 
-  /* Size the truth store first; the MRMP is then read against its CpG count. */
+  /* n_cells comes from the .idx, NOT from walking the store. The old loop read
+   * and BGZF-inflated every record just to count them -- a second full inflate
+   * of the store, ~20 s of a 40 s run, to produce one integer. The index has a
+   * line per record and the pool needs it anyway for its seek offsets. Only the
+   * FIRST record is still inflated, for n_cpg and the format check. */
+  uint32_t n_cells = 0;
+  { int64_t *vo = NULL; char **nm = ms_read_store_index(truth, &n_cells, &vo);
+    for (uint32_t k = 0; k < n_cells; ++k) free(nm[k]);
+    free(nm); free(vo); }
+  if (!n_cells) pdie("truth store index is empty", truth);
   cfile_t check = open_cfile((char *)truth);
   cdata_t first = read_cdata1(&check);
   if (!first.n) pdie("truth store is empty", truth);
   decompress_in_situ(&first);
   if (first.fmt != '3') pdie("truth store must be continuous format 3", truth);
   uint64_t n_cpg = first.n;
-  uint32_t n_cells = 0;
   free_cdata(&first);
-  for (;;) { cdata_t c = read_cdata1(&check); if (!c.n) { free_cdata(&c); break; } ++n_cells; free_cdata(&c); }
-  ++n_cells; /* account for first record */
   bgzf_close(check.fh);
   if (n_cpg > UINT32_MAX) pdie("msur supports at most 2^32-1 CpGs", truth);
 
@@ -474,39 +510,6 @@ int main_upscale_prepare(int argc, char *argv[]) {
   cdata_t *memory_cells = NULL;
   uint32_t **memory_eligible = NULL;
   uint64_t *memory_n_eligible = NULL;
-  if (in_memory) {
-    fprintf(stderr, "[methscope] upscale-featurize: inflating %u truth cells in memory\n", n_cells);
-    memory_cells = calloc(n_cells, sizeof(*memory_cells));
-    memory_eligible = calloc(n_cells, sizeof(*memory_eligible));
-    memory_n_eligible = calloc(n_cells, sizeof(*memory_n_eligible));
-    if (!memory_cells || !memory_eligible || !memory_n_eligible)
-      pdie("out of memory allocating truth-cell table", truth);
-    cfile_t cf = open_cfile((char *)truth);
-    uint32_t pw = nthreads ? nthreads : 1;
-    cell_ctx_t *cw = xmalloc((size_t)pw * sizeof(*cw), "cell workers");
-    pthread_t *cth = xmalloc((size_t)pw * sizeof(*cth), "cell threads");
-    for (uint32_t base = 0; base < n_cells; base += pw) {
-      uint32_t m = n_cells - base < pw ? n_cells - base : pw;
-      for (uint32_t t = 0; t < m; ++t) {       /* serial: one handle, in order */
-        memory_cells[base + t] = read_cdata1(&cf);
-        if (!memory_cells[base + t].n) pdie("truth store changed while reading", truth);
-        cw[t].c = &memory_cells[base + t];
-        cw[t].eligible = &memory_eligible[base + t];
-        cw[t].n_eligible = &memory_n_eligible[base + t];
-        cw[t].n_cpg = n_cpg; cw[t].truth = truth;
-      }
-      if (m == 1) cell_worker(&cw[0]);
-      else {
-        for (uint32_t t = 0; t < m; ++t)
-          if (pthread_create(&cth[t], NULL, cell_worker, &cw[t]))
-            pdie("cannot create cell worker", NULL);
-        for (uint32_t t = 0; t < m; ++t) pthread_join(cth[t], NULL);
-      }
-    }
-    free(cw); free(cth);
-    cdata_t end = read_cdata1(&cf); if (end.n) pdie("truth store changed while reading", truth); free_cdata(&end);
-    bgzf_close(cf.fh);
-  }
 
   /* One level keeps the v2 fixed-width layout, so a single-level msur stays
    * byte-identical to one built before --sample took a list.  Mixed levels get
@@ -582,43 +585,51 @@ int main_upscale_prepare(int argc, char *argv[]) {
   write_or_die(fp, &h3, (size_t)head_bytes, out);
   write_or_die(fp, group, (size_t)n_cpg * sizeof(*group), out);
 
-  if (embed_truth) {
-    fprintf(stderr, "[methscope] upscale-featurize: writing quantized truth matrix\n");
-    /* Capped: each worker holds its own n_cpg-wide u16 row, so 16 workers over
-     * hg38 is ~940 MB of row buffers alone. 64 also bounds the hold[] below. */
-    uint32_t tw = (memory_cells && nthreads > 1) ? nthreads : 1;
-    if (tw > 64) tw = 64;
-    uint16_t **rows = xmalloc((size_t)tw * sizeof(*rows), "truth rows");
-    truth_ctx_t *tc = xmalloc((size_t)tw * sizeof(*tc), "truth workers");
-    pthread_t *tth = xmalloc((size_t)tw * sizeof(*tth), "truth threads");
-    for (uint32_t t = 0; t < tw; ++t)
-      rows[t] = xmalloc((size_t)n_cpg * sizeof(**rows), "truth u16 row");
-    cfile_t tcf = {0}; if (!memory_cells) tcf = open_cfile((char *)truth);
-    for (uint32_t base = 0; base < n_cells; base += tw) {
-      uint32_t m = n_cells - base < tw ? n_cells - base : tw;
-      cdata_t hold[64];
-      for (uint32_t t = 0; t < m; ++t) {
-        cdata_t c = memory_cells ? memory_cells[base + t] : read_cdata1(&tcf);
-        if (!memory_cells) { decompress_in_situ(&c); if (c.fmt != '3' || c.n != n_cpg) pdie("inconsistent truth record", truth); }
-        hold[t] = c;
-        tc[t].c = memory_cells ? &memory_cells[base + t] : &hold[t];
-        tc[t].row = rows[t]; tc[t].n_cpg = n_cpg;
-      }
-      if (m == 1) truth_worker(&tc[0]);
-      else {
-        for (uint32_t t = 0; t < m; ++t)
-          if (pthread_create(&tth[t], NULL, truth_worker, &tc[t]))
-            pdie("cannot create truth worker", NULL);
-        for (uint32_t t = 0; t < m; ++t) pthread_join(tth[t], NULL);
-      }
-      for (uint32_t t = 0; t < m; ++t) {          /* ordered write */
-        write_or_die(fp, rows[t], (size_t)n_cpg * sizeof(**rows), out);
-        if (!memory_cells) free_cdata(&hold[t]);
-      }
+  /* ONE pooled pass over the samples: read, inflate, scan for eligible CpGs,
+   * and convert the truth row -- all on the record the worker just inflated, so
+   * the store is inflated exactly once. Placed here, after the header, because
+   * the truth section is written from inside the workers in cell order.
+   *
+   * Pool, not waves: each worker opens its handle once and pulls the next cell
+   * off a shared counter, so a worker finishing a sparse cell takes another
+   * instead of idling at a barrier. */
+  if (in_memory) {
+    memory_cells = calloc(n_cells, sizeof(*memory_cells));
+    memory_eligible = calloc(n_cells, sizeof(*memory_eligible));
+    memory_n_eligible = calloc(n_cells, sizeof(*memory_n_eligible));
+    if (!memory_cells || !memory_eligible || !memory_n_eligible)
+      pdie("out of memory allocating truth-cell table", truth);
+    uint32_t nidx = 0; int64_t *voff = NULL;
+    char **snames = ms_read_store_index(truth, &nidx, &voff);
+    if (nidx != n_cells) pdie("store index disagrees with the record count", truth);
+    uint32_t nw = nthreads ? nthreads : 1; if (nw > 64) nw = 64;
+    if (nw > n_cells) nw = n_cells;
+    fprintf(stderr, "[methscope] upscale-featurize: inflating %u truth cells "
+            "(%u worker%s)\n", n_cells, nw, nw == 1 ? "" : "s");
+    pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t  cv = PTHREAD_COND_INITIALIZER;
+    uint32_t next = 0, turn = 0;
+    pool_ctx_t *pc = xmalloc((size_t)nw * sizeof(*pc), "pool workers");
+    pthread_t *pth = xmalloc((size_t)nw * sizeof(*pth), "pool threads");
+    for (uint32_t t = 0; t < nw; ++t) {
+      pc[t] = (pool_ctx_t){ .truth = truth, .n_cpg = n_cpg, .voff = voff,
+        .n_cells = n_cells, .cells = memory_cells, .eligible = memory_eligible,
+        .n_eligible = memory_n_eligible, .mu = &mu, .cv = &cv,
+        .next = &next, .turn = &turn, .fp = fp, .out = out,
+        .embed = embed_truth,
+        .row = embed_truth ? xmalloc((size_t)n_cpg * sizeof(uint16_t),
+                                     "truth u16 row") : NULL };
     }
-    if (!memory_cells) bgzf_close(tcf.fh);
-    for (uint32_t t = 0; t < tw; ++t) free(rows[t]);
-    free(rows); free(tc); free(tth);
+    if (nw == 1) pool_worker(&pc[0]);
+    else {
+      for (uint32_t t = 0; t < nw; ++t)
+        if (pthread_create(&pth[t], NULL, pool_worker, &pc[t]))
+          pdie("cannot create pool worker", NULL);
+      for (uint32_t t = 0; t < nw; ++t) pthread_join(pth[t], NULL);
+    }
+    for (uint32_t t = 0; t < nw; ++t) free(pc[t].row);
+    for (uint32_t k = 0; k < nidx; ++k) free(snames[k]);
+    free(snames); free(voff); free(pc); free(pth);
   }
 
   uint32_t *eligible = memory_cells ? NULL : xmalloc((size_t)n_cpg * sizeof(*eligible), "sampling workspace");
@@ -636,55 +647,48 @@ int main_upscale_prepare(int argc, char *argv[]) {
 
   if (v3) write_or_die(fp, reptab, (size_t)total_reps * sizeof(*reptab), out);
 
-  /* Replicates run level-major, so r = level*reps + rep. Each has always been
-   * seeded independently (srand(r+1)), so they can run concurrently and the
-   * file is identical at any --threads: waves of `nthreads` replicates are
-   * computed into per-worker buffers and flushed in replicate order. */
-  if (nthreads > 1 && !memory_cells)
-    pdie("--threads needs --in-memory (the streaming path is sequential)", NULL);
-  if (nthreads > total_reps) nthreads = total_reps;
-  if (!nthreads) nthreads = 1;
-
-  rep_ctx_t *wk = xmalloc((size_t)nthreads * sizeof(*wk), "replicate workers");
-  pthread_t *th = xmalloc((size_t)nthreads * sizeof(*th), "worker threads");
-  for (uint32_t t = 0; t < nthreads; ++t) {
-    memset(&wk[t], 0, sizeof(wk[t]));
-    wk[t].n_cells = n_cells; wk[t].ncol = ncol; wk[t].n_sets = n_sets;
-    wk[t].n_cpg = n_cpg; wk[t].bitmap_bytes = bitmap_bytes;
-    wk[t].group = group; wk[t].cells = memory_cells;
-    wk[t].eligible = memory_eligible; wk[t].n_eligible = memory_n_eligible;
-    wk[t].rep_sample = rep_sample; wk[t].reptab = reptab;
-    wk[t].binarize = binarize; wk[t].v3 = v3;
-    wk[t].sum = xmalloc((size_t)ncol * sizeof(double), "worker sums");
-    wk[t].count = xmalloc((size_t)ncol * sizeof(uint32_t), "worker counts");
-    wk[t].beta = xmalloc((size_t)ncol * sizeof(float), "worker beta");
-    wk[t].selected = xmalloc((size_t)max_sample * sizeof(uint32_t), "worker positions");
-    cow_init(&wk[t].cow, max_sample);
-    wk[t].bitmap = bitmap ? xmalloc((size_t)bitmap_bytes, "worker bitmap") : NULL;
-  }
-  for (uint32_t base = 0; base < total_reps; base += nthreads) {
-    uint32_t m = total_reps - base < nthreads ? total_reps - base : nthreads;
-    for (uint32_t t = 0; t < m; ++t) {
-      wk[t].rep = base + t;
-      fprintf(stderr,
-              "[methscope] upscale-featurize: simulation %u/%u (sample %u%s)\n",
-              base + t + 1, total_reps, rep_sample[base + t],
-              binarize ? ", binarized" : "");
+  /* Pooled over replicates, same shape as the sample pool: a worker takes the
+   * next replicate off a shared counter, builds every cell's record into its own
+   * buffer, then waits its turn to flush so the file stays replicate-major. */
+  {
+    uint32_t rw = nthreads ? nthreads : 1;
+    if (rw > total_reps) rw = total_reps;
+    if (rw > 64) rw = 64;
+    pthread_mutex_t rmu = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t  rcv = PTHREAD_COND_INITIALIZER;
+    uint32_t rnext = 0, rturn = 0, treps = total_reps;
+    rep_ctx_t *rc = xmalloc((size_t)rw * sizeof(*rc), "replicate workers");
+    pthread_t *rth = xmalloc((size_t)rw * sizeof(*rth), "replicate threads");
+    for (uint32_t t = 0; t < rw; ++t) {
+      memset(&rc[t], 0, sizeof(rc[t]));
+      rc[t].n_cells = n_cells; rc[t].ncol = ncol; rc[t].n_sets = n_sets;
+      rc[t].n_cpg = n_cpg; rc[t].bitmap_bytes = bitmap_bytes;
+      rc[t].group = group; rc[t].cells = memory_cells;
+      rc[t].eligible = memory_eligible; rc[t].n_eligible = memory_n_eligible;
+      rc[t].rep_sample = rep_sample; rc[t].reptab = reptab;
+      rc[t].binarize = binarize; rc[t].v3 = v3;
+      rc[t].sum = xmalloc((size_t)ncol * sizeof(double), "worker sums");
+      rc[t].count = xmalloc((size_t)ncol * sizeof(uint32_t), "worker counts");
+      rc[t].beta = xmalloc((size_t)ncol * sizeof(float), "worker beta");
+      rc[t].selected = xmalloc((size_t)max_sample * sizeof(uint32_t), "worker positions");
+      cow_init(&rc[t].cow, max_sample);
+      rc[t].bitmap = bitmap ? xmalloc((size_t)bitmap_bytes, "worker bitmap") : NULL;
+      rc[t].mu = &rmu; rc[t].cv = &rcv; rc[t].next = &rnext; rc[t].turn = &rturn;
+      rc[t].total_reps = &treps; rc[t].fp = fp; rc[t].out = out;
     }
-    if (m == 1) { rep_worker(&wk[0]); }
+    if (rw == 1) rep_worker(&rc[0]);
     else {
-      for (uint32_t t = 0; t < m; ++t)
-        if (pthread_create(&th[t], NULL, rep_worker, &wk[t]))
-          pdie("cannot create worker thread", NULL);
-      for (uint32_t t = 0; t < m; ++t) pthread_join(th[t], NULL);
+      for (uint32_t t = 0; t < rw; ++t)
+        if (pthread_create(&rth[t], NULL, rep_worker, &rc[t]))
+          pdie("cannot create replicate worker", NULL);
+      for (uint32_t t = 0; t < rw; ++t) pthread_join(rth[t], NULL);
     }
-    for (uint32_t t = 0; t < m; ++t) write_or_die(fp, wk[t].buf, wk[t].len, out);
+    for (uint32_t t = 0; t < rw; ++t) {
+      free(rc[t].sum); free(rc[t].count); free(rc[t].beta); free(rc[t].selected);
+      cow_free(&rc[t].cow); free(rc[t].bitmap); free(rc[t].buf);
+    }
+    free(rc); free(rth);
   }
-  for (uint32_t t = 0; t < nthreads; ++t) {
-    free(wk[t].sum); free(wk[t].count); free(wk[t].beta); free(wk[t].selected);
-    cow_free(&wk[t].cow); free(wk[t].bitmap); free(wk[t].buf);
-  }
-  free(wk); free(th);
   if (fclose(fp)) pdie("error closing output", out);
 
   char auto_manifest[PATH_MAX];
