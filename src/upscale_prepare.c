@@ -315,7 +315,6 @@ static int usage(void) {
     "                   A=1 is plain log-uniform\n"
     "  --binarize       one read per observed CpG: replace each sampled beta with a\n"
     "                   Bernoulli(beta) draw, as `yame dsample -b` does\n"
-    "  --patterns N     retain feature summaries P1..PN (default 1000)\n"
     "  --in-memory      inflate the truth store once and reuse it for all replicates\n"
     "  --threads N      inflate and scan N samples at once (default 1). Needs\n"
     "                   --in-memory and a <store>.idx, since each worker opens\n"
@@ -324,16 +323,19 @@ static int usage(void) {
     "  --manifest PATH  write provenance TSV (default OUT.msur.tsv)\n"
     "  -h, --help       show this help\n"
     "\n"
+    "EVERY pattern in IN.mrmp becomes a column -- there is no width knob here.\n"
+    "Pattern SELECTION belongs to `mrmp-pool --pooled-top N`, which ranks every\n"
+    "pattern of every set on CpG count and prunes to a shared budget. A width\n"
+    "flag here was worse than redundant: it RESERVED slots per set, so a chain\n"
+    "handed its root the first N columns whether or not the root's Nth pattern\n"
+    "outweighed a child's 1st. Pool first, then featurize what survives.\n"
+    "\n"
     "One msur serves many models. What is stored per (cell, replicate) is the raw\n"
-    "summary -- beta and covered-CpG count for every pattern, plus the observed set\n"
-    "-- NOT the encoder input. Which projection of that the encoder sees is chosen\n"
-    "at TRAINING time, so a single msur covers every `upscale-train --features`\n"
-    "mode (missing / count / beta / scalar) and any `--patterns P` up to the N used\n"
-    "here. Only the *simulation* is fixed at this step: the cells, the replicate\n"
-    "count, the coverage ladder and --binarize. So featurize at the widest pattern\n"
-    "vocabulary you might ever want -- P can be narrowed later, never widened --\n"
-    "and vary features and width by retraining, which costs minutes against the\n"
-    "hours and tens of GB a rebuild here costs.\n");
+    "summary -- beta and covered-CpG count for every pattern, plus the observed\n"
+    "set -- NOT the encoder input. Which projection the encoder sees is chosen at\n"
+    "TRAINING time, so one msur covers every `upscale-train --features` mode\n"
+    "(missing / count / beta / scalar). Only the *simulation* is fixed here: the\n"
+    "cells, the replicate count, the coverage ladder and --binarize.\n");
   return 1;
 }
 
@@ -342,7 +344,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
   const char *out = NULL, *truth = NULL, *mrmp = NULL, *manifest = NULL;
   const char *pos[3] = {NULL, NULL, NULL};
   int npos = 0;
-  uint32_t reps = 100, patterns = 1000;
+  uint32_t reps = 100;
   uint32_t nthreads = 1;
   uint32_t levels[MSUR_MAX_LEVELS] = {29000}, n_levels = 1, max_sample = 29000;
   uint32_t log_min = 0, log_max = 0;   /* --sample-logrange */
@@ -392,7 +394,6 @@ int main_upscale_prepare(int argc, char *argv[]) {
     else if (!strcmp(argv[i], "--binarize")) binarize = 1;
     else if (!strcmp(argv[i], "--threads") && i + 1 < argc)
       nthreads = (uint32_t)parse_u64(argv[++i], "--threads");
-    else if (!strcmp(argv[i], "--patterns") && i + 1 < argc) patterns = (uint32_t)parse_u64(argv[++i], "--patterns");
     else if (!strcmp(argv[i], "--in-memory")) in_memory = 1;
     else if (argv[i][0] == '-') { usage(); pdie("unrecognized or incomplete option", argv[i]); }
     else if (npos < 3) pos[npos++] = argv[i];
@@ -402,7 +403,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
     usage();
     pdie("need TRUTH.cg, IN.mrmp, and OUT.msur", NULL);
   }
-  if (!reps || (!log_min && !n_levels) || !patterns) return usage();
+  if (!reps || (!log_min && !n_levels)) return usage();
   /* Both pools read the inflated records, so without --in-memory memory_cells
    * is NULL and the replicate pool dereferences it. Refuse up front: this used
    * to SEGFAULT, because the guard lived in the replicate loop and was lost
@@ -439,7 +440,6 @@ int main_upscale_prepare(int argc, char *argv[]) {
   truth = pos[0]; mrmp = pos[1]; out = pos[2];
   if (sizeof(msur_header_t) != 72 || sizeof(msur_header3_t) != 80 ||
       sizeof(msur_rep_t) != 24) pdie("unexpected msur header layout", NULL);
-  if (patterns > UINT16_MAX - 1) pdie("--patterns exceeds uint16 group format", NULL);
 
   /* n_cells comes from the .idx, NOT from walking the store. The old loop read
    * and BGZF-inflated every record just to count them -- a second full inflate
@@ -471,7 +471,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
    * paid once, then reused for every replicate. Constant binstrings never
    * appear: mrmp-build routes all-0 and all-1 to PNA unless asked otherwise,
    * so a node contributes only what separates something in its own subset. */
-  uint32_t n_sets = 1, *col0 = NULL, ncol = patterns;
+  uint32_t n_sets = 1, *col0 = NULL, ncol = 0;
   if (ms_mrmp_is_artifact(mrmp)) {
     ms_mrmpset_t *probe = ms_mrmpset_open(mrmp);
     n_sets = probe->n_sets;
@@ -481,11 +481,12 @@ int main_upscale_prepare(int argc, char *argv[]) {
                             "MRMP group map");
   if (n_sets > 1) {
     col0 = xmalloc((size_t)(n_sets + 1) * sizeof(*col0), "chain column offsets");
-    ncol = ms_mrmp_group_map_chain(mrmp, group, n_cpg, patterns, col0, &n_sets);
+    ncol = ms_mrmp_group_map_chain(mrmp, group, n_cpg, UINT32_MAX, col0, &n_sets);
     fprintf(stderr, "[methscope] upscale-featurize: chain of %u sets -> %u columns\n",
             n_sets, ncol);
   } else if (ms_mrmp_is_artifact(mrmp)) {
-    ms_mrmp_group_map(mrmp, group, n_cpg, patterns);
+    ms_mrmp_group_map(mrmp, group, n_cpg, UINT32_MAX);
+    for (uint64_t i = 0; i < n_cpg; ++i) if (group[i] > ncol) ncol = group[i];
   } else {
     cfile_t cmf = open_cfile((char *)mrmp);
     cdata_t cm = read_cdata1(&cmf);
@@ -499,7 +500,9 @@ int main_upscale_prepare(int argc, char *argv[]) {
     if (cm.n != n_cpg) pdie("MRMP and truth CpG counts differ", mrmp);
     for (uint64_t i = 0; i < n_cpg; ++i) {
       int p = pnum(f2_get_string(&cm, i));
-      group[i] = (p > 0 && p <= (int)patterns) ? (uint16_t)p : 0;
+      if (p > UINT16_MAX - 1) pdie("MRMP pattern number exceeds uint16 group format", mrmp);
+      group[i] = p > 0 ? (uint16_t)p : 0;
+      if (group[i] > ncol) ncol = group[i];
     }
     free_cdata(&cm);
   }
@@ -515,8 +518,12 @@ int main_upscale_prepare(int argc, char *argv[]) {
    * byte-identical to one built before --sample took a list.  Mixed levels get
    * v3: per-replicate tables instead of padding every short record out to the
    * widest level (a 143-CpG replicate padded to 147,009 is 99.9% filler). */
+  /* ncol, NEVER a separate width. These two disagreed while --patterns existed:
+   * a chain's ncol is the concatenation width but feat_bytes was sized from
+   * --patterns, so the replicate table understated every record by
+   * (ncol - patterns) * 8 bytes and a reader landed mid-record. */
   const uint64_t feat_bytes =
-    (uint64_t)patterns * (sizeof(float) + sizeof(uint32_t));
+    (uint64_t)ncol * (sizeof(float) + sizeof(uint32_t));
   int v3 = 0;
   for (uint32_t r = 1; r < total_reps && !v3; ++r) v3 = rep_sample[r] != rep_sample[0];
 

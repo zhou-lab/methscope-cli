@@ -21,6 +21,20 @@ static void terr(const char *msg, const char *arg) {
   exit(1);
 }
 
+/* n_patterns sits at offset 20 of the 72-byte MSURAW header. Reading four
+ * bytes beats mapping tens of GB just to learn the width. */
+static uint32_t msur_n_patterns(const char *path) {
+  FILE *f = fopen(path, "rb");
+  if (!f) terr("cannot open msur", path);
+  char h[72];
+  if (fread(h, 1, sizeof(h), f) != sizeof(h)) terr("msur is truncated", path);
+  fclose(f);
+  if (memcmp(h, "MSURAW", 6)) terr("not an MSURAW msur", path);
+  uint32_t p; memcpy(&p, h + 20, sizeof(p));
+  if (!p) terr("msur declares zero patterns", path);
+  return p;
+}
+
 static uint64_t u64(const char *s, const char *name) {
   errno = 0; char *e = NULL;
   unsigned long long x = strtoull(s, &e, 10);
@@ -56,8 +70,6 @@ static int usage(void) {
     "  -o PATH                  self-contained output .updecx\n"
     "  --work-dir DIR           resumable unit checkpoints and bare UPDEC2\n\n"
     "Architecture:\n"
-    "  --patterns N             MRMP inputs (default 1000). May be narrowed below\n"
-    "                           the msur's pattern count, never widened past it\n"
     "  --features MODE          beta, count, missing, or scalar (default count).\n"
     "                           scalar = beta + ONE log1p(total covered CpGs), so\n"
     "                           input is P+1 wide instead of 2P.\n"
@@ -106,7 +118,7 @@ int main_upscale_train(int argc, char **argv) {
   int force = 0, dry = 0, force_cpu = 0;
   ms_upunit_config_t c;
   memset(&c, 0, sizeof(c));
-  c.patterns = 1000; c.pure_bottleneck = 16; c.mixed_bottleneck = 32;
+  c.pure_bottleneck = 16; c.mixed_bottleneck = 32;
   c.feature_mode = MS_UPFEATURE_COUNT;
   c.activation = MS_UPDEC2_LINEAR;
   /* Stopping schedule: the shipped early defaults (500/2000/100/3) under-trained
@@ -124,7 +136,6 @@ int main_upscale_train(int argc, char **argv) {
     else if (!strcmp(a, "--mrmp") && i + 1 < argc) mrmp = argv[++i];
     else if (!strcmp(a, "-o") && i + 1 < argc) out = argv[++i];
     else if (!strcmp(a, "--work-dir") && i + 1 < argc) work = argv[++i];
-    else if (!strcmp(a, "--patterns") && i + 1 < argc) c.patterns = u32(argv[++i], a);
     else if (!strcmp(a, "--features") && i + 1 < argc) {
       const char *x = argv[++i];
       if (!strcmp(x, "count")) c.feature_mode = MS_UPFEATURE_COUNT;
@@ -168,7 +179,14 @@ int main_upscale_train(int argc, char **argv) {
     else { usage(); terr("unrecognized or incomplete option", a); }
   }
   if (!data || !index || !mrmp || !out || !work) return usage();
-  if (!c.patterns || !c.pure_bottleneck || !c.mixed_bottleneck || !c.min_steps ||
+  /* The feature width is the msur's, full stop. It was a flag until 2026-08-22,
+   * which let a run silently use a prefix of the columns -- and for a chain that
+   * prefix is the ROOT set, since the sets are concatenated in tree order. So a
+   * `--patterns 500` over a 7-set chain trained on 500 root columns and never
+   * touched a child. Selection is `mrmp-pool --pooled-top N`, which ranks every
+   * set's patterns together on CpG count; here we consume what it left. */
+  c.patterns = msur_n_patterns(data);
+  if (!c.pure_bottleneck || !c.mixed_bottleneck || !c.min_steps ||
       !c.max_steps || c.min_steps > c.max_steps || !c.eval_every ||
       !c.patience || !c.batch || !c.eval_rows ||
       !(c.learning_rate > 0) || c.weight_decay < 0)

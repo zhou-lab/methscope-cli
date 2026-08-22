@@ -1454,12 +1454,14 @@ int main_mrmp_pool(int argc, char *argv[]) {
   if (argc == 1) { char *h[2]; h[0] = argv[0]; h[1] = (char *)"-h";
                    (void)main_mrmp_pool(2, h); return 1; }
   const char *out = NULL;
-  uint32_t pooled_top = 1000;
+  uint32_t pooled_top = 1000, min_cpgs = 0;
   int i = 1;
   for (; i < argc; ++i) {
     if (!strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
     else if (!strcmp(argv[i], "--pooled-top") && i + 1 < argc)
       pooled_top = (uint32_t)parse_u64(argv[++i], "--pooled-top");
+    else if (!strcmp(argv[i], "--min-cpgs") && i + 1 < argc)
+      min_cpgs = (uint32_t)parse_u64(argv[++i], "--min-cpgs");
     else if (!strcmp(argv[i], "--include-all-0")) inc_all0 = 1;
     else if (!strcmp(argv[i], "--include-all-1")) inc_all1 = 1;
     else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
@@ -1491,6 +1493,16 @@ int main_mrmp_pool(int argc, char *argv[]) {
         "                   generator outputs -- they are untouched. 0 disables\n"
         "                   the cut, leaving a plain `cat` plus the row check.\n"
         "  -o OUT           output container\n"
+        "  --min-cpgs N     drop any pattern carrying fewer than N CpGs,\n"
+        "                   BEFORE the budget ranks what is left. A pattern is\n"
+        "                   a feature, and a feature averages the reads a cell\n"
+        "                   happens to have in it -- so a 1-CpG pattern is one\n"
+        "                   binarized read, which is noise wearing a column.\n"
+        "                   The tail is nearly free to cut: on the 7-set Zhou\n"
+        "                   tree, --min-cpgs 10 drops 82% of the patterns and\n"
+        "                   1.6% of the CpGs (4,626 of 9,965 are singletons).\n"
+        "                   Gate and budget compose: --min-cpgs alone prunes to\n"
+        "                   everything that clears the floor.\n"
         "  --include-all-0           keep patterns no class calls 1\n"
         "  --include-all-1           keep patterns no class calls 0\n"
         "                            Both are folded into PNA by default: a\n"
@@ -1578,10 +1590,10 @@ int main_mrmp_pool(int argc, char *argv[]) {
 
   uint32_t *won = xcalloc(n, sizeof(uint32_t), "per-set winners");
   uint32_t **keep_list = NULL;      /* per-set winning ranks; NULL == prefix */
-  uint64_t n_all1 = 0, n_all0 = 0;
+  uint64_t n_all1 = 0, n_all0 = 0, n_thin = 0;
   for (uint32_t k = 0; k < n; ++k) won[k] = hd[k].n_selected;
 
-  if (pooled_top) {
+  if (pooled_top || min_cpgs) {
     /* Both the within-set ranking and the pooled ranking are by CpG count
      * descending, so a set's pooled winners are a PREFIX of its own ranking.
      * That is what lets the cut be expressed by shrinking each block's
@@ -1612,14 +1624,16 @@ int main_mrmp_pool(int argc, char *argv[]) {
                                 hd[k].n_samples, scr);
           if (fl == 1 && !inc_all1) { ++n_all1; continue; }
           if (fl == 2 && !inc_all0) { ++n_all0; continue; } }
-        memcpy(&e[m].count, rec + r * st + koff, sizeof(uint64_t));
-        e[m].set = k; e[m].rank = (uint32_t)r; ++m;
+        uint64_t cnt; memcpy(&cnt, rec + r * st + koff, sizeof(cnt));
+        if (cnt < min_cpgs) { ++n_thin; continue; }
+        e[m].count = cnt; e[m].set = k; e[m].rank = (uint32_t)r; ++m;
       }
       free(scr);
       free(rec);
     }
     qsort(e, m, sizeof(ent_t), pooled_cmp);
-    uint64_t take = m < pooled_top ? m : pooled_top;
+    uint64_t take = (pooled_top && m > pooled_top) ? pooled_top : m;
+    if (!take) die("--min-cpgs left no pattern anywhere; lower it", out);
     memset(won, 0, n * sizeof(uint32_t));
     for (uint64_t j = 0; j < take; ++j) ++won[e[j].set];
     /* Which ranks won, per set, in count-descending order -- which is ascending
@@ -1635,6 +1649,9 @@ int main_mrmp_pool(int argc, char *argv[]) {
         keep_list[k][fill[k]++] = e[j].rank;
       }
       free(fill); }
+    if (n_thin)
+      fprintf(stderr, "  gated by --min-cpgs %u: %" PRIu64 " pattern(s) below "
+              "the floor, folded into PNA\n", min_cpgs, n_thin);
     if (n_all1 || n_all0)
       fprintf(stderr, "  folded into PNA: %" PRIu64 " all-1 pattern(s), %"
               PRIu64 " all-0 -- they separate no class "
@@ -1658,7 +1675,7 @@ int main_mrmp_pool(int argc, char *argv[]) {
     free(e);
   }
 
-  if (!pooled_top) {
+  if (!pooled_top && !min_cpgs) {
     /* No cut: nothing to prune, so this is a byte-for-byte concatenation --
      * exactly what `cat` of the same inputs produces. */
     chain_write_streamed(out, n, path, soff, len, won);
@@ -1689,8 +1706,12 @@ int main_mrmp_pool(int argc, char *argv[]) {
     free(img); free(ilen);
     n = m;
   }
-  fprintf(stderr, "[methscope] mrmp-pool: %u sets, budget %u -> %s\n",
-          n, pooled_top, out);
+  if (min_cpgs)
+    fprintf(stderr, "[methscope] mrmp-pool: %u sets, budget %u, floor %u CpGs "
+            "-> %s\n", n, pooled_top, min_cpgs, out);
+  else
+    fprintf(stderr, "[methscope] mrmp-pool: %u sets, budget %u -> %s\n",
+            n, pooled_top, out);
   free(name); free(len); free(soff); free(path); free(hd); free(won);
   return 0;
 }
