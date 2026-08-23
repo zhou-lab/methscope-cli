@@ -45,25 +45,19 @@ static uint64_t parse_u64(const char *s, const char *what) {
   return (uint64_t)v;
 }
 
-/* Exact arithmetic used by YAME/src/dsample.c.  Keeping it here, rather than
- * changing the random protocol, lets an msur be checked against existing
- * `yame dsample -s SEED -r 1 -N N` simulations on this platform.
- *
- * The state is EXPLICIT rather than libc's global, because rand() is not
- * thread-safe and the replicate loop is the obvious axis to parallelise. This
- * is not a protocol change: glibc's rand()/srand() are random()/srandom() over
- * a 128-byte TYPE_3 state, so initstate_r() with the same size and seed yields
- * the identical sequence -- verified value-for-value before this was written. */
-typedef struct { char st[128]; struct random_data d; } ms_rng_t;
+/* Explicit portable RNG state used by the sampling loop. A private state is
+ * required because the replicate loop may be parallelised. The generator is
+ * deliberately independent of libc, so Linux and macOS produce the same
+ * sequence for a given seed. */
+typedef struct { uint32_t state; } ms_rng_t;
 
 static void ms_rng_seed(ms_rng_t *r, unsigned seed) {
-  memset(&r->d, 0, sizeof r->d);
-  initstate_r(seed, r->st, sizeof r->st, &r->d);
+  r->state = seed ? seed : 1u;
 }
 
 static double yame_rand01(ms_rng_t *r) {
-  int32_t v; random_r(&r->d, &v);
-  return (double)v / ((double)RAND_MAX + 1.0);
+  r->state = r->state * 1664525u + 1013904223u;
+  return (double)(r->state >> 1) / 2147483648.0;
 }
 
 /* Copy-on-write view of the eligible array.
