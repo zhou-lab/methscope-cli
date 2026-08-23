@@ -167,7 +167,7 @@ static void phash_rebuild(phash_t *h) {
 
 /* Return existing pattern index for key, or append to keys[]/counts[]. */
 static uint32_t phash_intern(phash_t *h, const uint64_t *key,
-                             uint64_t *pkeys, uint64_t *pcount, uint64_t *n_pat) {
+                            uint64_t *pkeys, uint64_t *pcount, uint64_t *n_pat) {
   if ((h->used + 1) * 10 >= h->cap * 7) phash_rebuild(h); /* grow at 70% */
   uint32_t nw = h->nw;
   uint64_t i = key_hash(key, nw) & h->mask;
@@ -193,7 +193,7 @@ static uint32_t phash_intern(phash_t *h, const uint64_t *key,
  * order IS the binstring's digit order -- a permuted walk would silently
  * relabel every pattern. */
 char **ms_read_store_index(const char *ref, uint32_t *n_out,
-                           int64_t **off_out) {
+                          int64_t **off_out) {
   char idx[PATH_MAX];
   if (snprintf(idx, sizeof(idx), "%s.idx", ref) >= (int)sizeof(idx))
     die("reference path too long", ref);
@@ -302,14 +302,14 @@ static void write_or_die(FILE *fp, const void *p, size_t n, const char *path) {
  * handing the buffer to zlib as a multi-member gzip stream. */
 
 static uint8_t *bgzf_deflate_buf(const uint8_t *src, uint64_t slen,
-                                 uint64_t *out_n) {
+                                uint64_t *out_n) {
   uint64_t cap = slen + slen / 8 + 4096, n = 0;
   uint8_t *out = xcalloc(cap, 1, "bgzf buffer");
   uint8_t *tmp = xcalloc(BGZF_MAX_BLOCK_SIZE, 1, "bgzf block");
   uint64_t at = 0;
-  do {                                   /* do/while so slen == 0 still frames */
+  do {                                  /* do/while so slen == 0 still frames */
     uint32_t want = slen - at < BGZF_BLOCK_SIZE ? (uint32_t)(slen - at)
-                                                : (uint32_t)BGZF_BLOCK_SIZE;
+                                               : (uint32_t)BGZF_BLOCK_SIZE;
     z_stream zs; memset(&zs, 0, sizeof zs);
     if (deflateInit2(&zs, 6, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK)
       die("deflateInit2 failed", "membership");
@@ -321,7 +321,7 @@ static uint8_t *bgzf_deflate_buf(const uint8_t *src, uint64_t slen,
 
     uint32_t bsize = 18 + clen + 8;      /* header + payload + CRC32 + ISIZE */
     if (n + bsize > cap) { cap = (n + bsize) * 2; out = realloc(out, cap);
-                           if (!out) die("out of memory", "bgzf buffer"); }
+                          if (!out) die("out of memory", "bgzf buffer"); }
     uint8_t *b = out + n;
     static const uint8_t hdr[12] = {31,139,8,4,0,0,0,0,0,255,6,0};
     memcpy(b, hdr, 12);
@@ -343,7 +343,7 @@ static uint8_t *bgzf_deflate_buf(const uint8_t *src, uint64_t slen,
  * gzip member whose BC extra subfield carries BSIZE-1 at byte 16, so the block
  * extent is known before inflating and the payload is [18, bsize-8). */
 static void bgzf_inflate_buf(const uint8_t *src, uint64_t slen,
-                             uint8_t *dst, uint64_t dlen, const char *what) {
+                            uint8_t *dst, uint64_t dlen, const char *what) {
   uint64_t at = 0, out = 0;
   while (at < slen) {
     if (slen - at < 18) die("truncated BGZF block header", what);
@@ -367,7 +367,7 @@ static void bgzf_inflate_buf(const uint8_t *src, uint64_t slen,
 }
 
 static uint8_t *memb_compress(const uint32_t *memb, uint64_t n_cpg,
-                              uint64_t n_cand, uint64_t *out_n);
+                             uint64_t n_cand, uint64_t *out_n);
 
 
 /* ---------------- membership RLE (YAME format-2 payload) ---------------- */
@@ -389,13 +389,13 @@ static uint8_t *memb_compress(const uint32_t *memb, uint64_t n_cpg,
  * is meant to be read BY name. */
 
 static uint8_t *memb_compress(const uint32_t *memb, uint64_t n_cpg,
-                              uint64_t n_cand, uint64_t *out_n) {
+                             uint64_t n_cand, uint64_t *out_n) {
   size_t keys_bytes = 0;
   for (uint64_t r = 0; r < n_cand; ++r) {
     char lbl[32];
     keys_bytes += (size_t)snprintf(lbl, sizeof lbl, "P%" PRIu64, r + 1) + 1;
   }
-  keys_bytes += 4;                                   /* "Pna\0" */
+  keys_bytes += 4;                                  /* "Pna\0" */
 
   cdata_t c; memset(&c, 0, sizeof c);
   c.fmt = '2'; c.compressed = 0; c.unit = 8; c.n = n_cpg;
@@ -403,15 +403,15 @@ static uint8_t *memb_compress(const uint32_t *memb, uint64_t n_cpg,
   size_t pos = 0;
   for (uint64_t r = 0; r < n_cand; ++r)
     pos += (size_t)snprintf((char *)c.s + pos, keys_bytes + 1 - pos,
-                            "P%" PRIu64, r + 1) + 1;
+                           "P%" PRIu64, r + 1) + 1;
   memcpy(c.s + pos, "Pna", 4); pos += 4;
-  c.s[pos++] = '\0';                                 /* key/data double NUL */
+  c.s[pos++] = '\0';                                /* key/data double NUL */
   for (uint64_t i = 0; i < n_cpg; ++i) {
     uint64_t v = memb[i] == MRMP_PNA_MEMBERSHIP ? n_cand : memb[i];
     uint8_t *d = c.s + pos + i * 8;
     for (int b = 0; b < 8; ++b) d[b] = (uint8_t)(v >> (8 * b));
   }
-  cdata_compress(&c);                                /* -> RLE fmt2 */
+  cdata_compress(&c);                               /* -> RLE fmt2 */
 
   /* Then deflate. The RLE is where the shape is, but the deflate is where the
    * bytes are -- 2.74x measured on a 34-class global. Section layout is
@@ -425,14 +425,14 @@ static uint8_t *memb_compress(const uint32_t *memb, uint64_t n_cpg,
   memcpy(sec + 8, blob, blob_n);
   free(blob); free(c.s);
   *out_n = 8 + blob_n;
-  return sec;                                        /* caller owns */
+  return sec;                                       /* caller owns */
 }
 
 /* The RLE payload of a membership section, inflated but NOT expanded: the fmt2
  * key table, then a value-width byte, then (value, uint16 run length) records.
  * Caller frees. */
 static uint8_t *memb_rle_payload(const uint8_t *buf, uint64_t nbytes, int bgzf,
-                                 uint64_t *out_n, const char *what) {
+                                uint64_t *out_n, const char *what) {
   if (!bgzf) { uint8_t *p = xcalloc(nbytes ? nbytes : 1, 1, "rle"); 
                memcpy(p, buf, nbytes); *out_n = nbytes; return p; }
   if (nbytes < 8) die("membership section is truncated", what);
@@ -445,8 +445,8 @@ static uint8_t *memb_rle_payload(const uint8_t *buf, uint64_t nbytes, int bgzf,
 }
 
 static uint32_t *memb_decompress(const uint8_t *buf, uint64_t nbytes,
-                                 uint64_t n_cpg, uint64_t n_cand, int bgzf,
-                                 const char *what) {
+                                uint64_t n_cpg, uint64_t n_cand, int bgzf,
+                                const char *what) {
   cdata_t c; memset(&c, 0, sizeof c);
   c.fmt = '2'; c.compressed = 1; c.unit = 8;
   if (bgzf) {
@@ -549,7 +549,7 @@ static void mrmp_open_at(mrmp_reader_t *r, const char *path, uint64_t base,
   /* The membership section is n_cpg * 4 dense, or membership_bytes when RLE. */
   const int memb_rle = (h->flags & MRMP_FLAG_MEMB_RLE) != 0;
   const uint64_t memb_bytes = memb_rle ? h->membership_bytes
-                                       : h->n_cpg * sizeof(uint32_t);
+                                      : h->n_cpg * sizeof(uint32_t);
   if (memb_rle && !h->membership_bytes)
     die("MRMP artifact claims RLE membership but records no size", path);
   if (!region_ok(h->membership_offset, memb_bytes, 1, sz) ||
@@ -614,7 +614,7 @@ static void mrmp_close(mrmp_reader_t *r) {
  * for callers that need the patterns as data rather than as text. Copies out of
  * the mapping so the artifact can be closed immediately. */
 mrmp_top_t *ms_mrmp_top_read_at(const char *artifact, uint64_t base,
-                                uint32_t top_k) {
+                               uint32_t top_k) {
   mrmp_reader_t r; mrmp_open_at(&r, artifact, base, 0);
   const mrmp_header_t *h = r.h;
   uint64_t lim = top_k < h->n_candidates ? top_k : h->n_candidates;
@@ -802,7 +802,7 @@ static void prune_block(const char *path, uint64_t base, uint64_t blk_bytes,
 
   /* old rank -> new rank, PNA for everything dropped */
   uint32_t *newrank = xcalloc(h->n_candidates ? h->n_candidates : 1,
-                              sizeof(uint32_t), "rank remap");
+                             sizeof(uint32_t), "rank remap");
   for (uint64_t p = 0; p < h->n_candidates; ++p) newrank[p] = MRMP_PNA_MEMBERSHIP;
   for (uint32_t j = 0; j < keep_n; ++j)
     newrank[keep_ranks ? keep_ranks[j] : j] = j;
@@ -867,9 +867,9 @@ static void prune_block(const char *path, uint64_t base, uint64_t blk_bytes,
 }
 
 static void chain_write_streamed(const char *out, uint32_t n_sets,
-                                 const char *const *src, const uint64_t *src_off,
-                                 const uint64_t *block_bytes,
-                                 const uint32_t *keep) {
+                                const char *const *src, const uint64_t *src_off,
+                                const uint64_t *block_bytes,
+                                const uint32_t *keep) {
   if (!n_sets) die("a MRMP file needs at least one set", out);
   FILE *f = fopen(out, "wb");
   if (!f) die("cannot write MRMP", out);
@@ -958,7 +958,7 @@ int main_mrmp_inspect(int argc, char *argv[]) {
          memb_b ? (double)(h->n_cpg * 4) / (double)memb_b : 1.0);
   printf("  %-14s %s\n", "thresholds",
          (h->flags & MRMP_FLAG_THRESH) ? "present (per-pattern midpoints)"
-                                       : "absent (consumers assume 0.5)");
+                                      : "absent (consumers assume 0.5)");
   printf("\n");
   /* Spelled as the flags that set them: "beta=0.500" reads like a measured
    * value rather than the knob it is. */
@@ -1021,13 +1021,13 @@ int main_mrmp_inspect(int argc, char *argv[]) {
  * out in SET order, and a classifier handed its columns in the wrong order fails
  * silently rather than loudly. */
 static void mrmp_block_mask_cdata(const char *artifact, uint64_t base,
-                                  uint64_t blk_bytes, const char *pna_label,
-                                  uint32_t top_k, cdata_t *out,
-                                  uint64_t *n_keys_out);
+                                 uint64_t blk_bytes, const char *pna_label,
+                                 uint32_t top_k, cdata_t *out,
+                                 uint64_t *n_keys_out);
 
 static int export_container(const char *path, const char *out_cm,
-                            const char *pna_label, uint32_t top_k,
-                            const char *who) {
+                           const char *pna_label, uint32_t top_k,
+                           const char *who) {
   ms_mrmpset_t *s = ms_mrmpset_open(path);
 
   /* One .cm holding every set as a record, plus the .idx naming them -- YAME's
@@ -1220,8 +1220,8 @@ void ms_mrmp_group_map_at(const char *artifact, uint64_t base, uint16_t *group,
 }
 
 uint32_t ms_mrmp_group_map_chain(const char *chain, uint16_t *group,
-                                 uint64_t n_cpg, uint32_t patterns_per_set,
-                                 uint32_t *col0, uint32_t *n_sets_out) {
+                                uint64_t n_cpg, uint32_t patterns_per_set,
+                                uint32_t *col0, uint32_t *n_sets_out) {
   ms_mrmpset_t *ch = ms_mrmpset_open(chain);
   uint32_t total = 0;
   for (uint32_t s = 0; s < ch->n_sets; ++s) {
@@ -1245,7 +1245,7 @@ uint32_t ms_mrmp_group_map_chain(const char *chain, uint16_t *group,
 }
 
 uint32_t ms_mrmp_thresholds_at(const char *path, uint64_t base, uint64_t blk_bytes,
-                               uint32_t n_want, float *out) {
+                              uint32_t n_want, float *out) {
   mrmp_reader_t r; mrmp_open_at(&r, path, base, blk_bytes);
   uint32_t n = 0;
   if (r.h->flags & MRMP_FLAG_THRESH) {
@@ -1257,7 +1257,7 @@ uint32_t ms_mrmp_thresholds_at(const char *path, uint64_t base, uint64_t blk_byt
 }
 
 void ms_mrmp_membership_runs(const char *path, uint64_t base, uint64_t blk_bytes,
-                             ms_mrmp_run_cb cb, void *ctx) {
+                            ms_mrmp_run_cb cb, void *ctx) {
   mrmp_reader_t r; mrmp_open_at(&r, path, base, blk_bytes);
   const mrmp_header_t *h = r.h;
   if (!(h->flags & MRMP_FLAG_MEMB_RLE)) {
@@ -1275,8 +1275,8 @@ void ms_mrmp_membership_runs(const char *path, uint64_t base, uint64_t blk_bytes
   }
   uint64_t n = 0;
   uint8_t *p = memb_rle_payload((const uint8_t *)(r.blk + h->membership_offset),
-                                h->membership_bytes,
-                                (h->flags & MRMP_FLAG_MEMB_BGZF) != 0, &n, path);
+                               h->membership_bytes,
+                               (h->flags & MRMP_FLAG_MEMB_BGZF) != 0, &n, path);
   /* Keys are NUL-separated and closed by an extra NUL, so the first double-NUL
    * ends the table; no key is ever empty (they are P1..PN and Pna). */
   uint64_t d = 0;
@@ -1322,9 +1322,9 @@ void ms_mrmp_group_map(const char *artifact, uint16_t *group, uint64_t n_cpg,
  * and YAME's idiom for many records is one file plus a .idx of names, not a
  * directory of files plus a hand-rolled order list. */
 static void mrmp_block_mask_cdata(const char *artifact, uint64_t base,
-                                  uint64_t blk_bytes, const char *pna_label,
-                                  uint32_t top_k, cdata_t *out,
-                                  uint64_t *n_keys_out) {
+                                 uint64_t blk_bytes, const char *pna_label,
+                                 uint32_t top_k, cdata_t *out,
+                                 uint64_t *n_keys_out) {
   mrmp_reader_t r; mrmp_open_at(&r, artifact, base, blk_bytes);
   const mrmp_header_t *h = r.h;
   if (!pna_label) pna_label = "Pna";
@@ -1401,8 +1401,8 @@ static void mrmp_block_mask_cdata(const char *artifact, uint64_t base,
 }
 
 void ms_mrmp_write_mask_at(const char *artifact, uint64_t base,
-                           uint64_t blk_bytes, const char *out_cm,
-                           const char *pna_label, uint32_t top_k) {
+                          uint64_t blk_bytes, const char *out_cm,
+                          const char *pna_label, uint32_t top_k) {
   cdata_t c; uint64_t n_keys = 0;
   mrmp_block_mask_cdata(artifact, base, blk_bytes, pna_label, top_k, &c, &n_keys);
   cdata_write((char *)out_cm, &c, "w", 0);
@@ -1503,15 +1503,15 @@ int main_mrmp_pool(int argc, char *argv[]) {
         "                   1.6% of the CpGs (4,626 of 9,965 are singletons).\n"
         "                   Gate and budget compose: --min-cpgs alone prunes to\n"
         "                   everything that clears the floor.\n"
-        "  --include-all-0           keep patterns no class calls 1\n"
-        "  --include-all-1           keep patterns no class calls 0\n"
-        "                            Both are folded into PNA by default: a\n"
-        "                            binstring with no class on one side\n"
-        "                            separates nothing however many CpGs it\n"
-        "                            carries, so it should not consume budget.\n"
-        "                            mrmp-build --qfilter also excludes them,\n"
-        "                            but only when a filter is given, and pool\n"
-        "                            takes blocks from any generator.\n");
+        "  --include-all-0            keep patterns no class calls 1\n"
+        "  --include-all-1            keep patterns no class calls 0\n"
+        "                             Both are folded into PNA by default: a\n"
+        "                             binstring with no class on one side\n"
+        "                             separates nothing however many CpGs it\n"
+        "                             carries, so it should not consume budget.\n"
+        "                             mrmp-build --qfilter also excludes them,\n"
+        "                             but only when a filter is given, and pool\n"
+        "                             takes blocks from any generator.\n");
       return 0;
     }
     else if (argv[i][0] == '-') die("unrecognized option", argv[i]);
@@ -1621,7 +1621,7 @@ int main_mrmp_pool(int argc, char *argv[]) {
       char *scr = xcalloc((size_t)hd[k].n_samples + 1, 1, "binstring scratch");
       for (uint64_t r = 0; r < hd[k].n_candidates; ++r) {
         { int fl = key_flatness((const uint64_t *)(const void *)(rec + r * st),
-                                hd[k].n_samples, scr);
+                               hd[k].n_samples, scr);
           if (fl == 1 && !inc_all1) { ++n_all1; continue; }
           if (fl == 2 && !inc_all0) { ++n_all0; continue; } }
         uint64_t cnt; memcpy(&cnt, rec + r * st + koff, sizeof(cnt));
@@ -1849,11 +1849,11 @@ void ms_binstring_map_free(ms_binstring_map_t *m) {
  * columns by exactly these counts, so a pattern still advertising the CpGs
  * selection took away would win slots it cannot fill. */
 static void build_subset_block(const char *store, uint32_t ns,
-                               char *const *label, const int64_t *voff,
-                               const mrmp_header_t *gh,
-                               const ms_select_opt_t *sel,
-                               const char *set_name,
-                               subset_block_t *out) {
+                              char *const *label, const int64_t *voff,
+                              const mrmp_header_t *gh,
+                              const ms_select_opt_t *sel,
+                              const char *set_name,
+                              subset_block_t *out) {
   const uint32_t mincov = gh->mincov;
   const float beta_thr = gh->beta_threshold, max_ambig = gh->max_ambig_frac,
               min_fold = gh->min_major_fold;
@@ -1893,7 +1893,7 @@ static void build_subset_block(const char *store, uint32_t ns,
   uint32_t *memb = xcalloc(n_cpg, sizeof(uint32_t), "membership");
   for (uint64_t i = 0; i < n_cpg; ++i)
     memb[i] = pidx[i] == MRMP_PNA_MEMBERSHIP ? MRMP_PNA_MEMBERSHIP
-                                             : rank_of[pidx[i]];
+                                            : rank_of[pidx[i]];
   char **binstr = xcalloc(n_pat ? n_pat : 1, sizeof(char *), "binstrings");
   for (uint64_t r = 0; r < n_pat; ++r) {
     binstr[r] = xcalloc((size_t)ns + 1, 1, "binstring");
@@ -1903,7 +1903,7 @@ static void build_subset_block(const char *store, uint32_t ns,
   /* n_kept is not taken here: the count that matters is the one AFTER empty
    * patterns are dropped, which the recount below produces anyway. */
   uint8_t *keep = ms_mrmp_select(store, ns, mincov, n_cpg, memb, n_pat,
-                                 (const char *const *)binstr, sel, NULL, voff);
+                                (const char *const *)binstr, sel, NULL, voff);
   for (uint64_t r = 0; r < n_pat; ++r) free(binstr[r]);
   free(binstr); free(memb); free(order);
 
@@ -1934,7 +1934,7 @@ static void build_subset_block(const char *store, uint32_t ns,
   uint64_t pna_cpg = 0;
   for (uint64_t i = 0; i < n_cpg; ++i) {
     memb2[i] = pidx[i] == MRMP_PNA_MEMBERSHIP ? MRMP_PNA_MEMBERSHIP
-                                              : rank_of[pidx[i]];
+                                             : rank_of[pidx[i]];
     if (memb2[i] == MRMP_PNA_MEMBERSHIP) ++pna_cpg;
   }
   free(pidx); free(rank_of); free(pcount);
@@ -2048,8 +2048,8 @@ static char g_spin_msg[192];
 static void *spin_worker(void *arg) {
   (void)arg;
   static const char *frame[] = {"\xe2\xa3\xbe","\xe2\xa3\xbd","\xe2\xa3\xbb",
-                                "\xe2\xa2\xbf","\xe2\xa1\xbf","\xe2\xa3\x9f",
-                                "\xe2\xa3\xaf","\xe2\xa3\xb7"};
+                               "\xe2\xa2\xbf","\xe2\xa1\xbf","\xe2\xa3\x9f",
+                               "\xe2\xa3\xaf","\xe2\xa3\xb7"};
   for (unsigned i = 0; g_spin_run; ++i) {
     fprintf(stderr, "\r\033[K  %s %s", frame[i % 8], g_spin_msg);
     fflush(stderr);
@@ -2266,7 +2266,7 @@ static uint64_t *tree_pair_seg(const void *img) {
  * count and fills grp[] with a 0-based group id per class, in first-appearance
  * order so the numbering is stable. */
 static uint32_t tree_partition(const uint64_t *seg, uint32_t ns,
-                               uint64_t min_seg, uint32_t *grp) {
+                              uint64_t min_seg, uint32_t *grp) {
   uint32_t *par = xcalloc(ns, sizeof(uint32_t), "union-find");
   for (uint32_t s = 0; s < ns; ++s) par[s] = s;
   for (uint32_t a = 0; a < ns; ++a)
@@ -2292,7 +2292,7 @@ static uint32_t tree_partition(const uint64_t *seg, uint32_t ns,
 /* Weakest cross-group pair, i.e. the separation the routing between two
  * children actually rests on. */
 static uint64_t tree_group_gap(const uint64_t *seg, uint32_t ns,
-                               const uint32_t *grp, uint32_t ga, uint32_t gb) {
+                              const uint32_t *grp, uint32_t ga, uint32_t gb) {
   uint64_t lo = UINT64_MAX;
   for (uint32_t a = 0; a < ns; ++a) {
     if (grp[a] != ga) continue;
@@ -2318,21 +2318,6 @@ static uint64_t *tree_pair_sorted(const uint64_t *seg, uint32_t ns, uint64_t *n)
     for (uint32_t b = a + 1; b < ns; ++b) v[k++] = seg[(uint64_t)a * ns + b];
   qsort(v, (size_t)*n, sizeof(uint64_t), u64cmp);
   return v;
-}
-
-/* An ABSOLUTE CpG threshold is not portable across selection rules: the same
- * colon/small-intestine pair is 21,146 segregating CpGs under mrmp-build's
- * inline --qfilter and 7,624 under the per-node union rule, because the two
- * keep different numbers of CpGs in total. So the default threshold is a
- * QUANTILE of this node's own pairwise distribution, which rescales itself, and
- * --min-segregating overrides it with a count when a fixed one is wanted. */
-static uint64_t tree_threshold(const uint64_t *sorted, uint64_t npair,
-                               double q, uint64_t fixed, int have_fixed) {
-  if (have_fixed) return fixed;
-  if (!npair) return 0;
-  uint64_t i = (uint64_t)(q * (double)npair);
-  if (i >= npair) i = npair - 1;
-  return sorted[i];
 }
 
 /* Build this node's MRMP over its own classes, then recurse into the groups it
@@ -2400,11 +2385,11 @@ static void sat_tag(const char *in, char *out, size_t cap) {
  * contrast is far thicker -- MGE-Sst/PAL-Inh goes from 10 CpGs on the side a
  * rank column needs to 3,034. */
 static uint32_t tree_satellites(const char *store, const subset_block_t *sb,
-                                uint32_t n, char *const *lab,
-                                const int64_t *vo, const mrmp_header_t *gh,
-                                const ms_select_opt_t *sel, const char *name,
-                                uint32_t n_partner, int tty, treeout_t *out,
-                                FILE *rep) {
+                               uint32_t n, char *const *lab,
+                               const int64_t *vo, const mrmp_header_t *gh,
+                               const ms_select_opt_t *sel, const char *name,
+                               uint32_t n_partner, int tty, treeout_t *out,
+                               FILE *rep) {
   /* A 2-class node needs no satellite: its only pair IS its own class pair, so
    * the satellite rebuilds the identical MRMP and hands the booster a second
    * copy of the column it already has. Seen on the human tree, where
@@ -2489,9 +2474,9 @@ static uint32_t tree_satellites(const char *store, const subset_block_t *sb,
 static void tree_build(const char *store, char *const *slab, const int64_t *voff,
                        const uint32_t *idx, uint32_t n, const mrmp_header_t *gh,
                        const ms_select_opt_t *sel, const char *name,
-                       double split_q, uint64_t fixed_seg, int have_fixed,
-                       uint32_t depth, uint32_t max_depth, int dry,
-                       uint32_t sat_n, int tty, treeout_t *out, FILE *rep) {
+                       uint64_t min_seg, uint32_t depth, uint32_t max_depth,
+                       int dry, uint32_t sat_n, int tty, treeout_t *out,
+                       FILE *rep) {
   char **lab = xcalloc(n, sizeof(char *), "node labels");
   int64_t *vo = xcalloc(n, sizeof(int64_t), "node offsets");
   for (uint32_t k = 0; k < n; ++k) { lab[k] = slab[idx[k]]; vo[k] = voff[idx[k]]; }
@@ -2519,7 +2504,6 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
 
   uint64_t *seg = tree_pair_seg(sb.img);
   uint64_t npair = 0, *sorted = tree_pair_sorted(seg, n, &npair);
-  uint64_t min_seg = tree_threshold(sorted, npair, split_q, fixed_seg, have_fixed);
   uint32_t *grp = xcalloc(n, sizeof(uint32_t), "grouping");
   uint32_t ng = tree_partition(seg, n, min_seg, grp);
 
@@ -2538,7 +2522,7 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
      * version of this swept only to the 0.24 quantile, which hid exactly that
      * regime. */
     static const double QS[] = {0.02, 0.05, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50,
-                                0.60, 0.70, 0.80, 0.90, 0.95, 0.98};
+                               0.60, 0.70, 0.80, 0.90, 0.95, 0.98};
     fprintf(rep, "%s  candidate thresholds:\n%s  %6s %10s %8s %8s\n", ind, ind,
             "pctile", "T", "groups", "largest");
     for (uint32_t q = 0; q < sizeof QS / sizeof *QS; ++q) {
@@ -2605,8 +2589,8 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
     fflush(rep);
     if (dry) { free(sub); continue; }
     char cn[256]; snprintf(cn, sizeof cn, "%s.%u", name, g);
-    tree_build(store, slab, voff, sub, m, gh, sel, cn, split_q, fixed_seg,
-               have_fixed, depth + 1, max_depth, dry, sat_n, tty, out, rep);
+    tree_build(store, slab, voff, sub, m, gh, sel, cn, min_seg,
+               depth + 1, max_depth, dry, sat_n, tty, out, rep);
     free(sub);
   }
   free(sorted); free(seg); free(grp); free(lab); free(vo);
@@ -2619,8 +2603,7 @@ int main_mrmp_build(int argc, char *argv[]) {
   const char *pos[2] = {NULL, NULL}, *nodedir = NULL, *setname = "root";
   int npos = 0, force = 0, dry = 0, have_fixed = 0, flat = 0;
   uint32_t sat_n = 0;                /* --satellite-n; 0 = no satellites */
-  uint64_t fixed_seg = 0; uint32_t max_depth = 16;
-  double split_q = 0.0;              /* only if --split-quantile asks for it */
+  uint64_t min_seg = 0; uint32_t max_depth = 16;
   ms_select_opt_t sel; ms_select_defaults(&sel);
   sel.quiet = 1;                     /* one line per node, not per selection */
   mrmp_header_t gh; memset(&gh, 0, sizeof gh);
@@ -2631,110 +2614,51 @@ int main_mrmp_build(int argc, char *argv[]) {
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       ms_help(stderr,
         "Usage: methscope mrmp-build [options] REF.cg OUT.mrmp\n\n"
-        "  Builds EVERY node of a routing tree in one pass. Each node is an\n"
-        "  MRMP over its own class subset; a node's children are the groups of\n"
-        "  classes its own patterns cannot tell apart. Replaces mrmp-build +\n"
-        "  the satellite builders + mrmp-pool for this shape.\n\n"
-        "  Per-node rebuild is the point: a pattern must hold across every\n"
-        "  class in its set, so dropping classes admits more CpGs. Colon vs\n"
-        "  small intestine carries 21,146 segregating CpGs inside a 33-class\n"
-        "  global and 102,694 as its own 2-class set. The recursion GAINS\n"
-        "  evidence as it descends.\n\n"
-        "  The parent lives in the set NAME -- root, root.0, root.0.1 -- so a\n"
-        "  node's parent is its name minus the last component. The 128-byte\n"
-        "  header has no room for a pointer, and a name survives cat.\n\n"
-        "  Options\n"
-        "    --min-segregating N   the split threshold, in CpGs (REQUIRED)\n"
-        "          Two classes separated by <= N segregating CpGs go to the\n"
-        "          SAME child; groups are the connected components of that\n"
-        "          graph. ABSOLUTE, not relative, because what a cell can\n"
-        "          observe is an absolute number of CpGs -- a threshold that\n"
-        "          rescaled itself per node would move the bar exactly as the\n"
-        "          recursion earns the budget to clear it.\n"
-        "          A node that cannot split at N is not a failure: its group\n"
-        "          becomes a child, rebuilt over fewer classes, whose larger\n"
-        "          CpG budget is what clears N one level down. That is the\n"
-        "          point of the recursion. The one dead end is a root that\n"
-        "          yields a SINGLE group -- its child would be itself -- so N\n"
-        "          must leave the root's graph disconnected.\n"
-        "    --split-quantile Q    set N per node as the Q-quantile of that\n"
-        "          node's own pair distribution instead. Rescales itself, which\n"
-        "          is usually the wrong thing; kept for exploring an unfamiliar\n"
-        "          reference, where --dry-run prints the spread to pick N from.\n"
-        "    --flat                build ONE set over every class and stop --\n"
-        "                          no split, no children. This is how a\n"
-        "                          SATELLITE is made: a small MRMP over 2+\n"
-        "                          classes feeding an existing node's booster\n"
-        "                          extra columns. A node's patterns must hold\n"
-        "                          across every class it carries, so a wide\n"
-        "                          node's filter is a conjunction that starves\n"
-        "                          exactly the pairs needing help; the same\n"
-        "                          contrast over 2 classes is far thicker.\n"
-        "    --satellite-n N       after the tree, give every CHILDLESS node of\n"
-        "          3+ CLASSES a soft child per class pair among its N nearest, by\n"
-        "          CpG-weighted Hamming over that node's own binstrings --\n"
-        "          reference only, no\n"
-        "          test cell. Each is a fresh 2-class MRMP appended to the same\n"
-        "          chain as <node>@<a>__<b>, so one command emits the whole\n"
-        "          artifact. OVERLAPPING, not a partition: a class joins as many\n"
-        "          pairs as name it, because a partition cannot cover a close\n"
-        "          pair straddling a block boundary -- that left 73.5%% of the\n"
-        "          remaining error uncovered when it was tried. The point is the\n"
-        "          CpG budget: a node's pattern must hold across every class it\n"
-        "          carries, so a wide node's filter is a conjunction that starves\n"
-        "          the pairs needing help most, and the same contrast rebuilt\n"
-        "          over 2 classes is far thicker. Default 0, off.\n"
-        "    --name NAME           the set's name. For a satellite this MUST\n"
-        "                          be <node>@<tag> -- root.0.0@MGE-Sst_PAL-Inh\n"
-        "                          -- naming the node whose booster it joins.\n"
-        "                          The separator cannot be '.', which already\n"
-        "                          means child-of, and a child must PARTITION\n"
-        "                          its parent's classes for routing to be well\n"
-        "                          defined; a satellite deliberately does not.\n"
-        "                          Satellites carry no model and do not route.\n"
-        "    --max-depth N         recursion limit (default 16)\n"
-        "    --dry-run             build the ROOT only, print its closest pairs\n"
-        "                          and the groups it would make, write nothing\n"
-        "    --qfilter LO,HI       keep a CpG when every expected-0 class is\n"
-        "                          <= LO and every expected-1 class is >= HI\n"
-        "    --delta-mean-top N    per binstring, cap at the N largest class\n"
-        "                          gaps among the q-filter's passers (default\n"
-        "                          20000, 0 = no cap). Per BINSTRING, so a\n"
-        "                          2-class satellite gets up to 2N CpGs.\n"
-        "                          Stringency is only affordable with the CpG\n"
-        "                          budget to pay for it, so this is the budget\n"
-        "                          knob that makes a tight --qfilter usable.\n"
-        "    --mincov N            min per-class coverage (default 1)\n"
-        "    --depth-floor-frac F  per-class RELATIVE depth floor: a CpG is\n"
-        "          dropped unless every class covers it at min(F * that class's\n"
-        "          OWN genome-wide mean depth, --depth-floor-cap). Default 0,\n"
-        "          off: it pays only under a TIGHT --qfilter, which selects the\n"
-        "          extreme and thinly-supported CpGs this floor removes. At\n"
-        "          0.15,0.75 it is the fix; at 0.30,0.70 it only deletes\n"
-        "          evidence. Relative because an absolute floor cannot\n"
-        "          serve both ends of the range -- here depth 5.7 to 131, where\n"
-        "          10 deletes the thin classes and never binds on the deep ones.\n"
-        "          This is the protection against selecting on the same cells\n"
-        "          that define the beta: the reference's most extreme values sit\n"
-        "          where its depth is thinnest, and those are the CpGs that do\n"
-        "          not reproduce on held-out cells.\n"
-        "    --depth-floor-cap N   ceiling on that target (default 20)\n"
-        "    --node-dir DIR        also write DIR/<node>.mrmp, one per node, so the\n"
-        "                          tree drives with plain classify-featurize /\n"
-        "                          classify-train (a block is a standalone .mrmp)\n"
-        "    (the shape is not written to a file: `inspect --tree OUT.mrmp`\n"
-        "     derives it from the artifact, so there is nothing to keep in step)\n"
-        "    --force               overwrite an existing output\n");
+        "Build a routing-tree MRMP from a labelled reference store. Each node\n"
+        "uses its own class subset. Rebuilding a child can admit CpGs that its\n"
+        "parent's wider class set excluded.\n\n"
+        "Workflow\n"
+        "  methscope mrmp-build --dry-run REF.cg OUT.mrmp\n"
+        "  methscope mrmp-build --min-segregating N REF.cg OUT.mrmp\n\n"
+        "Tree\n"
+        "  --min-segregating N   Required split threshold, in CpGs. Classes\n"
+        "                        with <= N separating CpGs share a child.\n"
+        "                        Choose N from --dry-run and keep it fixed:\n"
+        "                        each child must clear the same evidence bar.\n"
+        "  --flat                Build one MRMP over all classes, without a tree.\n"
+        "  --max-depth N         Maximum tree depth. Default: 16.\n"
+        "  --dry-run             Report root pair counts and candidate splits.\n"
+        "                        Write nothing. Does not require a threshold.\n\n"
+        "Satellites\n"
+        "  --satellite-n N       At each leaf with 3+ classes, append two-class\n"
+        "                        MRMPs for every class's N nearest neighbours.\n"
+        "                        They add leaf features but do not route.\n"
+        "                        Default: 0 (off).\n\n"
+        "Feature selection\n"
+        "  --qfilter LO,HI       Keep CpGs where every 0-class <= LO and every\n"
+        "                        1-class >= HI.\n"
+        "  --delta-mean-top N    Keep at most N CpGs per binstring, ranked by\n"
+        "                        mean class gap. Default: 20000; 0 keeps all.\n"
+        "  --mincov N            Minimum per-class coverage. Default: 1.\n"
+        "  --depth-floor-frac F  Require F times each class's genome-wide mean\n"
+        "                        depth. Default: 0 (off).\n"
+        "  --depth-floor-cap N   Cap the depth-floor target. Default: 20.\n"
+        "  --beta-threshold B    Call beta > B methylated. Default: 0.5.\n"
+        "  --max-ambig-frac F    Maximum ambiguous-call fraction.\n"
+        "  --min-major-fold F    Minimum major-call depth fold.\n"
+        "  --max-frac-na F       Maximum missing-class fraction per CpG.\n"
+        "  --min-cg-depth N      Minimum per-class CpG depth.\n"
+        "  --include-all-0       Keep all-unmethylated patterns.\n"
+        "  --include-all-1       Keep all-methylated patterns.\n\n"
+        "Output\n"
+        "  --name NAME           Root name. Default: root.\n"
+        "  --node-dir DIR        Also write each node as DIR/<node>.mrmp.\n"
+        "  --force               Overwrite OUT.mrmp.\n\n"
+        "Inspect the completed tree with: inspect --tree OUT.mrmp\n");
       return 0;
     }
     else if (!strcmp(a, "--min-segregating") && i + 1 < argc) {
-      fixed_seg = parse_u64(argv[++i], a); have_fixed = 1;
-    }
-    else if (!strcmp(a, "--split-quantile") && i + 1 < argc) {
-      split_q = atof(argv[++i]);
-      if (!(split_q > 0.0 && split_q < 1.0))
-        die("--split-quantile needs 0 < Q < 1", argv[i]);
-      have_fixed = 0;
+      min_seg = parse_u64(argv[++i], a); have_fixed = 1;
     }
     else if (!strcmp(a, "--dry-run")) dry = 1;
     /* One MRMP over every class, no routing. What mrmp-build meant before it
@@ -2793,12 +2717,12 @@ int main_mrmp_build(int argc, char *argv[]) {
   /* --dry-run is how the threshold gets CHOSEN, so it cannot require one --
    * demanding the answer before printing the evidence is the wrong way round,
    * and the help says as much. Without one it sweeps instead. */
-  if (!flat && !dry && !have_fixed && split_q <= 0.0)
+  if (!flat && !dry && !have_fixed)
     die("give --min-segregating N to split, or --flat for one MRMP over every "
         "class; --dry-run prints the root's pair distribution to choose from",
         NULL);
-  if (dry && !have_fixed && split_q <= 0.0) { have_fixed = 1; fixed_seg = 0; }
-  if (flat) { have_fixed = 1; fixed_seg = UINT64_MAX; }   /* nothing can split */
+  if (dry && !have_fixed) min_seg = 0;
+  if (flat) min_seg = UINT64_MAX;   /* nothing can split */
   /* The floor stays OFF by default, including under --flat. It was briefly
    * defaulted on here, because the standalone satellite builder that --flat
    * replaced ran it -- but measurement says the protection is band-specific,
@@ -2829,15 +2753,13 @@ int main_mrmp_build(int argc, char *argv[]) {
             "(--flat: a tree of one level)\n", g_cmd, nstore);
   else if (have_fixed)
     fprintf(stderr, "[methscope] %s: %u classes, split above %" PRIu64
-            " segregating CpGs%s\n", g_cmd, nstore, fixed_seg,
+            " segregating CpGs%s\n", g_cmd, nstore, min_seg,
             dry ? " (dry run)" : "");
   else
-    fprintf(stderr, "[methscope] %s: %u classes, split above the %.3g quantile"
-            " of each node's own pairs%s\n", g_cmd, nstore, split_q,
-            dry ? " (dry run)" : "");
-  tree_build(store, slab, voff, idx, nstore, &gh, &sel, setname, split_q,
-             fixed_seg, have_fixed, 0, max_depth, dry, sat_n,
-             rep == stderr ? tty : 0, &t, rep);
+    fprintf(stderr, "[methscope] %s: %u classes, root pair distribution"
+            "%s\n", g_cmd, nstore, dry ? " (dry run)" : "");
+  tree_build(store, slab, voff, idx, nstore, &gh, &sel, setname, min_seg,
+             0, max_depth, dry, sat_n, rep == stderr ? tty : 0, &t, rep);
   if (dry) return 0;
 
   ms_mrmp_chain_write(out, t.n, (const void *const *)t.img, t.len);

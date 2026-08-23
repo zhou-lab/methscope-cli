@@ -700,7 +700,13 @@ int main_predict(int argc, char *argv[]) {
     /* The matrix builders take a runtime .cm, and ms_mrmp_resolve() would give
      * only the chain's FIRST block -- the rule is pooled across every set, so
      * materialise the whole chain, exactly as the transcribe step used to. */
-    char ctmp[] = "/tmp/methscope_viomask_XXXXXX.cm";
+    /* Honors $TMPDIR as upscale's section_to_tmp does: the materialized chain
+     * mask is genome-wide (tens of MB) and the cluster's shared /tmp is small. */
+    const char *tdir = getenv("TMPDIR");
+    if (!tdir || !*tdir) tdir = "/tmp";
+    char ctmp[4096];
+    if (snprintf(ctmp, sizeof(ctmp), "%s/methscope_viomask_XXXXXX.cm", tdir)
+        >= (int)sizeof(ctmp)) pdie("TMPDIR path too long", tdir);
     int cfd = mkstemps(ctmp, 3);
     if (cfd < 0) pdie("cannot create temp mask file", NULL);
     close(cfd);
@@ -708,7 +714,7 @@ int main_predict(int argc, char *argv[]) {
     int rc = predict_violation(query_cg, ctmp, data_path, threads, vm,
                                out_path, with_probs, no_header);
     unlink(ctmp);
-    { char idx[64]; snprintf(idx, sizeof idx, "%s.idx", ctmp); unlink(idx); }
+    { char idx[4104]; snprintf(idx, sizeof idx, "%s.idx", ctmp); unlink(idx); }
     return rc;
   }
 

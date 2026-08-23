@@ -534,8 +534,8 @@ int main_upscale_prepare(int argc, char *argv[]) {
   msur_header_t *hp = &h3.h;
   memcpy(hp->magic, v3 ? MSUR3_MAGIC : MSUR2_MAGIC, 8);
   hp->version = v3 ? 3u : 2u;
-  /* n_patterns is the COLUMN count, which for a chain is the concatenation
-   * width, not --patterns. upscale-train narrows against this number, so
+  /* n_patterns is the COLUMN count -- for a chain, the concatenation width.
+   * upscale-train reads its feature width from this header field verbatim, so
    * recording the flag instead would let it read 200 columns of a 658-wide
    * record and silently mis-slice every row. */
   hp->n_cells = n_cells; hp->n_reps = total_reps; hp->n_patterns = ncol;

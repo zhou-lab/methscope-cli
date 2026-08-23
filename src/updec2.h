@@ -17,6 +17,13 @@
 /* input is [beta xP][log1p(total covered CpGs)] -- input_dim == patterns + 1 */
 #define MS_UPDEC2_FLAG_SCALAR_COV 16u
 
+/* The units do NOT tile the genome: this model holds a SUBSET, as produced by
+ * `upscale-train --pilot-units`. Everything outside them predicts NA. Without
+ * the flag a reader requires the units to cover the CpG array contiguously,
+ * which is the right invariant for a whole-genome model and impossible for a
+ * locus-sized one. */
+#define MS_UPDEC2_FLAG_PARTIAL 32u
+
 #pragma pack(push,1)
 typedef struct {
   char magic[8];

@@ -92,16 +92,22 @@ from [methscope_data](https://github.com/zhou-lab/methscope_data) (`test/`).
 
 ### Train the whole-genome upscale model
 
-`upscale-train` trains one unified whole-genome `UPDEC2` model. The top 1,000
-MRMP averages are deterministic inputs. An optional learned 512-dimensional
+`upscale-train` trains one unified whole-genome `UPDEC2` model. The MRMP
+averages are deterministic inputs; the feature width is the msur's, which is
+whatever `mrmp-pool` left in the artifact -- selection happens there, once,
+not per consumer. An optional learned 512-dimensional
 decoder trunk can be shared by every membership-first processing unit; it is
 downstream of MRMP aggregation, not a CpG-to-MRMP encoder. Beta-only,
 beta-plus-missing, and beta-plus-count inputs are supported. PyTorch is not
 used.
 
-The `.mrmp` artifact is the build pipeline's currency: `upscale-featurize`,
-`upscale-set-units`, and `upscale-train` all read the same one, so the msur's
-per-CpG group map and the mask the model ships cannot drift apart. The `.cm` is
+The `.mrmp` artifact is the feature pipeline's currency: `upscale-featurize`
+and `upscale-train` read the same one, so the msur's per-CpG group map and the
+mask the model ships cannot drift apart. `upscale-set-units` deliberately does
+NOT read it: units are an output partition, so they come from the reference
+store itself (`upscale-set-units REF.cg OUT.msui`), keeping the constant
+binstrings a selected `.mrmp` drops -- those are over half the genome and every
+one of their CpGs still has to be reconstructed. The `.cm` is
 the *runtime* form — `upscale-train` materializes it into `--work-dir` and packs
 it into the bundle. `mrmp-export` stays available for inspection and for
 feeding the `.cm`-based commands, but it is no longer a pipeline step. (An
@@ -146,7 +152,8 @@ order is not fixed, so two GPU runs already differ in the last bits. On the
 unit and on validation MAE to at most 3.7e-08.
 
 The three build steps are public commands: `upscale-featurize` (MSURAW2
-msur), `upscale-set-units` (MSUIDX1 unit index), then `upscale-train`. Only
+msur, from the truth `.cg` + a pooled `.mrmp`), `upscale-set-units` (MSUIDX1
+unit index, from the reference store), then `upscale-train`. Only
 the research trunk trainer and the Zhou 2018 evaluator remain under
 `methscope _upscale`; the latter is invoked by the
 non-public `analysis/zhou2018_upscale_eval.sh` script. See the MethScope lab journal (`20251216_methscope.org`) and the

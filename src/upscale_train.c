@@ -97,7 +97,11 @@ static int usage(void) {
     "  --device N|cpu           CUDA device (default 0), or cpu to force the\n"
     "                           portable backend\n"
     "  --threads N              CPU backend worker threads (default 1)\n"
-    "  --pilot-units FILE       train listed unit IDs only; do not assemble\n"
+    "  --pilot-units FILE       train listed unit IDs only. The bundle is still\n"
+    "                           assembled, holding just those units, so it can be\n"
+    "                           run with `upscale` -- CpGs outside them come back\n"
+    "                           NA. That is what makes a locus-sized experiment\n"
+    "                           possible without training all 700 units.\n"
     "  --force                  replace final output and manifest\n"
     "  --dry-run                validate options and print configuration\n"
     "  -h, --help               show this help\n");
@@ -252,10 +256,6 @@ int main_upscale_train(int argc, char **argv) {
     terr("--trunk needs the CUDA backend; rebuild with make CUDA=1", NULL);
   fprintf(stderr, "[methscope] upscale-train: backend=%s\n", use_cpu ? "cpu" : "cuda");
   int train_rc = use_cpu ? ms_upunit_train_cpu(&c) : ms_upunit_train_cuda(&c);
-  if (train_rc == 2) {
-    fprintf(stderr, "[methscope] upscale-train: pilot complete; no bundle assembled\n");
-    return 0;
-  }
   if (train_rc) terr("CUDA training failed", NULL);
 
   /* Bundle assembly streams the model, so peak RAM is independent of model size. */

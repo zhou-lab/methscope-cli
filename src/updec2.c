@@ -84,7 +84,8 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
       (h->version == 2 && (h->flags & ~MS_UPDEC2_FLAG_GENOMIC)) ||
       (h->version == 3 && (h->flags & ~(MS_UPDEC2_FLAG_GENOMIC |
           MS_UPDEC2_FLAG_COUNT | MS_UPDEC2_FLAG_TRUNK |
-          MS_UPDEC2_FLAG_BETA_ONLY | MS_UPDEC2_FLAG_SCALAR_COV))) ||
+          MS_UPDEC2_FLAG_BETA_ONLY | MS_UPDEC2_FLAG_SCALAR_COV |
+                              MS_UPDEC2_FLAG_PARTIAL))) ||
       /* the three input layouts are mutually exclusive */
       ((h->flags & MS_UPDEC2_FLAG_COUNT) &&
        (h->flags & MS_UPDEC2_FLAG_BETA_ONLY)) ||
@@ -121,9 +122,13 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
   /* --- phase 5: unit directory — contiguous outputs, in-bounds & exact params --- */
   uint64_t first_unit_param = h->param_offset + trunk_floats * sizeof(float);
   const ms_updec2_unit_t *u = (const ms_updec2_unit_t *)(base + h->unit_offset);
+  /* A whole-genome model's units tile the CpG array; a PARTIAL one only has to
+   * stay in bounds and not overlap, which is all forward() relies on. */
+  const int partial = (h->flags & MS_UPDEC2_FLAG_PARTIAL) != 0;
   uint64_t expected = 0;
   for (uint32_t k = 0; k < h->n_units; ++k) {
-    if (u[k].output_offset != expected || !u[k].cpg_count ||
+    if ((partial ? u[k].output_offset < expected : u[k].output_offset != expected)
+        || !u[k].cpg_count ||
         u[k].output_offset > h->n_cpg ||
         u[k].cpg_count > h->n_cpg - u[k].output_offset ||
         u[k].param_offset < first_unit_param ||
@@ -148,9 +153,10 @@ int ms_updec2_open(ms_updec2_t *m, const char *path,
       munmap(map, (size_t)file_bytes); close(fd);
       return uerr(error, error_cap, "UPDEC2 unit parameter size mismatch");
     }
-    expected += u[k].cpg_count;
+    expected = u[k].output_offset + u[k].cpg_count;
   }
-  if (expected != h->n_cpg || h->activation > MS_UPDEC2_LEAKY_RELU) {
+  if ((!partial && expected != h->n_cpg) || expected > h->n_cpg ||
+      h->activation > MS_UPDEC2_LEAKY_RELU) {
     munmap(map, (size_t)file_bytes); close(fd);
     return uerr(error, error_cap, "UPDEC2 coverage or activation is invalid");
   }

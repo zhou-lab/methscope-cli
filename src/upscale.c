@@ -366,6 +366,9 @@ static long run_updec2(const char *path, uint64_t offset, uint64_t length,
       char *copy = strdup(line);
       int need_count = m.header->version >= 3 &&
                        (m.header->flags & MS_UPDEC2_FLAG_COUNT);
+      /* Same NA init as the bundled branch: forward() writes only covered
+       * CpGs, and a PARTIAL model must emit NA elsewhere, not stale heap. */
+      for (uint64_t na = 0; na < m.header->n_cpg; ++na) prob[na] = -1.0f;
       int nc = parse_row(copy, beta, (int)(need_count ? 2 * P : P));
       free(copy);
       if (nc < (int)P) udie("feature row has fewer columns than UPDEC2 expects", input_path);
