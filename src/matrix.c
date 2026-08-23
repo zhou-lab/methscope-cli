@@ -218,7 +218,7 @@ static ms_matrix_t *matrix_build(const char *query_cg, const char *ref_cm,
   free(c_masks); free(mask_names);
   cleanSampleNames2(snames_mask);
   cleanSampleNames2(snames_qry);
-  free(raw_row); free(raw_Ncnt); free(raw_set);
+  free(raw_row); free(raw_Ncnt);   /* raw_set is read by the sort below */
   if (n_cells == 0 || n_raw == 0) mdie("no data produced", query_cg);
 
   /* ---- order columns by numeric pattern id (R parity) ---- */
@@ -231,6 +231,7 @@ static ms_matrix_t *matrix_build(const char *query_cg, const char *ref_cm,
   }
   qsort(ck, n_raw, sizeof(colkey_t),
         set_major ? cmp_colkey_setmajor : cmp_colkey);
+  free(raw_set);
 
   char  **pattern_names = malloc(n_raw * sizeof(char *));
   double *M = malloc(n_cells * n_raw * sizeof(double));

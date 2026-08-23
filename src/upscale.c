@@ -327,10 +327,23 @@ static long run_updec2(const char *path, uint64_t offset, uint64_t length,
 
   long rows = 0;
   if (bundled) {
-    ms_matrix_t *mx = ms_matrix_build(input_path, path);
+    /* SET-MAJOR. A bundled chain mask holds one record per set, each with its
+     * own P1..Pn, so the default numeric-across-records order interleaves them
+     * -- P1(root), P1(root.0.0), ... -- while upscale-featurize concatenated
+     * the training columns set by set. The default order therefore scrambles
+     * every feature past the first set.
+     *
+     * Unconditional: with a single record every column has set 0 and the
+     * set-major comparator falls through to the same (key, idx), so a flat
+     * model is untouched by construction. */
+    ms_matrix_t *mx = ms_matrix_build_sets(input_path, path);
     if (mx->n_patterns < (int)P)
       udie("bundled MRMP produced fewer patterns than UPDEC2 expects", path);
     for (int r = 0; r < mx->n_cells; ++r) {
+      /* NA everywhere first: ms_updec2_forward() writes only the CpGs its units
+       * cover, so a model that does not span the genome would otherwise emit
+       * stale heap as confident predictions. Negative encodes NA in fmt4. */
+      for (uint64_t j = 0; j < m.header->n_cpg; ++j) prob[j] = -1.0f;
       const double *src = mx->M + (size_t)r * mx->n_patterns;
       memcpy(beta, src, (size_t)P * sizeof(*beta));
       if (mx->N) memcpy(count, mx->N + (size_t)r * mx->n_patterns,
