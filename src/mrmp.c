@@ -2095,7 +2095,7 @@ static const char *commafmt_local(uint64_t v, char *buf) {
  * practice: a satellite holding 2-30 patterns is unaffected by a per-set
  * `--top 1000`, so the only cut that means anything is the pooled one, and this
  * is where you see whether a set earns its place or is crowded out. */
-int main_mrmpset_inspect(const char *path) {
+int main_mrmpset_inspect(const char *path, int show_patterns, uint32_t top_k) {
   g_cmd = "inspect";
   ms_mrmpset_t *s = ms_mrmpset_open(path);
 
@@ -2156,6 +2156,16 @@ int main_mrmpset_inspect(const char *path) {
              t->n_samples - 2);
     }
     putchar('\n');
+  }
+
+  if (show_patterns) {
+    printf("\nset\tlabel\tpattern\tcpg_count\n");
+    for (uint32_t i = 0; i < s->n_sets; ++i) {
+      uint32_t lim = top_k < top[i]->n_patterns ? top_k : top[i]->n_patterns;
+      for (uint32_t p = 0; p < lim; ++p)
+        printf("%s\tP%u\t%s\t%llu\n", s->name[i], p + 1,
+               top[i]->binstring[p], (unsigned long long)top[i]->count[p]);
+    }
   }
 
   /* The per-set totals ARE the budget now. There used to be a table here
@@ -2507,13 +2517,20 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
   uint32_t *grp = xcalloc(n, sizeof(uint32_t), "grouping");
   uint32_t ng = tree_partition(seg, n, min_seg, grp);
 
-  /* The threshold only means something against the spread it was drawn from, so
-   * the node reports both. */
-  fprintf(rep, "%s%s%s  n=%-3u %7s pat %9s CpGs   pair seg min %s med %s"
-          "   split > %s -> %u group(s)\n", tty ? "\r\033[K" : "", ind, name, n,
-          commafmt_local(sb.n_pat, b1), commafmt_local(sb.n_kept, b2),
-          commafmt_local(sorted[0], b3), commafmt_local(sorted[npair / 2], b4),
-          commafmt_local(min_seg, b5), ng);
+  /* Report the node's pairwise separation range and the resulting split. */
+  const char *bold = tty ? "\033[1m" : "";
+  const char *cyan = tty ? "\033[36m" : "";
+  const char *yellow = tty ? "\033[33m" : "";
+  const char *reset = tty ? "\033[0m" : "";
+  fprintf(rep, "%s%s%s%s  %u classes | %s patterns | %s CpGs\n",
+          tty ? "\r\033[K" : "", bold, name, reset, n,
+          commafmt_local(sb.n_pat, b1), commafmt_local(sb.n_kept, b2));
+  if (dry)
+    fprintf(rep, "%s  pair separation: min %s, median %s CpGs\n%s",
+            cyan, commafmt_local(sorted[0], b3),
+            commafmt_local(sorted[npair / 2], b4), reset);
+  fprintf(rep, "  split threshold: %s%s%s CpGs -> %u group(s)\n",
+          yellow, commafmt_local(min_seg, b5), reset, ng);
 
   if (dry) {   /* what a threshold is actually chosen from: how the partition
                 * moves as it rises, across this node's own observed pairs */
@@ -2523,8 +2540,10 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
      * regime. */
     static const double QS[] = {0.02, 0.05, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50,
                                0.60, 0.70, 0.80, 0.90, 0.95, 0.98};
-    fprintf(rep, "%s  candidate thresholds:\n%s  %6s %10s %8s %8s\n", ind, ind,
-            "pctile", "T", "groups", "largest");
+    fprintf(rep, "%s%sCandidate split thresholds%s\n", bold, cyan, reset);
+    fprintf(rep, "%s  Lower thresholds make more groups; higher thresholds\n"
+                "%s  merge more classes.\n%s  %10s %10s %8s %13s\n",
+            ind, ind, ind, "percentile", "threshold", "groups", "largest group");
     for (uint32_t q = 0; q < sizeof QS / sizeof *QS; ++q) {
       uint64_t at = (uint64_t)(QS[q] * (double)npair);
       if (at >= npair) at = npair - 1;
@@ -2537,18 +2556,20 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
         for (uint32_t k2 = 0; k2 < n; ++k2) c2 += (g2[k2] == a);
         if (c2 > big) big = c2;
       }
-      fprintf(rep, "%s  %5.0f%% %10s %8u %8u\n", ind, 100.0 * QS[q],
+      fprintf(rep, "%s  %9.0f%% %10s %8u %13u\n", ind, 100.0 * QS[q],
               commafmt_local(t, b1), ng2, big);
       free(g2);
     }
   }
   if (dry) {
     uint32_t show = n < 12 ? npair < 12 ? (uint32_t)npair : 12 : 12;
-    fprintf(rep, "%s  closest pairs:\n", ind);
+    fprintf(rep, "%s%sClosest class pairs by segregating CpGs%s\n"
+                "%s  Smaller values mean weaker separation.\n", bold, cyan, reset,
+            ind);
     for (uint32_t a = 0, k = 0; a < n && k < show; ++a)
       for (uint32_t b = a + 1; b < n && k < show; ++b)
         if (seg[(uint64_t)a * n + b] <= sorted[show - 1]) {
-          fprintf(rep, "%s    %-26s %-26s %9s\n", ind, lab[a], lab[b],
+          fprintf(rep, "%s    %s vs %s: %s CpGs\n", ind, lab[a], lab[b],
                   commafmt_local(seg[(uint64_t)a * n + b], b1));
           ++k;
         }
@@ -2558,8 +2579,10 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
     /* Under --flat this is the ANSWER, not a finding, so do not report 33
      * classes as a failure to split. min_seg == UINT64_MAX only happens there. */
     if (min_seg != UINT64_MAX) {
-      fprintf(rep, "%s  ! unsplittable:", ind);
-      for (uint32_t k = 0; k < n; ++k) fprintf(rep, " %s", lab[k]);
+      const uint32_t show = n < 6 ? n : 6;
+      fprintf(rep, "%s  ! unsplittable (%u classes):", ind, n);
+      for (uint32_t k = 0; k < show; ++k) fprintf(rep, " %s", lab[k]);
+      if (show < n) fprintf(rep, " ... (%u more)", n - show);
       fprintf(rep, "\n");
     }
     /* This is the node satellites are FOR: the classes it carries are the
@@ -2601,9 +2624,9 @@ int main_mrmp_build(int argc, char *argv[]) {
   if (argc == 1) { char *h[2]; h[0] = argv[0]; h[1] = (char *)"-h";
                    (void)main_mrmp_build(2, h); return 1; }
   const char *pos[2] = {NULL, NULL}, *nodedir = NULL, *setname = "root";
-  int npos = 0, force = 0, dry = 0, have_fixed = 0, flat = 0;
+  int npos = 0, force = 0, dry = 0, have_fixed = 1, flat = 0;
   uint32_t sat_n = 0;                /* --satellite-n; 0 = no satellites */
-  uint64_t min_seg = 0; uint32_t max_depth = 16;
+  uint64_t min_seg = 20000; uint32_t max_depth = 16;
   ms_select_opt_t sel; ms_select_defaults(&sel);
   sel.quiet = 1;                     /* one line per node, not per selection */
   mrmp_header_t gh; memset(&gh, 0, sizeof gh);
@@ -2619,12 +2642,11 @@ int main_mrmp_build(int argc, char *argv[]) {
         "parent's wider class set excluded.\n\n"
         "Workflow\n"
         "  methscope mrmp-build --dry-run REF.cg OUT.mrmp\n"
-        "  methscope mrmp-build --min-segregating N REF.cg OUT.mrmp\n\n"
+        "  methscope mrmp-build REF.cg OUT.mrmp\n\n"
         "Tree\n"
-        "  --min-segregating N   Required split threshold, in CpGs. Classes\n"
-        "                        with <= N separating CpGs share a child.\n"
-        "                        Choose N from --dry-run and keep it fixed:\n"
-        "                        each child must clear the same evidence bar.\n"
+        "  --min-segregating N   Split threshold in CpGs. Default: 20000. Classes\n"
+        "                        with <= N separating CpGs share a child. Keep\n"
+        "                        this absolute threshold fixed across the tree.\n"
         "  --flat                Build one MRMP over all classes, without a tree.\n"
         "  --max-depth N         Maximum tree depth. Default: 16.\n"
         "  --dry-run             Report root pair counts and candidate splits.\n"
@@ -2708,19 +2730,8 @@ int main_mrmp_build(int argc, char *argv[]) {
     else die("too many arguments", a);
   }
   if (npos != 2) die("need REF.cg and OUT.mrmp (see mrmp-build -h)", NULL);
-  /* No default: the threshold is the whole design decision, and a magic number
-   * here would be a per-reference guess wearing the costume of a default. */
-  /* --flat is the escape hatch, so the threshold is only required when a tree
-   * is actually being asked for. No default: the threshold IS the design
-   * decision, and a magic number here would be a per-reference guess wearing
-   * the costume of a default. */
-  /* --dry-run is how the threshold gets CHOSEN, so it cannot require one --
-   * demanding the answer before printing the evidence is the wrong way round,
-   * and the help says as much. Without one it sweeps instead. */
-  if (!flat && !dry && !have_fixed)
-    die("give --min-segregating N to split, or --flat for one MRMP over every "
-        "class; --dry-run prints the root's pair distribution to choose from",
-        NULL);
+  /* 20,000 is the current default; --dry-run uses zero only to report the
+   * root distribution without committing to a split threshold. */
   if (dry && !have_fixed) min_seg = 0;
   if (flat) min_seg = UINT64_MAX;   /* nothing can split */
   /* The floor stays OFF by default, including under --flat. It was briefly
@@ -2751,13 +2762,10 @@ int main_mrmp_build(int argc, char *argv[]) {
   if (flat)
     fprintf(stderr, "[methscope] %s: %u classes, one MRMP over all of them "
             "(--flat: a tree of one level)\n", g_cmd, nstore);
-  else if (have_fixed)
+  else
     fprintf(stderr, "[methscope] %s: %u classes, split above %" PRIu64
             " segregating CpGs%s\n", g_cmd, nstore, min_seg,
             dry ? " (dry run)" : "");
-  else
-    fprintf(stderr, "[methscope] %s: %u classes, root pair distribution"
-            "%s\n", g_cmd, nstore, dry ? " (dry run)" : "");
   tree_build(store, slab, voff, idx, nstore, &gh, &sel, setname, min_seg,
              0, max_depth, dry, sat_n, rep == stderr ? tty : 0, &t, rep);
   if (dry) return 0;

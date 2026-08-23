@@ -38,7 +38,7 @@ static int predict_usage(void) {
   ms_help(stderr,
     "\n"
     "Usage:\n"
-    "  methscope classify [options] <query.cg> <model.clfx>\n"
+    "  methscope classify [options] <model.clfx> <query.cg>\n"
     "  methscope classify --data <in.msfm> [options] <model.clfx>\n"
     "\n"
     "Purpose:\n"
@@ -47,45 +47,40 @@ static int predict_usage(void) {
     "  against the MRMP reference and running the booster.\n"
     "\n"
     "Arguments:\n"
-    "  <query.cg>     Query methylome(s); '-' reads a .cg stream from stdin\n"
-    "                 (cells are then named 1,2,3,... as a stream has no index).\n"
     "  <model.clfx>   A self-contained bundle of the model + its MRMP (from\n"
     "                 `classify-train -o model.clfx` or `bundle`) — the recommended\n"
     "                 single-file form.\n"
+    "  <query.cg>     Query methylome(s); '-' reads a .cg stream from stdin\n"
+    "                 (cells are then named 1,2,3,... as a stream has no index).\n"
+    "                 Query records may be YAME format 3 (M/U counts) or\n"
+    "                 format 6 (universe bit plus binary 0/1 call); positions\n"
+    "                 outside the format-6 universe are treated as missing.\n"
     "\n"
     "Options:\n"
-    "  -o <out.tsv>   Write output to a file instead of stdout.\n"
-    "  --framework violation   Score straight off a .mrmp with the violation\n"
-    "                 rule instead of a fitted model: give <query.cg> <ref.mrmp>.\n"
-    "                 The rule is UNFITTED -- a pure function of the artifact and\n"
-    "                 the three knobs below -- so there is nothing to train and\n"
-    "                 nothing worth storing in between.\n"
-    "  --call-threshold t      violation: beta cutoff for calling a pattern (0.5)\n"
-    "  --pattern-weight w      violation: sqrt|log1p|linear|flat (sqrt)\n"
-    "  --min-patterns n        violation: patterns required on each side (20)\n"
-    "  --top K                 violation: patterns to use, by rank (1000)\n"
-    "  --probs        Append one column per class with its predicted probability.\n"
-    "                 NOT available on a routing tree: each node scores its own\n"
-    "                 class subset and a routed cell is scored by several, so\n"
-    "                 there is no one distribution to report. Whether it should\n"
-    "                 be the leaf's, or the product along the path, is undecided.\n"
-    "  --levels       Append the predicted label's whole taxonomy path\n"
-    "                 (compartment, lineage, group, subtype).\n"
-    "  --level NAME   Append just one level -- compartment | lineage | group |\n"
-    "                 subtype. Use this to score against a cohort labelled only\n"
-    "                 that coarsely: collapse the prediction to the level the\n"
-    "                 truth resolves to, and compare there.\n"
-    "                 Both need a model trained with `classify-train --hierarchy`,\n"
-    "                 and report NA for a label the taxonomy omits.\n"
-    "  --no-header    Suppress the header line.\n"
-    "  --threads T    Featurize with T workers (default 1). Cells are partitioned\n"
-    "                 across workers, each seeking its own records, so this needs\n"
-    "                 the query's .cg index; a stream keeps the serial path.\n"
-    "  --data <in.msfm>  Score a prebuilt feature artifact (classify-featurize)\n"
-    "                 instead of featurizing <query.cg>. <query.cg> is then omitted.\n"
-    "                 Featurization dominates the cost, so this is how to score many\n"
-    "                 models on one test set without repeating it.\n"
-    "  -h             Show this help message.\n"
+    "  -o <out.tsv>             Write output to a file instead of stdout.\n"
+    "  --framework violation   Score directly from a .mrmp with the violation\n"
+    "                          rule. Give <query.cg> <ref.mrmp>. The rule is an\n"
+    "                          unfitted function of the artifact and the three\n"
+    "                          options below.\n"
+    "  --call-threshold T      Violation beta cutoff. Default: 0.5.\n"
+    "  --pattern-weight W      Violation weighting: sqrt, log1p, linear, or flat.\n"
+    "                          Default: sqrt.\n"
+    "  --min-patterns N        Patterns required on each side. Default: 20.\n"
+    "  --top K                 Patterns to use by rank. Default: 1000.\n"
+    "  --probs                 Append one predicted-probability column per class.\n"
+    "                          This is unavailable for routing trees because each\n"
+    "                          node scores a different class subset.\n"
+    "  --levels                Append the predicted label's full taxonomy path:\n"
+    "                          compartment, lineage, group, and subtype.\n"
+    "  --level NAME            Append one taxonomy level: compartment, lineage,\n"
+    "                          group, or subtype. Taxonomy options require a model\n"
+    "                          trained with `classify-train --hierarchy`.\n"
+    "  --no-header             Suppress the output header.\n"
+    "  --threads T             Featurize with T workers. Default: 1. Workers seek\n"
+    "                          indexed query records; streams use the serial path.\n"
+    "  --data <in.msfm>        Score prebuilt features from classify-featurize.\n"
+    "                          Omit <query.cg> when this option is used.\n"
+    "  -h                      Show this help message.\n"
     "\n"
     "Output columns:\n"
     "  cell  prediction_label  confidence  certainty  [<class1> ... with --probs]\n"
@@ -683,7 +678,8 @@ int main_predict(int argc, char *argv[]) {
   if (data_path) { if (argc - i != 1) return predict_usage(); }
   else           { if (argc - i != 2) return predict_usage(); }
   if (data_path) --i;                 /* so argv[i+1], argv[i+2] stay the model */
-  const char *query_cg  = data_path ? NULL : argv[i];
+  const char *model_arg = argv[i];
+  const char *query_cg  = data_path ? NULL : argv[i + 1];
   const char *ref_mrmp  = NULL;     /* mrmp path (loose arg, or the bundle path itself) */
   const char *model_name;           /* for error messages */
 
@@ -691,7 +687,7 @@ int main_predict(int argc, char *argv[]) {
    * bundle. Nothing is trained, so there is no model file in between. */
   if (fw_violation) {
     if (argc - i != 2) return predict_usage();
-    const char *art = argv[i + 1];
+    const char *art = argv[i];
     if (!ms_mrmp_is_artifact(art))
       pdie("--framework violation needs the MRMPIDX1 artifact (.mrmp); an "
            "exported .cm has no binstrings to read the rule from", art);
@@ -719,9 +715,9 @@ int main_predict(int argc, char *argv[]) {
   }
 
   {
-    /* bundle form, now the only form: query.cg model.clfx (model + mrmp in one
+    /* bundle form, now the only form: model.clfx query.cg (model + mrmp in one
      * file, so the artifact scoring featurizes against is never in doubt). */
-    model_name = argv[i + 1];
+    model_name = model_arg;
     if (!ms_bundle_is(model_name))
       pdie("expected a .clfx bundle", model_name);
     char *kind = ms_bundle_kind(model_name);      /* framework mark is REQUIRED */

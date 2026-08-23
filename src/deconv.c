@@ -102,12 +102,19 @@ static uint16_t d2_encode(double b) {
 
 /* Class names in FILE order -- a permuted walk would silently relabel every
  * binstring downstream. */
-static char **d2_read_idx(const char *ref, uint32_t *n_out, int64_t **off_out) {
+static char **d2_read_idx(const char *ref, uint32_t *n_out, int64_t **off_out,
+                           int optional) {
   char idx[PATH_MAX];
   if (snprintf(idx, sizeof idx, "%s.idx", ref) >= (int)sizeof idx)
     d2die("reference path too long", ref);
   FILE *f = fopen(idx, "r");
-  if (!f) d2die("cannot open reference index (expected <ref>.idx)", idx);
+  if (!f) {
+    if (optional) {
+      *n_out = 0; *off_out = NULL;
+      return NULL;
+    }
+    d2die("cannot open reference index (expected <ref>.idx)", idx);
+  }
   size_t cap = 64, n = 0;
   char **names = d2alloc(cap, sizeof(char *), "names");
   int64_t *off = d2alloc(cap, sizeof(int64_t), "offsets");
@@ -178,8 +185,10 @@ int main_deconv_build_ref(int argc, char *argv[]) {
 "  condition under EVERY scope, so dropping a row cannot remove a pattern a\n"
 "  later rebuild would have found.\n"
 "\n"
-"  The input must be format-3 (M/U) with one record per cell type and a\n"
-"  matching <celltypes.cg>.idx; index order IS the binstring digit order.\n"
+"  The input must be format-3 (M/U) or format-6 (universe 0/1), with one\n"
+"  record per cell type and a matching <celltypes.cg>.idx; index order IS\n"
+"  the binstring digit order. Format-6 positions outside the universe are\n"
+"  treated as missing.\n"
 "\n"
 "  Options\n"
 "    -o FILE            output .msdref (required)\n"
@@ -209,7 +218,7 @@ int main_deconv_build_ref(int argc, char *argv[]) {
 
   int64_t *voff = NULL;
   uint32_t n_class = 0;
-  char **name = d2_read_idx(ref, &n_class, &voff);
+  char **name = d2_read_idx(ref, &n_class, &voff, 0);
 
   /* Load every class as uint16 betas over the full row space. This is the same
    * 1.94 GB the solver used to carry; it is transient here, and the point of
@@ -231,7 +240,9 @@ int main_deconv_build_ref(int argc, char *argv[]) {
     cdata_t c = read_cdata1(&cf);
     if (!c.n) d2die("store record is empty", name[k]);
     decompress_in_situ(&c);
-    if (c.fmt != '3') d2die("reference must be format-3 (M/U) .cg", name[k]);
+    if (c.fmt != '3' && c.fmt != '6')
+      d2die("reference must be format-3 (M/U) or format-6 (universe 0/1) .cg",
+            name[k]);
     if (!k) {
       n_row = c.n;
       beta = d2alloc((size_t)n_class * n_row, sizeof(uint16_t), "betas");
@@ -243,7 +254,9 @@ int main_deconv_build_ref(int argc, char *argv[]) {
     uint16_t *row = beta + (size_t)k * n_row;
     uint16_t *mrow = mup + (size_t)k * n_row;
     for (uint64_t r = 0; r < n_row; ++r) {
-      uint64_t mu = f3_get_mu(&c, r);
+      uint64_t mu = c.fmt == '3' ? f3_get_mu(&c, r)
+                     : (FMT6_IN_UNI(c, r) ?
+                         (FMT6_IN_SET(c, r) ? (1ull << 32) : 1ull) : 0);
       if (!mu || MU2cov(mu) < mincov) continue;
       row[r] = d2_encode(MU2beta(mu));
       uint64_t m = mu >> 32, u = mu & 0xffffffffu, mx = m > u ? m : u;
@@ -484,7 +497,10 @@ static void d2q_load(const d2ref_t *R, const cdata_t *c, d2q_t *Q) {
   memset(Q->mask, 0, Q->nw * sizeof(uint64_t));
   Q->n = 0;
   for (uint64_t j = 0; j < R->n_keep; ++j) {
-    uint64_t mu = f3_get_mu((cdata_t *)c, R->row[j]);
+    uint64_t mu = c->fmt == '3' ? f3_get_mu((cdata_t *)c, R->row[j])
+                   : (FMT6_IN_UNI(*c, R->row[j]) ?
+                       (FMT6_IN_SET(*c, R->row[j]) ? (1ull << 32) : 1ull)
+                       : 0);
     if (!mu || !MU2cov(mu)) continue;
     Q->mask[j >> 6] |= 1ull << (j & 63);
     Q->qb[j] = d2_encode(MU2beta(mu));
@@ -1514,7 +1530,9 @@ static void *d2_worker(void *arg) {
     cdata_t c = read_cdata1(&qf);
     if (!c.n) break;
     decompress_in_situ(&c);
-    if (c.fmt != '3') d2die("query must be format-3 (M/U) .cg", J->qpath);
+    if (c.fmt != '3' && c.fmt != '6')
+    d2die("query must be format-3 (M/U) or format-6 (universe 0/1) .cg",
+          J->qpath);
     if (c.n != J->R->n_row)
       d2die("query and reference disagree on the CpG row space", J->qpath);
     d2_record(J->R, J->o, &ws, &c, rec, J->qname, J->n_qname,
@@ -1637,7 +1655,7 @@ int main_deconv(int argc, char *argv[]) {
     else if (!strcmp(a, "-v") || !strcmp(a, "--verbose")) verbose = 1;
     else if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       printf(
-"Usage: methscope deconv [options] <query.cg> <ref.msdref> -o <out.tsv>\n"
+"Usage: methscope deconv [options] <ref.msdref> <query.cg> -o <out.tsv>\n"
 "\n"
 "  Deconvolve each query record against a .msdref reference, over a global\n"
 "  flat MRMP rebuilt per query from the CpGs THAT QUERY MEASURED.\n"
@@ -1745,17 +1763,17 @@ int main_deconv(int argc, char *argv[]) {
   }
   if (argc - i != 2) {
     fprintf(stderr,
-      "Usage: methscope deconv <query.cg> <ref.msdref> -o <out.tsv>\n");
+      "Usage: methscope deconv <ref.msdref> <query.cg> -o <out.tsv>\n");
     return 1;
   }
-  const char *qpath = argv[i], *rpath = argv[i + 1];
+  const char *rpath = argv[i], *qpath = argv[i + 1];
 
   d2ref_t R;
   d2ref_load(rpath, &R);
 
   uint32_t n_qname = 0;
   int64_t *qoff = NULL;
-  char **qname = d2_read_idx(qpath, &n_qname, &qoff);
+  char **qname = d2_read_idx(qpath, &n_qname, &qoff, 1);
 
   FILE *out = out_path ? fopen(out_path, "w") : stdout;
   if (!out) d2die("cannot open output", out_path);
@@ -1824,7 +1842,9 @@ int main_deconv(int argc, char *argv[]) {
     cdata_t c = read_cdata1(&qf);
     if (!c.n) break;
     decompress_in_situ(&c);
-    if (c.fmt != '3') d2die("query must be format-3 (M/U) .cg", qpath);
+    if (c.fmt != '3' && c.fmt != '6')
+      d2die("query must be format-3 (M/U) or format-6 (universe 0/1) .cg",
+            qpath);
     if (c.n != R.n_row)
       d2die("query and reference disagree on the CpG row space", qpath);
 

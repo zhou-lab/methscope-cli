@@ -37,7 +37,7 @@ requested file, so fetching also composes when a script wants a path:
 mkdir -p ~/tmp/methscope && cd ~/tmp/methscope
 export METHSCOPE_DATA_DIR="."          # fetch into the working directory
 methscope fetch hg38_celltype.ubjx human_hg38_celltypes.cg
-methscope classify human_hg38_celltypes.cg hg38_celltype.ubjx
+methscope classify hg38_celltype.clfx human_hg38_celltypes.cg
 ```
 
 It is idempotent — the first run downloads, every run after just resolves the

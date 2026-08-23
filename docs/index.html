@@ -330,6 +330,15 @@ content_checksum     9e7f6d292a2ba946</code></pre>
 1111101111111111111111111111111111111111   P3      22839
 1111111101111111111111111111111111111111   P4      11536
 1111111111111011111111111111111111111111   P5       7027</code></pre>
+  <p>For a multi-set routing tree, <code class="inl">--tree</code> shows each MRMP
+    node and the classes it decides. It works on the tree bundle written by
+    <code class="inl">mrmp-build</code>.</p>
+  <pre><code>methscope <span class="sub">inspect</span> chr20_40celltypes.mrmp --tree</code></pre>
+  <pre class="res"><code>tree  chr20_40celltypes.mrmp
+root        40 classes
+  root.0     6 classes
+  root.1    34 classes
+    ...</code></pre>
 </section>
 
 <section class="card">
@@ -379,8 +388,8 @@ mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 <span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
 yame fetch -c hg38/data/human_hg38_celltypes.cg
-yame fetch -c hg38/models/hg38_celltype.ubjx
-methscope <span class="sub">classify</span> human_hg38_celltypes.cg hg38_celltype.ubjx</code></pre>
+yame fetch -c hg38/models/hg38_celltype.clfx
+methscope <span class="sub">classify</span> hg38_celltype.clfx human_hg38_celltypes.cg</code></pre>
   <pre class="res"><code>cell             prediction_label  confidence
 Oligodendrocyte  ODC               0.915134   # oligodendrocyte
 Pancreas-Beta    Beta              0.930708   # islet beta
@@ -393,8 +402,8 @@ Blood-Monocytes  Mono              0.835970   # monocyte</code></pre>
 
 <section class="card">
   <h2>Inspect a bundle <span class="m">— look inside without running it</span></h2>
-  <pre><code>yame fetch -c hg38/models/hg38_sex.ubjx
-methscope <span class="sub">inspect</span> hg38_sex.ubjx</code></pre>
+  <pre><code>yame fetch -c hg38/models/hg38_sex.clfx
+methscope <span class="sub">inspect</span> hg38_sex.clfx</code></pre>
   <pre class="res"><code>container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 30,931 bytes
 
     #  section         offset         size  content
@@ -411,7 +420,7 @@ methscope <span class="sub">inspect</span> hg38_sex.ubjx</code></pre>
         Xa_lo        weight=-13.9125     mean=0.24253
         Xa_hi        weight=13.6301      mean=0.752643</code></pre>
   <figure class="dia">
-<pre><span class="c">hg38_celltype.ubjx · 24.5 MB · 62 human cell types</span>
+<pre><span class="c">hg38_celltype.clfx · 24.5 MB · 62 human cell types</span>
 
 <span class="k">mrmp</span>    fmt2 MRMP definition — the feature set the model was fit on
 <span class="k">kind</span>    framework mark: xgboost | logistic | threshold
@@ -433,7 +442,7 @@ methscope <span class="sub">inspect</span> hg38_sex.ubjx</code></pre>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
-methscope <span class="sub">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20.mrmp
+methscope <span class="sub">mrmp-build</span> --flat human_hg38_40_celltypes_chr20.cg chr20.mrmp
 methscope <span class="sub">mrmp-export</span> --top 1000 chr20.mrmp chr20.cm
 cut -f1 human_hg38_40_celltypes_chr20.cg.idx | sed &#x27;s/^GSM[0-9]*_//; s/-Z[0-9A-Z]*$//&#x27; | sed -E &#x27;s/.*Endothel.*|.*Endothelium.*/Endothelial/; s/.*Epithelial.*|.*Keratinocytes.*|.*Podocytes.*/Epithelial/; s/^Blood-.*|.*Macrophages.*/Immune/; s/.*Smooth-Muscle.*|Skeletal-Muscle|.*Cardiomyocyte.*/Muscle/; s/^Neuron$|.*Oligodendrocytes.*/Neural/; s/.*Fibroblasts.*|Adipocytes|Lung-Pleura/Mesenchymal/; s/^(Liver-Hepatocytes|Pancreas-Acinar|Pancreas-Beta)$/Secretory/&#x27; &gt; labels.txt</code></pre>
   <p>Features + labels &rarr; one runnable bundle, in a single step (the positional takes the
@@ -442,7 +451,7 @@ cut -f1 human_hg38_40_celltypes_chr20.cg.idx | sed &#x27;s/^GSM[0-9]*_//; s/-Z[0
   <pre class="res"><code>trained 7-class xgboost model on 40 cells x 1000 feature(s), 6 rounds
   -> chr20_lineage.ubjx (booster+MRMP bundle)</code></pre>
   <p><code class="inl">--framework xgboost | logistic | threshold</code>.</p>
-  <pre><code>methscope <span class="sub">classify</span> human_hg38_40_celltypes_chr20.cg chr20_lineage.ubjx</code></pre>
+  <pre><code>methscope <span class="sub">classify</span> chr20_lineage.ubjx human_hg38_40_celltypes_chr20.cg</code></pre>
   <pre class="res"><code>cell                                          prediction_label  confidence
 GSM5652176_Adipocytes-Z000000T7               Mesenchymal       0.229483
 GSM5652181_Saphenous-Vein-Endothel-Z000000RM  Endothelial       0.377817
@@ -472,28 +481,26 @@ methscope <span class="sub">bundle</span> -m chr20_lineage.mrmp -k xgboost -o re
   <pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
-<span class="cm"># a whole-body mixture vs the shipped 65-type reference</span>
+<span class="cm"># a whole-body mixture vs the shipped 33-type reference</span>
 yame fetch -c hg38/data/human_hg38_immune_mixture.cg
-yame fetch -c hg38/models/hg38_65celltypes.refx
-methscope <span class="sub">deconv</span> human_hg38_immune_mixture.cg hg38_65celltypes.refx</code></pre>
+yame fetch -c hg38/models/hg38_33celltypes.msdref
+methscope <span class="sub">deconv</span> hg38_33celltypes.msdref human_hg38_immune_mixture.cg</code></pre>
   <pre class="res"><code>cell  … Macrophage  Mono    NK_CD56  …
 1     … 0.7486      0.2370  0.0000   …</code></pre>
-  <p class="note">Truth 70/30; the other 63 types come back ~0. The 65-type reference spans 58
-    Zhou single-cell + 7 Loyfer organ/blood types for whole-body / cfDNA deconvolution.</p>
+  <p class="note">Truth 70/30; the other 31 types come back ~0. The 33-type reference is
+    pooled from donor-resolved normal WGBS for whole-body / cfDNA deconvolution.</p>
 </section>
 
 <section class="card">
-  <h2>Build your own .refx <span class="m">— a per-cell panel</span></h2>
+  <h2>Build your own .msdref <span class="m">— a per-cell panel</span></h2>
   <p>Per-cell panel, so each cell must deconvolve to itself.</p>
   <pre><code>yame fetch -c hg38/data/human_hg38_celltypes.cg
-yame fetch -c hg38/models/hg38_celltype.ubjx
-methscope <span class="sub">deconv-build-ref</span> -o self.refx human_hg38_celltypes.cg hg38_celltype.ubjx
-methscope <span class="sub">deconv</span> human_hg38_celltypes.cg self.refx</code></pre>
+yame fetch -c hg38/models/hg38_celltype.clfx
+methscope <span class="sub">deconv-build-ref</span> -o self.msdref human_hg38_celltypes.cg
+methscope <span class="sub">deconv</span> self.msdref human_hg38_celltypes.cg</code></pre>
   <pre class="res"><code># Oligodendrocyte  Oligodendrocyte=100%
 # Pancreas-Beta    Pancreas-Beta=100%    ... (each 100% itself)</code></pre>
-  <p><code class="inl">--matrix</code> emits the raw record x pattern beta TSV instead of a
-    <code class="inl">.refx</code>.</p>
-  <pre><code>methscope <span class="sub">deconv-build-ref</span> --matrix query.cg 2025_Zhou_MajorPseudo.mrmp</code></pre>
+
 </section>
 
 </div>
@@ -585,13 +592,13 @@ mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 <span class="cm"># the whole pipeline from scratch, on the 40-cell-type chr20 reference
 # 1. define the features</span>
 yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
-methscope <span class="sub">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20.mrmp</code></pre>
+methscope <span class="sub">mrmp-build</span> --flat human_hg38_40_celltypes_chr20.cg chr20.mrmp</code></pre>
   <pre class="res"><code>samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450</code></pre>
   <pre><code><span class="cm"># 2. featurize the truth atlas -> sampling/truth msur</span>
 methscope <span class="sub">upscale-featurize</span> --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></code></pre>
   <pre class="res"><code>wrote chr20.msur and chr20.msur.tsv   # 40 cells x 20 reps, 91 MB</code></pre>
   <pre><code><span class="cm"># 3. group CpGs into processing units</span>
-methscope <span class="sub">upscale-set-units</span> --unit-cpgs 4096 chr20.mrmp <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></code></pre>
+methscope <span class="sub">upscale-set-units</span> --unit-cpgs 4096 human_hg38_40_celltypes_chr20.cg <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></code></pre>
   <pre class="res"><code>units=109 pure=13 mixed=67 PNA=29 oversized=7
 unit CpGs min=1380 mean=7096.1 max=261816</code></pre>
   <p><code class="inl">inspect</code> reads every build artifact, detected from its magic.</p>

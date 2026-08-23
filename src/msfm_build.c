@@ -197,14 +197,17 @@ static void *worker(void *arg) {
     if (!c.n) bdie("short read on query record", J->query);
     decompress_in_situ(&c);
     TOCK(t_io);
-    if (c.fmt != '3' || c.n != J->n_cpg)
-      bdie("query record is not format 3 over the reference CpG set", J->query);
+    if ((c.fmt != '3' && c.fmt != '6') || c.n != J->n_cpg)
+      bdie("query record is not format 3 or 6 over the reference CpG set", J->query);
 
     /* Covered CpGs, once per cell: every replicate samples from this list. */
     TICK();
     uint32_t ne = 0;
     for (uint64_t i = 0; i < J->n_cpg; ++i) {
-      if (!f3_get_mu(&c, i)) continue;
+      uint64_t mu = c.fmt == '3' ? f3_get_mu(&c, i)
+                     : (FMT6_IN_UNI(c, i) ? (FMT6_IN_SET(c, i) ?
+                         (1ull << 32) : 1ull) : 0);
+      if (!mu) continue;
       if (ne == elig_cap) {
         elig_cap <<= 1;
         elig = realloc(elig, (size_t)elig_cap * 4);
@@ -234,7 +237,9 @@ static void *worker(void *arg) {
       memset(cnt, 0, (size_t)J->ncol * 4);
       for (uint32_t k = 0; k < want; ++k) {
         uint64_t pos = elig[k];
-        double b = MU2beta(f3_get_mu(&c, pos));
+        uint64_t mu = c.fmt == '3' ? f3_get_mu(&c, pos)
+                       : (FMT6_IN_SET(c, pos) ? (1ull << 32) : 1ull);
+        double b = MU2beta(mu);
         /* One read at this CpG: the call is 0 or 1, never a fraction. */
         if (J->binarize) b = rng_01(&rng) < b ? 1.0 : 0.0;
         for (uint32_t e = J->cpg_off[pos]; e < J->cpg_off[pos + 1]; ++e) {
@@ -555,7 +560,8 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   if (!c0.n) bdie("query is empty", query);
   decompress_in_situ(&c0);
   uint64_t n_cpg = c0.n;
-  if (c0.fmt != '3') bdie("query must be format 3 (M/U counts)", query);
+  if (c0.fmt != '3' && c0.fmt != '6')
+    bdie("query must be format 3 (M/U) or format 6 (universe 0/1)", query);
   free_cdata(&c0);
   bgzf_close(cf0.fh);
 

@@ -229,7 +229,8 @@ int main_mrmp_inspect(int argc, char *argv[]);
 /* Pool sets into one chain AND cut to a shared column budget. Concatenation
  * alone is just `cat`; this is the step that selects. */
 int main_mrmp_pool(int argc, char *argv[]);
-int main_mrmpset_inspect(const char *path);   /* the MRMPIDX1 arm of `inspect` */
+int main_mrmpset_inspect(const char *path, int show_patterns,
+                         uint32_t top_k);       /* the MRMPIDX1 arm of `inspect` */
 
 /* The artifact is the build pipeline's currency: `upscale-featurize`,
  * `upscale-set-units`, and `upscale-train` all read it, so the per-CpG mask and

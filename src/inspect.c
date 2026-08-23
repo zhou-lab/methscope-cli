@@ -331,8 +331,14 @@ int main_inspect(int argc, char *argv[]) {
   }
   /* The first bare argument is the file; --top takes a value, so skip its. */
   const char *path = NULL;
-  int want_tree = 0;
-  for (int i = 1; i < argc; ++i) if (!strcmp(argv[i], "--tree")) want_tree = 1;
+  int want_tree = 0, show_patterns = 0;
+  uint32_t top_k = 20;
+  for (int i = 1; i < argc; ++i) {
+    if (!strcmp(argv[i], "--tree")) want_tree = 1;
+    else if (!strcmp(argv[i], "--patterns")) show_patterns = 1;
+    else if (!strcmp(argv[i], "--top") && i + 1 < argc)
+      top_k = (uint32_t)strtoul(argv[++i], NULL, 10);
+  }
   for (int i = 1; i < argc && !path; ++i)
     if (argv[i][0] != '-' && (i == 1 || strcmp(argv[i - 1], "--top")))
       path = argv[i];
@@ -357,7 +363,8 @@ int main_inspect(int argc, char *argv[]) {
     ms_mrmpset_t *s = ms_mrmpset_open(path);
     uint32_t n = s->n_sets;
     ms_mrmpset_free(s);
-    return n > 1 ? main_mrmpset_inspect(path) : main_mrmp_inspect(argc, argv);
+    return n > 1 ? main_mrmpset_inspect(path, show_patterns, top_k)
+                  : main_mrmp_inspect(argc, argv);
   }
   if (!memcmp(magic, "MSUIDX1", 7)) { ms_msui_report(path); return 0; }
   if (!memcmp(magic, "MSURAW2", 7) || !memcmp(magic, "MSURAW3", 7)) { ms_msur_report(path); return 0; }
@@ -377,9 +384,27 @@ bundle_report:;
     int nsec = 0;
     ms_bundle_entry_t *secs = ms_bundle_list(path, &nsec);
     ms_mrmpset_t *ch = ms_mrmpset_open(path);
-    printf("\nTREE  %s\n", path);
-    printf("  %-14s %u node(s) over a %u-set chain\n", "format", nsec - 2,
+    printf("\ncontainer  MSBNDL1 (MethScope BuNDLe v1) - %d sections\n\n", nsec);
+    printf("  tree     %s\n", path);
+    printf("  %-14s %u node(s) over a %u-set chain\n\n", "format", nsec - 2,
            ch->n_sets);
+    printf("  %3s  %-15s  %11s  %11s  %s\n", "#", "section", "offset",
+           "size", "content");
+    printf("  ---  ---------------  -----------  -----------  "
+           "--------------------------------\n");
+    uint64_t booster_bytes = 0;
+    for (int i = 2; i < nsec; ++i) booster_bytes += secs[i].length;
+    char ob[32], sb[32];
+    printf("  %3d  %-15s  %11s  %11s  %s\n", 0, "mrmp",
+           commafmt(secs[0].offset, ob), commafmt(secs[0].length, sb),
+           "MRMP chain (MRMPIDX1)");
+    printf("  %3d  %-15s  %11s  %11s  %s\n", 1, "kind",
+           commafmt(secs[1].offset, ob), commafmt(secs[1].length, sb),
+           "\\\"tree\\\" framework mark");
+    printf("  %3s  %-15s  %11s  %11s  %s\n", "2-", "booster chain",
+           commafmt(secs[2].offset, ob), commafmt(booster_bytes, sb),
+           "xgboost boosters for tree nodes");
+    printf("\n  Node details\n");
     /* Soft children (satellites) are sets of this chain but carry no booster
      * -- listing them here with a blank model and a parent derived by the
      * DOTTED rule printed "root.0" for a child of root.0.0, which is simply
@@ -419,7 +444,7 @@ bundle_report:;
       printf("\n  %u soft child(ren) lend columns to a node's booster and carry\n"
              "  no model of their own; `inspect --tree` shows them in place.\n",
              nsoft);
-    printf("\n  Score with: methscope classify query.cg %s\n\n", path);
+    printf("\n  Score with: methscope classify %s query.cg\n\n", path);
     ms_mrmpset_free(ch); free(secs); free(kind);
     return 0;
   }
@@ -527,11 +552,13 @@ bundle_report:;
   char cb[32];
   printf("container  MSBNDL1 (MethScope BuNDLe v1) - %d sections, %s bytes\n\n",
          nsec, commafmt(total, cb));
+  printf("  bundle     %s\n\n", path);
 
   /* ---- section list ---- */
-  printf("  %3s  %-9s  %11s  %11s  %s\n", "#", "section", "offset", "size", "content");
-  printf("  ---  ---------  -----------  -----------  "
-         "------------------------------------------------\n");
+  printf("  %3s  %-15s  %11s  %11s  %s\n", "#", "section", "offset",
+         "size", "content");
+  printf("  ---  ---------------  -----------  -----------  "
+         "--------------------------------\n");
   for (int i = 0; i < nsec; ++i) {
     char cbuf[176]; const char *c = "";
     if      (strcmp(secs[i].name, "model")     == 0) c = mdesc;
@@ -549,7 +576,7 @@ bundle_report:;
       snprintf(cbuf, sizeof cbuf, "\"%s\" framework mark", kind ? kind : ""); c = cbuf;
     }
     char ob[32], sb[32];
-    printf("  %3d  %-9s  %11s  %11s  %s\n", i, secs[i].name,
+    printf("  %3d  %-15s  %11s  %11s  %s\n", i, secs[i].name,
            commafmt(secs[i].offset, ob), commafmt(secs[i].length, sb), c);
   }
 
