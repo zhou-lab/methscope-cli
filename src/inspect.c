@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include "methscope.h"
 #include "msfm.h"
 #include "mrmp.h"
@@ -27,6 +28,42 @@ static void idie(const char *msg, const char *arg) {
   if (arg) fprintf(stderr, "[methscope] inspect: %s: %s\n", msg, arg);
   else     fprintf(stderr, "[methscope] inspect: %s\n", msg);
   exit(1);
+}
+
+static const char *commafmt(unsigned long long v, char *buf);
+
+/* Standalone deconvolution reference. Kept here rather than importing
+ * deconv.c's private reader: inspect needs only the fixed 64-byte header. */
+#define MSDREF_MAGIC "MSDREF1"
+typedef struct __attribute__((packed)) {
+  char magic[8];
+  uint32_t version, n_class;
+  uint64_t n_row, n_keep;
+  double qlo, qhi, beta_thr;
+  uint32_t mincov, reserved;
+} msdref_header_t;
+
+static int inspect_msdref(const char *path) {
+  msdref_header_t h;
+  struct stat st;
+  int fd = open(path, O_RDONLY);
+  if (fd < 0) idie("cannot open", path);
+  ssize_t got = read(fd, &h, sizeof h);
+  if (fstat(fd, &st) || close(fd)) idie("cannot stat", path);
+  if (got != (ssize_t)sizeof h || memcmp(h.magic, MSDREF_MAGIC, 7) ||
+      (h.version != 1 && h.version != 2) || !h.n_class || !h.n_keep ||
+      h.n_keep > h.n_row)
+    idie("invalid .msdref header", path);
+  char rows[32], kept[32], bytes[32];
+  printf("deconvolution reference  MSDREF1/v%u, %s bytes\n\n",
+         h.version, commafmt((unsigned long long)st.st_size, bytes));
+  printf("  %-12s %u\n", "cell types", h.n_class);
+  printf("  %-12s %s\n", "CpGs kept", commafmt(h.n_keep, kept));
+  printf("  %-12s %s\n", "CpG row space", commafmt(h.n_row, rows));
+  printf("  %-12s %.2f,%.2f\n", "qfilter", h.qlo, h.qhi);
+  printf("  %-12s %.2f\n", "beta cut", h.beta_thr);
+  printf("  %-12s %u\n", "min coverage", h.mincov);
+  return 0;
 }
 
 static int inspect_usage(void) {
@@ -43,6 +80,7 @@ static int inspect_usage(void) {
     "    .msui   MSUIDX1   processing-unit index: units, memberships, CpG split\n"
     "    .msur   MSURAW2/3 training msur: cells, replicates, embedded truth\n"
     "    .msfm   MSFMAT1   feature matrix: records, patterns, labels, coverage\n"
+    "    .msdref MSDREF1   deconvolution reference: cell types and CpG rows\n"
     "\n"
     "Options:\n"
     "  --tree       render an mrmp-tree: its nodes, and which class each one\n"
@@ -323,11 +361,12 @@ int main_inspect(int argc, char *argv[]) {
   }
   if (!memcmp(magic, "MSUIDX1", 7)) { ms_msui_report(path); return 0; }
   if (!memcmp(magic, "MSURAW2", 7) || !memcmp(magic, "MSURAW3", 7)) { ms_msur_report(path); return 0; }
+  if (!memcmp(magic, MSDREF_MAGIC, 7)) return inspect_msdref(path);
   if (!memcmp(magic, "MSFMAT1", 7)) { ms_msfm_report(path); return 0; }
 
   if (argc != 2) return inspect_usage();
   if (!ms_bundle_is(path))
-    idie("not a methscope bundle, .mrmp, .msui, or .msur", path);
+    idie("not a methscope bundle, .mrmp, .msui, .msur, or .msdref", path);
 bundle_report:;
 
   char  *kind = ms_bundle_kind(path);               /* NULL if unmarked */
