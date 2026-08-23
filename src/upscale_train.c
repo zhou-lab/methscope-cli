@@ -115,7 +115,7 @@ static void ensure_dir(const char *path) {
 
 int main_upscale_train(int argc, char **argv) {
   const char *data = NULL, *index = NULL, *mrmp = NULL, *out = NULL, *work = NULL;
-  int force = 0, dry = 0, force_cpu = 0;
+  int force = 0, dry = 0, force_cpu = 0, device_named = 0;
   ms_upunit_config_t c;
   memset(&c, 0, sizeof(c));
   c.pure_bottleneck = 16; c.mixed_bottleneck = 32;
@@ -169,7 +169,7 @@ int main_upscale_train(int argc, char **argv) {
     else if (!strcmp(a, "--device") && i + 1 < argc) {
       const char *x = argv[++i];
       if (!strcmp(x, "cpu")) force_cpu = 1;
-      else c.device = (int)u32(x, a);
+      else { c.device = (int)u32(x, a); device_named = 1; }
     }
     else if (!strcmp(a, "--threads") && i + 1 < argc) c.threads = u32(argv[++i], a);
     else if (!strcmp(a, "--split") && i + 1 < argc) c.split_path = argv[++i];
@@ -214,6 +214,20 @@ int main_upscale_train(int argc, char **argv) {
     c.min_steps, c.max_steps, c.eval_every, c.patience, c.batch, c.seed,
     c.split_path ? c.split_path : "seeded 70/15/15");
   if (c.split_path) ms_upsplit_check("upscale-train", data, c.split_path);
+  /* Naming a numbered device is a REQUEST for that device, so falling back to
+   * the CPU behind the caller's back is wrong: the run then looks healthy and
+   * takes weeks. Silence here cost a relaunch when a plain `make` overwrote the
+   * `make CUDA=1` binary at the same path -- the job logged backend=cpu,
+   * threads=1 and would have run for months. Only a bare invocation (no
+   * --device) may fall back, since that caller expressed no preference.
+   *
+   * Checked BEFORE the --dry-run return, because a dry run is precisely where
+   * a caller wants to learn that this binary cannot honour --device 0. */
+  if ((force_cpu || !ms_upunit_cuda_available()) && device_named)
+    terr(ms_upunit_cuda_available()
+         ? "--device N names a CUDA device but no device answered"
+         : "--device N names a CUDA device but this binary has no CUDA backend "
+           "(rebuild with make CUDA=1, or pass --device cpu)", NULL);
   if (dry) {
     fprintf(stderr, "[methscope] upscale-train: dry run complete\n");
     return 0;
