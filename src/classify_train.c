@@ -14,7 +14,9 @@
 #include <string.h>
 #include <math.h>
 #include <unistd.h>
+#ifdef __linux__
 #include <sched.h>
+#endif
 #include "methscope.h"
 #include "bmeta.h"
 #include "bundle.h"    /* ms_mrmp_resolve / ms_bundle_pack / ms_path_is_bundle_ext */
@@ -830,10 +832,12 @@ int main_train(int argc, char *argv[]) {
       const char *e = getenv("SLURM_CPUS_PER_TASK");
       if (e && *e) nt = atoi(e);
     }
+#ifdef __linux__
     if (nt <= 0) {
       cpu_set_t set;
       if (sched_getaffinity(0, sizeof(set), &set) == 0) nt = CPU_COUNT(&set);
     }
+#endif
     if (nt <= 0) nt = (int)sysconf(_SC_NPROCESSORS_ONLN);
     if (nt > 0) {
       char tbuf[16]; snprintf(tbuf, sizeof(tbuf), "%d", nt);
