@@ -184,107 +184,105 @@ Output columns:
 
 ### methscope deconv
 
-Usage: methscope deconv [options] <ref.msdref> <query.cg> -o <out.tsv>
+Usage:
+  methscope deconv [options] <ref.msdref> <query.cg>
 
-  Deconvolve each query record against a .msdref reference, over a global
-  flat MRMP rebuilt per query from the CpGs THAT QUERY MEASURED.
+Purpose:
+  Estimate the cell-type composition of each query record by non-negative
+  least squares against a .msdref reference. The pattern set is rebuilt per
+  query from the CpGs that query actually measured, so no pattern budget is
+  baked in and a sparse query is scored on its own evidence.
 
-  The measured-row restriction happens first and is structural: a pattern's
-  reference beta and its observed beta are means over the same CpGs, so the
-  two sides of each equation are comparable and the CpG count that sets the
-  row weight is the honest support of both.
+Arguments:
+  <ref.msdref>   Deconvolution reference from `deconv-build-ref`. Its index
+                 order is the binstring digit order.
+  <query.cg>     Query methylome(s), YAME format 3 (M/U counts) or format 6
+                 (universe bit plus binary call). Record names come from
+                 <query.cg>.idx; without one they are 1,2,3,...
 
-  Options
-    -o FILE        output TSV, one row per query record (default stdout)
-    --delta-mean-top N  per BINSTRING keep only the N measured CpGs with the
-                   cleanest class gap (default 0 = keep all; fewer
-                   than N when the q-filter admits fewer). Bounds a
-                   pattern's influence, which is linear in its CpG count,
-                   and improves the pattern: its beta then averages its best
-                   separators rather than everything admissible.
-    --max-segregating N  two classes separated by <= N MEASURED CpGs are
-                   inseparable for this query, so if either carries mass
-                   both enter the scope; the relation is closed, making the
-                   scope a union of connected components. ABSOLUTE, because
-                   an absolute CpG count is what reaches the solve.
-                   Default 200: the global panel offers ~17 CpGs for
-                   CD4 vs CD8 on a 2^20 immune mixture, where the pair
-                   itself holds 217.
-    --mass-floor F  a class seeds the scope at >= F (default 0.005). Not 0:
-                   NNLS hands out arbitrary exact zeros among collinear
-                   columns.
-    --nthreads N   deconvolve N records in parallel (default 1; --threads
-                   is an alias). The
-                   reference is shared, so memory grows by the per-thread
-                   workspace (~16 MB) rather than linearly. Needs a
-                   <query>.idx to seek by; -v, --panel-out and --scope-out
-                   force a single thread so their output stays coherent.
-    --global-ref   compute each pattern's REFERENCE profile over every
-                   reference CpG carrying that binstring, not just the ones
-                   this query measured. n and qsum stay measured-only. Noise
-                   in the design matrix attenuates coefficients toward zero,
-                   so a noisier column loses mass to a cleaner correlated
-                   one. The retired .refx reference had no such noise, its
-                   design values having been computed once at build time.
-                   Costs a second pass over the kept rows.
-    --rescue-below N  a pair the rebuilt panel separates by fewer than N
-                   measured CpGs is WEAK; the panel is then rebuilt so that a
-                   CpG splitting a weak pair is admitted under a wider rule
-                   for the other classes (default 2000; 0 = off). Those CpGs are
-                   normally lost to a THIRD class sitting in the ambiguous
-                   band, not to any doubt about the pair itself: at 2^22
-                   T.Cell.CD4|T.Cell.CD8 holds 948 measured CpGs and a
-                   6-class conjunction admits 419. Every class still gets a
-                   digit, so this stays ONE MRMP set with full context.
-    --rescue-gap G  rescue on |beta_a - beta_b| >= G instead of on the band,
-                   and exempt the pair's own classes from it. The gap is what
-                   the solve uses -- two classes separate when their profile
-                   means differ, not when their digits do -- so a CpG at CD4
-                   0.10 / CD8 0.50 counts, where the band discards it for
-                   calling 0.50 no-call. Default 0.20; 0 = use the band rule.
-    --rescue-target N  fit EACH weak pair its own gap threshold, loosening
-                   until it has N measured CpGs or the floor is hit (default
-                   0 = use the flat --rescue-gap). Pairs respond very
-                   differently to loosening -- Macrophage|Monocyte gains 5.6x
-                   where T.Cell.CD4|T.Cell.CD8 gains 1.9x -- so one threshold
-                   over-relaxes the easy pairs before the starved ones have
-                   enough. Read off a per-pair gap histogram in one pass.
-    --rescue-floor G  never relax a pair past this gap (default 0.15), so a
-                   pair with no real evidence cannot admit noise.
-    --rescue-min-depth N  require N reads on BOTH classes of the pair before
-                   its gap is believed (default 10; 0 = off. Needs a v2 .msdref,
-                   which carries M/U rather than a bare beta). The other
-                   classes carry no depth requirement -- they are context.
-                   Default 10; 0 = off. Inactive on a v1 reference.
-    --rescue-qfilter LO,HI  the wider band (default 0.40,0.60)
-    --no-narrow    skip the rebuild rounds and fit the global panel over
-                   every class
-    --max-round N  cap on rebuild rounds (default 8); it stops early
-                   when the class set stops changing
-    --scope-out F  write the settled scope, 1/0 per class per record
-    --weight-exponent E  row weight is n^E (default 0.5 = sqrt(n), the
-                   precision weight). The solve squares it, so influence is
-                   n^2E. --unweighted is E = 0; both measured WORSE than the
-                   default at every rung.
-    --force-scope C[,C..]  use exactly these classes, skipping discovery. A
-                   diagnostic: it answers whether a narrow panel is weak
-                   because the scope is wrong or because it is narrow.
-    --eval-x SPEC  print the objective at hand-given compositions beside the
-                   fitted one, as "Cls=frac,Cls=frac;Cls=frac,...". Answers
-                   what NNLS cannot: is the answer wrong because the solver
-                   missed the optimum, or because the panel scores the wrong
-                   composition better? Needs -v.
-    --design-out F  dump the exact system handed to the solve -- one row per
-                   pattern, its weight, the observed value and every scope
-                   class's profile -- so the fit can be redone outside.
-    --min-cpg N    drop a pattern seen on fewer than N measured CpGs
-                   (default 5)
-    --pair-count A,B  report how many MEASURED CpGs segregate classes A and
-                   B on their own, and how many of those survive the
-                   all-classes admission conjunction
-    --panel-out F  dump the rebuilt panel: binstring, measured CpGs,
-                   observed beta -- one row per pattern per record
-    -v             per-record panel size and measured-row count
+Options:
+  -o <out.tsv>            Write output to a file instead of stdout.
+  --threads N             Deconvolve N records in parallel. Default: 1.
+                          --nthreads is an alias. The reference is shared, so
+                          memory grows by the per-thread workspace (~16 MB),
+                          not linearly. Needs a <query.cg>.idx to seek by; -v
+                          and the dump options force a single thread.
+  --no-narrow             Fit the global panel over every class, skipping the
+                          per-query rebuild rounds.
+  --max-round N           Cap on rebuild rounds. Default: 8. Rounds stop early
+                          once the class set stops changing.
+  -v                      Report per-record panel size and measured-row count.
+                          --verbose is an alias.
+  -h                      Show this help message.
+
+Tuning:
+  Every default below was chosen on the 200-mixture benchmarks, where moving it
+  scored worse or made no measurable difference. Change one to reproduce an
+  experiment, not to improve an answer.
+  --min-cpg N             Drop a pattern seen on fewer than N measured CpGs.
+                          Default: 5.
+  --mass-floor F          A class seeds the scope at this mass or above.
+                          Default: 0.005. Not 0, because NNLS hands out
+                          arbitrary exact zeros among collinear columns.
+  --max-segregating N     Two classes the panel separates by this many
+                          measured CpGs or fewer are inseparable for this
+                          query, so both enter the scope when either carries
+                          mass. Absolute, because an absolute CpG count is
+                          what reaches the solve. Default: 200.
+  --weight-exponent E     Row weight is n^E, so influence is n^2E. Default:
+                          0.5, the precision weight. One value per round is
+                          accepted as E1,E2,... with the last repeating.
+  --unweighted            Equivalent to --weight-exponent 0.
+  --delta-mean-top N      Per binstring, keep only the N measured CpGs with
+                          the cleanest class gap, bounding how much one
+                          pattern can weigh. Default: 0, keep all.
+  --global-ref            Compute each pattern's reference profile over every
+                          reference CpG carrying that binstring, not only the
+                          measured ones. Costs a second pass over kept rows.
+  --rescue-below N        A pair the rebuilt panel separates by fewer than N
+                          measured CpGs is weak; the panel is then rebuilt
+                          admitting CpGs that split a weak pair under a wider
+                          rule, every class still getting a digit. Default:
+                          2000. 0 turns the rescue off, which was the worst
+                          configuration measured.
+  --rescue-gap G          Rescue on |beta_a - beta_b| >= G instead of on the
+                          band, exempting the pair's own classes. Default:
+                          0.20. 0 uses the band rule.
+  --rescue-target N       Fit each weak pair its own gap, loosening until it
+                          has N measured CpGs or hits the floor. Default: 0,
+                          use the flat --rescue-gap.
+  --rescue-floor G        Never relax a pair past this gap. Default: 0.15.
+  --rescue-min-depth N    Reads required on both classes of a pair before its
+                          gap is believed. Default: 10. Needs a v2 .msdref,
+                          which carries M/U rather than a bare beta.
+  --rescue-qfilter LO,HI  The wider admission band. Default: 0.40,0.60.
+
+Diagnostics:
+  --panel-out F           Dump the rebuilt panel: binstring, measured CpGs and
+                          observed beta, one row per pattern per record.
+  --scope-out F           Write the settled scope, 1/0 per class per record.
+  --design-out F          Dump the exact system handed to the solve -- one row
+                          per pattern, its weight, the observed value and every
+                          scope class's profile -- so the fit can be redone
+                          outside.
+  --force-scope C[,C..]   Use exactly these classes, skipping discovery. It
+                          answers whether a narrow panel is weak because the
+                          scope is wrong or because it is narrow.
+  --pair-count A,B        Report how many measured CpGs segregate classes A and
+                          B on their own, and how many survive the all-classes
+                          admission conjunction.
+  --eval-x SPEC           Print the objective at hand-given compositions beside
+                          the fitted one, as "Cls=frac,Cls=frac;Cls=frac,...".
+                          Answers whether a wrong answer means the solver
+                          missed the optimum or the panel scores the wrong
+                          composition better. Needs -v.
+
+Output:
+  A TSV with one row per query record and one column per reference class, in
+  the reference's index order, holding that class's estimated fraction. The
+  fractions are renormalized to sum to 1, so they are proportions of the mass
+  the reference could explain -- a query whose true composition lies outside
+  the reference still sums to 1, spread over its nearest classes.
 
 
 ### methscope inspect
