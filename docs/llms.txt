@@ -193,6 +193,16 @@ Purpose:
   query from the CpGs that query actually measured, so no pattern budget is
   baked in and a sparse query is scored on its own evidence.
 
+  The fit is ADAPTIVE. Round 1 solves over every class. Each round after it
+  keeps the classes holding at least --mass-floor, then pulls back in any
+  class the panel separates from a survivor by --max-segregating measured
+  CpGs or fewer -- repeating until nothing new enters, so a scope is a union
+  of connected components rather than a mass cutoff. The pattern set is then
+  rebuilt over that scope and refit: dropping classes relaxes the admission
+  conjunction, so a narrower scope admits CpGs the full one could not. The
+  scope only ever narrows, and rounds stop once it stops changing or at
+  --max-round. --no-narrow keeps the round-1 fit over every class.
+
 Arguments:
   <ref.msdref>   Deconvolution reference from `deconv-build-ref`. Its index
                  order is the binstring digit order.
