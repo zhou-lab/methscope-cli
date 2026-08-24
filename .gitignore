@@ -69,3 +69,8 @@ dist/
 # Python caches (analysis/ helper scripts)
 __pycache__/
 *.pyc
+
+# Dogfooding drops: findings from using methscope on real work, and the
+# commands that reproduce them. Never tracked: the durable record is the lab
+# journal org file, and this directory is deleted once the work lands.
+/tmp/
