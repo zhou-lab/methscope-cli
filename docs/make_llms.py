@@ -9,9 +9,9 @@ on: what the artifacts are, how to get a model, the four commands it will
 actually run, and the traps that are not guessable from the help text.
 
 The per-command sections are the binary's real `-h` output, so they cannot
-drift from what the tool prints -- the same contract docs/sync_help.py relies
-on. The prose around them is maintained here, because none of it is derivable
-from a usage string. Re-run after changing a usage string or shipping a model.
+drift from what the tool prints. The prose around them is maintained here,
+because none of it is derivable from a usage string. Re-run after changing a
+usage string or shipping a model.
 """
 import subprocess
 import sys

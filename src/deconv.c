@@ -170,12 +170,14 @@ int main_deconv_build_ref(int argc, char *argv[]) {
       qlo = lo; qhi = hi;
     }
     else if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
-      printf(
-"Usage: methscope deconv-build-ref [options] <celltypes.cg> -o <out.msdref>\n"
+      ms_help(stdout,
+"Usage:\n"
+"  methscope deconv-build-ref [options] <celltypes.cg> -o <out.msdref>\n"
 "\n"
-"  Pack a per-cell-type M/U store into the uint16 M/U reference the\n"
-"  solver rebuilds its pattern set from, keeping only the CpGs that could\n"
-"  ever contribute to some class subset.\n"
+"Purpose:\n"
+"  Pack a per-cell-type M/U store into the uint16 M/U reference that `deconv`\n"
+"  rebuilds its pattern set from, keeping only the CpGs that could ever\n"
+"  contribute to some class subset.\n"
 "\n"
 "  A class is CALLABLE at a CpG when it is covered and outside the ambiguous\n"
 "  band (beta <= LO or beta >= HI). A row is kept only when at least one\n"
@@ -185,21 +187,23 @@ int main_deconv_build_ref(int argc, char *argv[]) {
 "  condition under EVERY scope, so dropping a row cannot remove a pattern a\n"
 "  later rebuild would have found.\n"
 "\n"
-"  The input must be format-3 (M/U) or format-6 (universe 0/1), with one\n"
-"  record per cell type and a matching <celltypes.cg>.idx; index order IS\n"
-"  the binstring digit order. Format-6 positions outside the universe are\n"
-"  treated as missing.\n"
+"Arguments:\n"
+"  <celltypes.cg>     One record per cell type, YAME format 3 (M/U) or format 6\n"
+"                     (universe 0/1), with a matching <celltypes.cg>.idx whose\n"
+"                     index order IS the binstring digit order. Format-6\n"
+"                     positions outside the universe are treated as missing.\n"
 "\n"
-"  Options\n"
-"    -o FILE            output .msdref (required)\n"
-"    --qfilter LO,HI    the admission band baked into the row test\n"
-"                       (default 0.30,0.70; must match the solver's)\n"
-"    --beta-threshold B call a class methylated above B (default 0.5)\n"
-"    --mincov N         a class is covered at N reads or more (default 1)\n"
-"    --keep-all         skip the never-useful row test; keeps every row so a\n"
-"                       consumer can re-apply any band in memory (1.94 GB for\n"
-"                       33 classes x 29.4 M rows)\n"
-"    --force            overwrite an existing output\n");
+"Options:\n"
+"  -o <out.msdref>    Write the reference here. Required.\n"
+"  --qfilter LO,HI    The admission band baked into the row test. Default:\n"
+"                     0.30,0.70. Must match the solver's.\n"
+"  --beta-threshold B Call a class methylated above B. Default: 0.5.\n"
+"  --mincov N         A class is covered at N reads or more. Default: 1.\n"
+"  --keep-all         Skip the never-useful row test, keeping every row so a\n"
+"                     consumer can re-apply any band in memory. Costs 1.94 GB\n"
+"                     for 33 classes x 29.4M rows.\n"
+"  --force            Overwrite an existing output.\n"
+"  -h                 Show this help message.\n");
       return 0;
     }
     else if (a[0] == '-' && a[1]) d2die("unrecognized option", a);
@@ -1544,6 +1548,69 @@ static void *d2_worker(void *arg) {
   return NULL;
 }
 
+/* Output shapes. LONG is the default because the answer to "what is in this
+ * sample" is a handful of classes, and a 62-column row makes the reader hunt
+ * for them; WIDE is the matrix a downstream join wants. */
+enum { D2_LONG = 0, D2_WIDE, D2_REPORT };
+
+typedef struct { uint32_t s; double v; } d2sh_t;
+
+static int d2sh_cmp(const void *a, const void *b) {
+  const d2sh_t *x = a, *y = b;
+  if (x->v > y->v) return -1;
+  if (x->v < y->v) return 1;
+  return x->s < y->s ? -1 : x->s > y->s;      /* ties in index order */
+}
+
+static void d2_emit_header(FILE *out, const d2ref_t *R, int mode) {
+  if (mode == D2_REPORT) return;
+  if (mode == D2_LONG) { fputs("cell\tclass\tfraction\n", out); return; }
+  fputs("cell", out);
+  for (uint32_t s = 0; s < R->n_class; ++s) fprintf(out, "\t%s", R->name[s]);
+  fputc('\n', out);
+}
+
+/* One record's composition. LONG and REPORT drop classes below min_frac;
+ * REPORT then names the dropped mass as "Others" rather than rescaling what
+ * is left back up to 100%, so a percentage always means what it says. */
+static void d2_emit(FILE *out, const d2ref_t *R, const char *name,
+                    const double *x, int mode, double min_frac) {
+  if (mode == D2_WIDE) {
+    fprintf(out, "%s", name);
+    for (uint32_t s = 0; s < R->n_class; ++s) fprintf(out, "\t%.6f", x[s]);
+    fputc('\n', out);
+    return;
+  }
+
+  d2sh_t *o = d2alloc(R->n_class, sizeof(d2sh_t), "emit order");
+  double total = 0;
+  for (uint32_t s = 0; s < R->n_class; ++s) {
+    o[s].s = s; o[s].v = x[s]; total += x[s];
+  }
+  qsort(o, R->n_class, sizeof(d2sh_t), d2sh_cmp);
+
+  double shown = 0;
+  uint32_t n = 0;
+  if (mode == D2_REPORT) fprintf(out, "%s:", name);
+  for (uint32_t k = 0; k < R->n_class; ++k) {
+    if (o[k].v < min_frac || o[k].v <= 0) break;
+    if (mode == D2_LONG)
+      fprintf(out, "%s\t%s\t%.6f\n", name, R->name[o[k].s], o[k].v);
+    else
+      fprintf(out, "%s %s %.1f%%", n ? ";" : "", R->name[o[k].s],
+              o[k].v * 100.0);
+    shown += o[k].v; ++n;
+  }
+  if (mode == D2_REPORT) {
+    double rest = total - shown;
+    if (!n && rest * 100.0 < 0.05) fputs(" nothing above the floor", out);
+    if (rest * 100.0 >= 0.05)
+      fprintf(out, "%s Others %.1f%%", n ? ";" : "", rest * 100.0);
+    fputc('\n', out);
+  }
+  free(o);
+}
+
 int main_deconv(int argc, char *argv[]) {
   const char *out_path = NULL, *panel_out = NULL, *pair_spec = NULL;
   const char *force_scope = NULL, *eval_x = NULL, *design_out = NULL;
@@ -1587,6 +1654,11 @@ int main_deconv(int argc, char *argv[]) {
   unsigned long rescue_depth = 10;
   uint32_t max_round = 8;
   int narrow = 1, nthreads = 1, global_ref = 0;
+  int outmode = D2_LONG;
+  /* Display only: it decides what LONG and REPORT list, never what is fitted.
+   * 0.005 because NNLS leaves dust among collinear columns that is not a
+   * claim about the sample; --min-frac 0 shows every non-zero class. */
+  double min_frac = 0.005;
   /* One value per ROUND, last repeating: "0.5,0.5,0" is 0.5 for the global fit
    * and the first rebuild, unweighted from round 3 on. A single value applies
    * everywhere. Per-round because the panel changes character as the scope
@@ -1623,7 +1695,10 @@ int main_deconv(int argc, char *argv[]) {
       }
       if (!n_wexp) d2die("--weight-exponent wants E or E1,E2,...", argv[i]);
     }
-    else if (!strcmp(a, "--unweighted")) { n_wexp = 1; wexp[0] = 0.0; }
+    else if (!strcmp(a, "--wide")) outmode = D2_WIDE;
+    else if (!strcmp(a, "--report")) outmode = D2_REPORT;
+    else if (!strcmp(a, "--min-frac") && i + 1 < argc)
+      min_frac = atof(argv[++i]);
     else if (!strcmp(a, "--no-narrow")) narrow = 0;
     else if (!strcmp(a, "--rescue-below") && i + 1 < argc)
       rescue_below = strtoull(argv[++i], NULL, 10);
@@ -1654,7 +1729,7 @@ int main_deconv(int argc, char *argv[]) {
     else if (!strcmp(a, "--design-out") && i + 1 < argc) design_out = argv[++i];
     else if (!strcmp(a, "-v") || !strcmp(a, "--verbose")) verbose = 1;
     else if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
-      printf(
+      ms_help(stdout,
 "Usage:\n"
 "  methscope deconv [options] <ref.msdref> <query.cg>\n"
 "\n"
@@ -1673,6 +1748,16 @@ int main_deconv(int argc, char *argv[]) {
 "\n"
 "Options:\n"
 "  -o <out.tsv>            Write output to a file instead of stdout.\n"
+"  --wide                  Emit the full composition matrix instead: one row\n"
+"                          per record, one column per reference class, in the\n"
+"                          reference's index order. Every class appears, so\n"
+"                          --min-frac does not apply.\n"
+"  --report                Emit a readable one-line summary per record --\n"
+"                          \"cell: Class 69.6%%; Class 30.4%%\" -- instead of a\n"
+"                          TSV.\n"
+"  --min-frac F            Hide classes below this fraction. Default: 0.005.\n"
+"                          Display only: it never changes what is fitted. 0\n"
+"                          shows every non-zero class.\n"
 "  --threads N             Deconvolve N records in parallel. Default: 1.\n"
 "                          --nthreads is an alias. The reference is shared, so\n"
 "                          memory grows by the per-thread workspace (~16 MB),\n"
@@ -1703,7 +1788,6 @@ int main_deconv(int argc, char *argv[]) {
 "  --weight-exponent E     Row weight is n^E, so influence is n^2E. Default:\n"
 "                          0.5, the precision weight. One value per round is\n"
 "                          accepted as E1,E2,... with the last repeating.\n"
-"  --unweighted            Equivalent to --weight-exponent 0.\n"
 "  --delta-mean-top N      Per binstring, keep only the N measured CpGs with\n"
 "                          the cleanest class gap, bounding how much one\n"
 "                          pattern can weigh. Default: 0, keep all.\n"
@@ -1749,11 +1833,16 @@ int main_deconv(int argc, char *argv[]) {
 "                          composition better. Needs -v.\n"
 "\n"
 "Output:\n"
-"  A TSV with one row per query record and one column per reference class, in\n"
-"  the reference's index order, holding that class's estimated fraction. The\n"
-"  fractions are renormalized to sum to 1, so they are proportions of the mass\n"
-"  the reference could explain -- a query whose true composition lies outside\n"
-"  the reference still sums to 1, spread over its nearest classes.\n");
+"  By default a tidy TSV -- cell, class, fraction -- carrying only the classes\n"
+"  at or above --min-frac, largest first. --wide gives the full matrix and\n"
+"  --report a one-line summary per record.\n"
+"\n"
+"  A record's fractions are proportions of the mass the reference could\n"
+"  explain: the fit is renormalized to sum to 1, so a query whose true\n"
+"  composition lies outside the reference still sums to 1, spread over its\n"
+"  nearest classes. --report is the one shape that does NOT rescale -- what\n"
+"  --min-frac hides is named as \"Others\", so a printed percentage always\n"
+"  means the same thing.\n");
       return 0;
     }
     else if (a[0] == '-' && a[1]) d2die("unrecognized option", a);
@@ -1775,9 +1864,7 @@ int main_deconv(int argc, char *argv[]) {
 
   FILE *out = out_path ? fopen(out_path, "w") : stdout;
   if (!out) d2die("cannot open output", out_path);
-  fputs("cell", out);
-  for (uint32_t s = 0; s < R.n_class; ++s) fprintf(out, "\t%s", R.name[s]);
-  fputc('\n', out);
+  d2_emit_header(out, &R, outmode);
 
   d2opt_t opt;
   memset(&opt, 0, sizeof opt);
@@ -1819,12 +1906,9 @@ int main_deconv(int argc, char *argv[]) {
         d2die("cannot create thread", NULL);
     for (int t = 0; t < nthreads; ++t) pthread_join(th[t], NULL);
     pthread_mutex_destroy(&J.lock);
-    for (uint32_t r2 = 0; r2 < n_qname; ++r2) {
-      fprintf(out, "%s", qname[r2]);
-      for (uint32_t s = 0; s < R.n_class; ++s)
-        fprintf(out, "\t%.6f", J.xall[(size_t)r2 * R.n_class + s]);
-      fputc('\n', out);
-    }
+    for (uint32_t r2 = 0; r2 < n_qname; ++r2)
+      d2_emit(out, &R, qname[r2], J.xall + (size_t)r2 * R.n_class,
+              outmode, min_frac);
     free(J.xall); free(th);
     if (out != stdout) fclose(out);
     free(qoff);
@@ -1847,9 +1931,8 @@ int main_deconv(int argc, char *argv[]) {
       d2die("query and reference disagree on the CpG row space", qpath);
 
     d2_record(&R, &opt, &ws, &c, rec, qname, n_qname, xrec);
-    fprintf(out, "%s", rec < n_qname ? qname[rec] : "record");
-    for (uint32_t s = 0; s < R.n_class; ++s) fprintf(out, "\t%.6f", xrec[s]);
-    fputc('\n', out);
+    d2_emit(out, &R, rec < n_qname ? qname[rec] : "record", xrec,
+            outmode, min_frac);
     free_cdata(&c);
   }
   bgzf_close(qf.fh);

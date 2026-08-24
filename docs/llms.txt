@@ -202,6 +202,16 @@ Arguments:
 
 Options:
   -o <out.tsv>            Write output to a file instead of stdout.
+  --wide                  Emit the full composition matrix instead: one row
+                          per record, one column per reference class, in the
+                          reference's index order. Every class appears, so
+                          --min-frac does not apply.
+  --report                Emit a readable one-line summary per record --
+                          "cell: Class 69.6%%; Class 30.4%%" -- instead of a
+                          TSV.
+  --min-frac F            Hide classes below this fraction. Default: 0.005.
+                          Display only: it never changes what is fitted. 0
+                          shows every non-zero class.
   --threads N             Deconvolve N records in parallel. Default: 1.
                           --nthreads is an alias. The reference is shared, so
                           memory grows by the per-thread workspace (~16 MB),
@@ -232,7 +242,6 @@ Tuning:
   --weight-exponent E     Row weight is n^E, so influence is n^2E. Default:
                           0.5, the precision weight. One value per round is
                           accepted as E1,E2,... with the last repeating.
-  --unweighted            Equivalent to --weight-exponent 0.
   --delta-mean-top N      Per binstring, keep only the N measured CpGs with
                           the cleanest class gap, bounding how much one
                           pattern can weigh. Default: 0, keep all.
@@ -278,11 +287,16 @@ Diagnostics:
                           composition better. Needs -v.
 
 Output:
-  A TSV with one row per query record and one column per reference class, in
-  the reference's index order, holding that class's estimated fraction. The
-  fractions are renormalized to sum to 1, so they are proportions of the mass
-  the reference could explain -- a query whose true composition lies outside
-  the reference still sums to 1, spread over its nearest classes.
+  By default a tidy TSV -- cell, class, fraction -- carrying only the classes
+  at or above --min-frac, largest first. --wide gives the full matrix and
+  --report a one-line summary per record.
+
+  A record's fractions are proportions of the mass the reference could
+  explain: the fit is renormalized to sum to 1, so a query whose true
+  composition lies outside the reference still sums to 1, spread over its
+  nearest classes. --report is the one shape that does NOT rescale -- what
+  --min-frac hides is named as "Others", so a printed percentage always
+  means the same thing.
 
 
 ### methscope inspect
