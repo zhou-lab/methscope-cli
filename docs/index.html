@@ -476,19 +476,28 @@ methscope <span class="sub">bundle</span> -m chr20_lineage.mrmp -k xgboost -o re
 
 <section class="card">
   <h2>Deconvolve — shipped reference <span class="m">— cell-type proportions</span></h2>
-  <p>Solve a mixture against a signature panel by non-negative least squares. Uses all MRMP
-    patterns and is robust to extreme sparsity, so it works on cfDNA-scale coverage.</p>
+  <p>Solve a mixture against a signature panel by non-negative least squares. The solver
+    rebuilds its pattern set per query from the CpGs that query measured, so it is robust to
+    extreme sparsity and works at cfDNA-scale coverage.</p>
   <pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
-<span class="cm"># a whole-body mixture vs the shipped 33-type reference</span>
+<span class="cm"># nine known mixtures vs the shipped 62-type reference (1.5 GB)</span>
 yame fetch -c hg38/data/human_hg38_immune_mixture.cg
-yame fetch -c hg38/models/hg38_33celltypes.msdref
-methscope <span class="sub">deconv</span> hg38_33celltypes.msdref human_hg38_immune_mixture.cg</code></pre>
-  <pre class="res"><code>cell  … Macrophage  Mono    NK_CD56  …
-1     … 0.7486      0.2370  0.0000   …</code></pre>
-  <p class="note">Truth 70/30; the other 31 types come back ~0. The 33-type reference is
-    pooled from donor-resolved normal WGBS for whole-body / cfDNA deconvolution.</p>
+yame fetch -c hg38/models/hg38_62celltypes.msdref
+methscope <span class="sub">deconv</span> hg38_62celltypes.msdref human_hg38_immune_mixture.cg</code></pre>
+  <pre class="res"><code>cell                  … Macrophage  Mono    Tmem_CD4  Tnaive_CD8  …
+mac70_mono30_2pow22   … 0.6963      0.3037  0.0000    0.0000      …
+mac70_mono30_2pow16   … 0.7842      0.2090  0.0000    0.0000      …
+cd4_70_cd8_30_2pow22  … 0.0000      0.0000  0.4983    0.0264      …</code></pre>
+  <p class="note">Every record has a known truth, so this checks an answer rather than merely
+    producing one. Each name gives both the composition and the sparsity: three 70/30 pairs
+    (macrophage/monocyte, CD4/CD8 T cell, naive CD4/naive CD8) at 2<sup>22</sup>,
+    2<sup>18</sup> and 2<sup>16</sup> binarized CpGs. The pooled T-cell mixtures split across
+    memory and naive sub-types, so sum those to score them. The 2<sup>16</sup> rung sits at
+    the depth where a single draw becomes seed-dependent, which is why error grows down the
+    ladder. The 62-type reference is built on the Zhou single-cell atlas plus Loyfer
+    hepatocytes and BLUEPRINT granulocytes.</p>
 </section>
 
 <section class="card">

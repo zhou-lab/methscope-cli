@@ -44,7 +44,7 @@ coverage. Pure C, no Python or R at inference, ~2 s per sample.
 Input is a YAME `.cg` store (see the yame tool). Models are self-contained
 bundles that carry their own feature definition:
   .updecx  upscale decoder   -- impute genome-wide CpG methylation
-  .ubjx    classifier        -- cell type, sex
+  .clfx    classifier        -- cell type, sex (formerly .ubjx, still accepted)
   .msdref  deconvolution ref -- cell-type proportions
 
 ## Install
@@ -62,13 +62,22 @@ shared registry, which verifies each file against a pinned digest:
   yame fetch methscope/hg38/models      # or mm10/models, hg38/data
 
 `methscope fetch` was RETIRED -- do not use it. Available:
-  hg38_wg.updecx        whole-genome upscale decoder (human)
-  mm10_wg.updecx        whole-genome upscale decoder (mouse)
-  hg38_celltype.ubjx    cell-type classifier (human, 62 types)
-  mm10_celltype.ubjx    cell-type classifier (mouse brain, 41 types)
-  hg38_sex.ubjx         sex classifier
-  hg38_65celltypes.msdref deconvolution reference (65 cell types)
-  hg38_10k1.updecx      upscale decoder for one 10k-CpG block (legacy, small)
+  hg38_wg.updecx           whole-genome upscale decoder (human)
+  mm10_wg.updecx           whole-genome upscale decoder (mouse)
+  hg38_celltype.clfx       cell-type classifier (human, 33 types)
+  mm10_celltype_brain.clfx cell-type classifier (mouse brain, 41 types)
+  hg38_sex.clfx            sex classifier
+  hg38_62celltypes.msdref  deconvolution reference (62 types, Zhou
+                           single-cell backbone) -- prefer this one
+  hg38_33celltypes.msdref  deconvolution reference (33 types, bulk-pooled)
+  hg38_10k1.updecx         upscale decoder for one 10k-CpG block (legacy, small)
+
+Example queries with KNOWN answers live beside the models in hg38/data:
+`human_hg38_immune_mixture.cg` holds nine mixtures whose truths are exact by
+construction, named by composition and sparsity (mac70_mono30_2pow22 is
+macrophage 0.70 / monocyte 0.30 over 2^22 binarized CpGs). Fetch its
+`.cg.idx` too -- the record names are in it, and without them the file is
+nine anonymous records.
 
 ## Traps
 

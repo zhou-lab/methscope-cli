@@ -14,7 +14,7 @@ coverage. Pure C, no Python or R at inference, ~2 s per sample.
 Input is a YAME `.cg` store (see the yame tool). Models are self-contained
 bundles that carry their own feature definition:
   .updecx  upscale decoder   -- impute genome-wide CpG methylation
-  .ubjx    classifier        -- cell type, sex
+  .clfx    classifier        -- cell type, sex (formerly .ubjx, still accepted)
   .msdref  deconvolution ref -- cell-type proportions
 
 ## Install
@@ -32,13 +32,22 @@ shared registry, which verifies each file against a pinned digest:
   yame fetch methscope/hg38/models      # or mm10/models, hg38/data
 
 `methscope fetch` was RETIRED -- do not use it. Available:
-  hg38_wg.updecx        whole-genome upscale decoder (human)
-  mm10_wg.updecx        whole-genome upscale decoder (mouse)
-  hg38_celltype.ubjx    cell-type classifier (human, 62 types)
-  mm10_celltype.ubjx    cell-type classifier (mouse brain, 41 types)
-  hg38_sex.ubjx         sex classifier
-  hg38_65celltypes.msdref deconvolution reference (65 cell types)
-  hg38_10k1.updecx      upscale decoder for one 10k-CpG block (legacy, small)
+  hg38_wg.updecx           whole-genome upscale decoder (human)
+  mm10_wg.updecx           whole-genome upscale decoder (mouse)
+  hg38_celltype.clfx       cell-type classifier (human, 33 types)
+  mm10_celltype_brain.clfx cell-type classifier (mouse brain, 41 types)
+  hg38_sex.clfx            sex classifier
+  hg38_62celltypes.msdref  deconvolution reference (62 types, Zhou
+                           single-cell backbone) -- prefer this one
+  hg38_33celltypes.msdref  deconvolution reference (33 types, bulk-pooled)
+  hg38_10k1.updecx         upscale decoder for one 10k-CpG block (legacy, small)
+
+Example queries with KNOWN answers live beside the models in hg38/data:
+`human_hg38_immune_mixture.cg` holds nine mixtures whose truths are exact by
+construction, named by composition and sparsity (mac70_mono30_2pow22 is
+macrophage 0.70 / monocyte 0.30 over 2^22 binarized CpGs). Fetch its
+`.cg.idx` too -- the record names are in it, and without them the file is
+nine anonymous records.
 
 ## Traps
 
@@ -122,7 +131,7 @@ Output:
 
 
 Usage:
-  methscope classify [options] <query.cg> <model.clfx>
+  methscope classify [options] <model.clfx> <query.cg>
   methscope classify --data <in.msfm> [options] <model.clfx>
 
 Purpose:
@@ -131,45 +140,40 @@ Purpose:
   against the MRMP reference and running the booster.
 
 Arguments:
-  <query.cg>     Query methylome(s); '-' reads a .cg stream from stdin
-                 (cells are then named 1,2,3,... as a stream has no index).
   <model.clfx>   A self-contained bundle of the model + its MRMP (from
                  `classify-train -o model.clfx` or `bundle`) — the recommended
                  single-file form.
+  <query.cg>     Query methylome(s); '-' reads a .cg stream from stdin
+                 (cells are then named 1,2,3,... as a stream has no index).
+                 Query records may be YAME format 3 (M/U counts) or
+                 format 6 (universe bit plus binary 0/1 call); positions
+                 outside the format-6 universe are treated as missing.
 
 Options:
-  -o <out.tsv>   Write output to a file instead of stdout.
-  --framework violation   Score straight off a .mrmp with the violation
-                 rule instead of a fitted model: give <query.cg> <ref.mrmp>.
-                 The rule is UNFITTED -- a pure function of the artifact and
-                 the three knobs below -- so there is nothing to train and
-                 nothing worth storing in between.
-  --call-threshold t      violation: beta cutoff for calling a pattern (0.5)
-  --pattern-weight w      violation: sqrt|log1p|linear|flat (sqrt)
-  --min-patterns n        violation: patterns required on each side (20)
-  --top K                 violation: patterns to use, by rank (1000)
-  --probs        Append one column per class with its predicted probability.
-                 NOT available on a routing tree: each node scores its own
-                 class subset and a routed cell is scored by several, so
-                 there is no one distribution to report. Whether it should
-                 be the leaf's, or the product along the path, is undecided.
-  --levels       Append the predicted label's whole taxonomy path
-                 (compartment, lineage, group, subtype).
-  --level NAME   Append just one level -- compartment | lineage | group |
-                 subtype. Use this to score against a cohort labelled only
-                 that coarsely: collapse the prediction to the level the
-                 truth resolves to, and compare there.
-                 Both need a model trained with `classify-train --hierarchy`,
-                 and report NA for a label the taxonomy omits.
-  --no-header    Suppress the header line.
-  --threads T    Featurize with T workers (default 1). Cells are partitioned
-                 across workers, each seeking its own records, so this needs
-                 the query's .cg index; a stream keeps the serial path.
-  --data <in.msfm>  Score a prebuilt feature artifact (classify-featurize)
-                 instead of featurizing <query.cg>. <query.cg> is then omitted.
-                 Featurization dominates the cost, so this is how to score many
-                 models on one test set without repeating it.
-  -h             Show this help message.
+  -o <out.tsv>             Write output to a file instead of stdout.
+  --framework violation   Score directly from a .mrmp with the violation
+                          rule. Give <query.cg> <ref.mrmp>. The rule is an
+                          unfitted function of the artifact and the three
+                          options below.
+  --call-threshold T      Violation beta cutoff. Default: 0.5.
+  --pattern-weight W      Violation weighting: sqrt, log1p, linear, or flat.
+                          Default: sqrt.
+  --min-patterns N        Patterns required on each side. Default: 20.
+  --top K                 Patterns to use by rank. Default: 1000.
+  --probs                 Append one predicted-probability column per class.
+                          This is unavailable for routing trees because each
+                          node scores a different class subset.
+  --levels                Append the predicted label's full taxonomy path:
+                          compartment, lineage, group, and subtype.
+  --level NAME            Append one taxonomy level: compartment, lineage,
+                          group, or subtype. Taxonomy options require a model
+                          trained with `classify-train --hierarchy`.
+  --no-header             Suppress the output header.
+  --threads T             Featurize with T workers. Default: 1. Workers seek
+                          indexed query records; streams use the serial path.
+  --data <in.msfm>        Score prebuilt features from classify-featurize.
+                          Omit <query.cg> when this option is used.
+  -h                      Show this help message.
 
 Output columns:
   cell  prediction_label  confidence  certainty  [<class1> ... with --probs]
@@ -180,7 +184,7 @@ Output columns:
 
 ### methscope deconv
 
-Usage: methscope deconv [options] <query.cg> <ref.msdref> -o <out.tsv>
+Usage: methscope deconv [options] <ref.msdref> <query.cg> -o <out.tsv>
 
   Deconvolve each query record against a .msdref reference, over a global
   flat MRMP rebuilt per query from the CpGs THAT QUERY MEASURED.
@@ -297,6 +301,7 @@ Purpose:
     .msui   MSUIDX1   processing-unit index: units, memberships, CpG split
     .msur   MSURAW2/3 training msur: cells, replicates, embedded truth
     .msfm   MSFMAT1   feature matrix: records, patterns, labels, coverage
+    .msdref MSDREF1   deconvolution reference: cell types and CpG rows
 
 Options:
   --tree       render an mrmp-tree: its nodes, and which class each one
