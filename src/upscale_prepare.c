@@ -309,11 +309,12 @@ static int usage(FILE *out) {
     "                   A=1 is plain log-uniform\n"
     "  --binarize       one read per observed CpG: replace each sampled beta with a\n"
     "                   Bernoulli(beta) draw, as `yame dsample -b` does\n"
-    "  --in-memory      inflate the truth store once and reuse it for all replicates\n"
-    "  --threads N      inflate and scan N samples at once (default 1). Needs\n"
-    "                   --in-memory and a <store>.idx, since each worker opens\n"
-    "                   its own handle and seeks to its sample. Output is\n"
-    "                   byte-identical at any N.\n"
+    "  --in-memory      accepted and ignored. The truth store is always inflated\n"
+    "                   once and reused for every replicate; there is no longer\n"
+    "                   a streaming path for it to select.\n"
+    "  --threads N      inflate and scan N samples at once (default 1). Needs a\n"
+    "                   <store>.idx, since each worker opens its own handle and\n"
+    "                   seeks to its sample. Output is byte-identical at any N.\n"
     "  --manifest PATH  write provenance TSV (default OUT.msur.tsv)\n"
     "  -h, --help       show this help\n"
     "\n"
@@ -397,12 +398,14 @@ int main_upscale_prepare(int argc, char *argv[]) {
     pdie("need TRUTH.cg, IN.mrmp, and OUT.msur", NULL);
   }
   if (!reps || (!log_min && !n_levels)) return usage(stderr);
-  /* Both pools read the inflated records, so without --in-memory memory_cells
-   * is NULL and the replicate pool dereferences it. Refuse up front: this used
-   * to SEGFAULT, because the guard lived in the replicate loop and was lost
-   * when the pool moved inside the in_memory block. */
-  if (nthreads > 1 && !in_memory)
-    pdie("--threads needs --in-memory (the streaming path is sequential)", NULL);
+  /* Inflating the truth store is no longer optional. rep_worker reads every
+   * cell out of the in-memory table, and the streaming path it used to fall
+   * back to is gone -- so leaving the table NULL segfaulted on the first
+   * cell. The guard that caught this only fired for --threads > 1, which is
+   * how the plain documented invocation still crashed. Rather than refuse
+   * the common case, always inflate; --in-memory stays accepted so existing
+   * scripts keep working, but it no longer selects anything. */
+  (void)in_memory;
   if ((uint64_t)reps * n_levels > UINT32_MAX) pdie("too many replicates", NULL);
 
   /* Per-replicate sample sizes.  Either the small fixed ladder (--sample, reps
@@ -593,7 +596,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
    * Pool, not waves: each worker opens its handle once and pulls the next cell
    * off a shared counter, so a worker finishing a sparse cell takes another
    * instead of idling at a barrier. */
-  if (in_memory) {
+  {
     memory_cells = calloc(n_cells, sizeof(*memory_cells));
     memory_eligible = calloc(n_cells, sizeof(*memory_eligible));
     memory_n_eligible = calloc(n_cells, sizeof(*memory_n_eligible));
@@ -604,8 +607,12 @@ int main_upscale_prepare(int argc, char *argv[]) {
     if (nidx != n_cells) pdie("store index disagrees with the record count", truth);
     uint32_t nw = nthreads ? nthreads : 1; if (nw > 64) nw = 64;
     if (nw > n_cells) nw = n_cells;
+    /* Say the size: inflating is unconditional now, and a whole-genome store
+     * is the case where a reader wants to know before it is resident. */
     fprintf(stderr, "[methscope] upscale-featurize: inflating %u truth cells "
-            "(%u worker%s)\n", n_cells, nw, nw == 1 ? "" : "s");
+            "(%u worker%s, about %.1f GB resident)\n", n_cells, nw,
+            nw == 1 ? "" : "s",
+            (double)n_cells * (double)n_cpg * sizeof(uint64_t) / 1073741824.0);
     pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
     pthread_cond_t  cv = PTHREAD_COND_INITIALIZER;
     uint32_t next = 0, turn = 0;
@@ -632,12 +639,6 @@ int main_upscale_prepare(int argc, char *argv[]) {
     free(snames); free(voff); free(pc); free(pth);
   }
 
-  uint32_t *eligible = memory_cells ? NULL : xmalloc((size_t)n_cpg * sizeof(*eligible), "sampling workspace");
-  double *sum = xmalloc((size_t)ncol * sizeof(*sum), "MRMP sums");
-  uint32_t *count = xmalloc((size_t)ncol * sizeof(*count), "MRMP counts");
-  float *beta = xmalloc((size_t)ncol * sizeof(*beta), "feature beta");
-  uint32_t *selected = xmalloc((size_t)max_sample * sizeof(*selected), "sampled positions");
-  cow_t cow; cow_init(&cow, max_sample);
   /* Only allocated when some replicate is dense enough to prefer a bitmap. */
   uint64_t bitmap_bytes = msur_bitmap_bytes(n_cpg);
   unsigned char *bitmap = NULL;
@@ -713,7 +714,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
     free(memory_cells);
     free(memory_eligible); free(memory_n_eligible);
   }
-  free(group); free(eligible); free(sum); free(count); free(beta); free(selected); cow_free(&cow);
+  free(group);
   fprintf(stderr, "[methscope] upscale-featurize: wrote %s and %s\n", out, manifest);
   return 0;
 }
