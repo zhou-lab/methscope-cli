@@ -302,8 +302,10 @@ mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 <span class="cm"># a 40-cell-type chr20 reference (39.5 MB)</span>
 yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
 methscope <span class="sub">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</code></pre>
-  <pre class="res"><code>samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450
-PNA CpGs=116068 (15.01%)  checksum=9e7f6d292a2ba946</code></pre>
+  <pre class="res"><code>root  40 classes | 491 patterns | 7,218 CpGs
+  split threshold: 20,000 CpGs -> 1 group(s)
+  ! unsplittable (40 classes): GSM5652176_Adipocytes-Z000000T7 ... (34 more)
+  1 node(s), 29,904 bytes -> chr20_40celltypes.mrmp</code></pre>
   <p class="note">40 samples is the ceiling: a pattern packs as a base-3 uint64 and 3^40 &lt; 2^64
     &lt; 3^41. The whole-genome models use 35 Zhou pseudo-bulks.</p>
 </section>
@@ -312,33 +314,40 @@ PNA CpGs=116068 (15.01%)  checksum=9e7f6d292a2ba946</code></pre>
   <h2>Inspect the pattern set <span class="m">— dimensions &amp; ranked head</span></h2>
   <p>What it is: dimensions, the binstring parameters, the PNA share.</p>
   <pre><code>methscope <span class="sub">inspect</span> chr20_40celltypes.mrmp</code></pre>
-  <pre class="res"><code>format               MRMPIDX1 v1
-reference            human_hg38_40_celltypes_chr20.cg
-samples              40
-cpgs                 773477
-distinct_candidates  116450
-selectable_patterns  116450
-pna_cpgs             116068   15.0060%
-binstring            mincov=1 beta=0.500 max_ambig_frac=1.000 min_major_fold=10.000
-content_checksum     9e7f6d292a2ba946</code></pre>
+  <pre class="res"><code>MRMP  chr20_40celltypes.mrmp
+  format         MRMPIDX1 v1, one set
+  name           root
+  reference      human_hg38_40_celltypes_chr20.cg
+
+  classes        40
+  patterns       491
+  covered        7,218 of 773,477 CpGs (0.93%)
+  PNA            766,259 CpGs (99.07%) match no pattern
+
+  block          29,904 bytes
+  membership     18,266 bytes, RLE + BGZF (169x vs dense)
+  resolution     --mincov 1  --beta-threshold 0.500
+  checksum       8cf2026fa6de8d46  (over the per-CpG key stream)</code></pre>
   <p><code class="inl">--patterns</code> adds the ranked head; <code class="inl">--top</code> sets
     how many (default 20).</p>
   <pre><code>methscope <span class="sub">inspect</span> chr20_40celltypes.mrmp --patterns --top 5</code></pre>
-  <pre class="res"><code>#pattern                                   label  count     (top 5 of 116450)
-1111111111111111111111111111111111111111   P1     261816
-0000000000000000000000000000000000000000   P2      58021
-1111101111111111111111111111111111111111   P3      22839
-1111111101111111111111111111111111111111   P4      11536
-1111111111111011111111111111111111111111   P5       7027</code></pre>
+  <pre class="res"><code>#pattern                                  label  count   (top 5 of 491)
+1111111101111111111111111111111111111111  P1     698
+1111101111111111111111111111111111111111  P2     527
+1111111111011111111111111111111111111111  P3     478
+1111111110111111111111111111111111111111  P4     429
+1111111111111101111111111111111111111111  P5     337</code></pre>
   <p>For a multi-set routing tree, <code class="inl">--tree</code> shows each MRMP
     node and the classes it decides. It works on the tree bundle written by
     <code class="inl">mrmp-build</code>.</p>
   <pre><code>methscope <span class="sub">inspect</span> chr20_40celltypes.mrmp --tree</code></pre>
-  <pre class="res"><code>tree  chr20_40celltypes.mrmp
-root        40 classes
-  root.0     6 classes
-  root.1    34 classes
-    ...</code></pre>
+  <pre class="res"><code>TREE  chr20_40celltypes.mrmp
+  1 node, 40 classes, 491 patterns over 7,218 CpGs
+
+root                       40 classes      491 patterns      7,218 CpGs
+  |-- GSM5652176_Adipocytes-Z000000T7
+  |-- GSM5652181_Saphenous-Vein-Endothel-Z000000RM
+  ...</code></pre>
 </section>
 
 <section class="card">
@@ -386,15 +395,15 @@ root        40 classes
   <pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
-<span class="cm"># 4 Loyfer cells vs the Zhou2025 62-type atlas</span>
+<span class="cm"># 4 Loyfer cells vs the shipped 33-type classifier</span>
 yame fetch -c hg38/data/human_hg38_celltypes.cg
 yame fetch -c hg38/models/hg38_celltype.clfx
 methscope <span class="sub">classify</span> hg38_celltype.clfx human_hg38_celltypes.cg</code></pre>
-  <pre class="res"><code>cell             prediction_label  confidence
-Oligodendrocyte  ODC               0.915134   # oligodendrocyte
-Pancreas-Beta    Beta              0.930708   # islet beta
-Blood-NK         NK CD16           0.812749   # natural killer
-Blood-Monocytes  Mono              0.835970   # monocyte</code></pre>
+  <pre class="res"><code>cell             prediction_label       confidence  certainty
+Oligodendrocyte  Oligodendrocyte          0.999738   0.999186
+Pancreas-Beta    Pancreatic.Islet.Cell    0.999662   0.998899
+Blood-NK         NK                       0.978498   0.894815
+Blood-Monocytes  Monocyte                 0.999126   0.993053</code></pre>
   <p class="note">Loyfer truth &rarr; Zhou2025 label: 4/4 concordant. The same call runs a sex /
     age / any bundled model. Linear models store per-feature training means, so missing/sparse
     betas are imputed at classify time — accurate even at &lt;1% genome coverage.</p>
@@ -445,27 +454,34 @@ yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
 methscope <span class="sub">mrmp-build</span> --flat human_hg38_40_celltypes_chr20.cg chr20.mrmp
 methscope <span class="sub">mrmp-export</span> --top 1000 chr20.mrmp chr20.cm
 cut -f1 human_hg38_40_celltypes_chr20.cg.idx | sed &#x27;s/^GSM[0-9]*_//; s/-Z[0-9A-Z]*$//&#x27; | sed -E &#x27;s/.*Endothel.*|.*Endothelium.*/Endothelial/; s/.*Epithelial.*|.*Keratinocytes.*|.*Podocytes.*/Epithelial/; s/^Blood-.*|.*Macrophages.*/Immune/; s/.*Smooth-Muscle.*|Skeletal-Muscle|.*Cardiomyocyte.*/Muscle/; s/^Neuron$|.*Oligodendrocytes.*/Neural/; s/.*Fibroblasts.*|Adipocytes|Lung-Pleura/Mesenchymal/; s/^(Liver-Hepatocytes|Pancreas-Acinar|Pancreas-Beta)$/Secretory/&#x27; &gt; labels.txt</code></pre>
-  <p>Features + labels &rarr; one runnable bundle, in a single step (the positional takes the
-    runtime <code class="inl">.cm</code>, not the <code class="inl">.mrmp</code> artifact).</p>
-  <pre><code>methscope <span class="sub">classify-train</span> -l labels.txt -o chr20_lineage.ubjx human_hg38_40_celltypes_chr20.cg chr20.cm</code></pre>
-  <pre class="res"><code>trained 7-class xgboost model on 40 cells x 1000 feature(s), 6 rounds
-  -> chr20_lineage.ubjx (booster+MRMP bundle)</code></pre>
-  <p><code class="inl">--framework xgboost | logistic | threshold</code>.</p>
-  <pre><code>methscope <span class="sub">classify</span> chr20_lineage.ubjx human_hg38_40_celltypes_chr20.cg</code></pre>
-  <pre class="res"><code>cell                                          prediction_label  confidence
-GSM5652176_Adipocytes-Z000000T7               Mesenchymal       0.229483
-GSM5652181_Saphenous-Vein-Endothel-Z000000RM  Endothelial       0.377817
-GSM5652187_Kidney-Tubular-Endothel-Z000000PX  Endothelial       0.362656</code></pre>
-  <p class="note">40/40 here, but this is the training set — a sanity check, not a validation.</p>
+  <p>Featurize once, then train from the artifact. The labels ride <em>inside</em> the
+    <code class="inl">.msfm</code>, so a later train cannot be handed a mismatched label
+    file, and the chain travels with it — <code class="inl">classify-train --data</code>
+    therefore takes no positional MRMP.</p>
+  <pre><code>methscope <span class="sub">classify-featurize</span> -l labels.txt -o chr20.msfm \
+  human_hg38_40_celltypes_chr20.cg chr20.mrmp
+methscope <span class="sub">classify-train</span> --data chr20.msfm -o chr20_lineage.clfx
+methscope <span class="sub">classify</span> chr20_lineage.clfx human_hg38_40_celltypes_chr20.cg</code></pre>
+  <p class="note"><b>Shape only — this particular example does not train.</b> The default
+    <code class="inl">xgboost</code> framework needs <code class="inl">--data</code>; the flat
+    single-booster form these commands used to take was removed. What is still missing here is
+    the labels: a node trains over the classes its MRMP declares, which for
+    <code class="inl">chr20.mrmp</code> are the 40 reference samples, so a 7-lineage
+    <code class="inl">labels.txt</code> leaves it with <span class="hl">no training rows for a
+    node's classes</span>. Give a label set that matches the MRMP's own classes, or build the
+    MRMP from a store already labelled the way you intend to train.
+    <code class="inl">--framework logistic | threshold</code> are unfitted and still take the
+    <code class="inl">&lt;query.cg&gt; &lt;ref.cm&gt;</code> positional form.</p>
 </section>
 
 <section class="card">
   <h2>Unbundle / re-wrap <span class="m">— round-trip a bundle by hand</span></h2>
   <p>The same wrapping by hand: unpack a bundle into its parts, then re-wrap
     (<code class="inl">unbundle</code> writes <code class="inl">chr20_lineage.ubj</code> +
-    <code class="inl">chr20_lineage.mrmp</code>; <code class="inl">-k</code> re-stamps the kind).</p>
-  <pre><code>methscope <span class="sub">unbundle</span> chr20_lineage.ubjx
-methscope <span class="sub">bundle</span> -m chr20_lineage.mrmp -k xgboost -o rewrapped.ubjx chr20_lineage.ubj</code></pre>
+    <code class="inl">chr20_lineage.mrmp</code>; <code class="inl">-k</code> re-stamps the kind).
+    Any <code class="inl">.clfx</code> works — the shipped models round-trip too.</p>
+  <pre><code>methscope <span class="sub">unbundle</span> chr20_lineage.clfx
+methscope <span class="sub">bundle</span> -m chr20_lineage.mrmp -k tree -o rewrapped.clfx chr20_lineage.ubj</code></pre>
 </section>
 
 </div>
@@ -530,8 +546,10 @@ methscope <span class="sub">deconv</span> self.msdref human_hg38_celltypes.cg</c
 <section class="card">
   <h2>Impute — shipped decoder <span class="m">— the whole-genome decoder</span></h2>
   <p>Impute dense CpG methylation from a sparse methylome with a bundled decoder — pure-C
-    inference, no CUDA or BLAS at run time. Output is a <code class="inl">.cg</code> of binary
-    0/1 calls; <code class="inl">--probs</code> emits per-CpG probabilities instead.</p>
+    inference, no CUDA or BLAS at run time. The default output keeps the predicted
+    <em>fraction</em> per CpG (format 4); <code class="inl">--binary</code> thresholds it at 0.5
+    into 0/1 calls (format 6), and <code class="inl">--probs</code> writes the same values as
+    a TSV.</p>
   <pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
@@ -540,27 +558,33 @@ yame fetch -c hg38/data/human_hg38_test.cg
 yame summary human_hg38_test.cg</code></pre>
   <pre class="res"><code>QFile               Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap  Log2OddsRatio   Beta  Depth
 human_hg38_test.cg      1     NA  global   29000    23857   29000      23857             NA  0.823     NA</code></pre>
-  <pre><code><span class="cm"># impute the whole genome from it</span>
+  <pre><code><span class="cm"># impute the whole genome from it — fractions, the default</span>
 yame fetch -c hg38/models/hg38_10k1.updecx
 methscope <span class="sub">upscale</span> -o human_hg38_test_reconstructed.cg hg38_10k1.updecx human_hg38_test.cg
-
-<span class="cm"># what comes out</span>
 yame summary human_hg38_test_reconstructed.cg</code></pre>
   <pre class="res"><code>QFile                             Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap  Log2OddsRatio   Beta  Depth
-human_hg38_test_reconstructed.cg      1     NA  global   10000     6239   10000       6239             NA  0.624     NA</code></pre>
-  <p class="note">This decoder writes one 10,000-CpG block, so N_univ is 10,000. Inside that block
-    the input carried 13 covered CpGs; the truth has 9,794 at beta 0.593, and the reconstruction
-    fills all 10,000 at beta 0.624 — it recovers the region's methylation level, not just its
-    average.</p>
+human_hg38_test_reconstructed.cg      1     NA  global 29401795    10000       0      10000             NA  0.617     NA</code></pre>
+  <pre><code><span class="cm"># or 0/1 calls, for anything that wants a set rather than a level</span>
+methscope <span class="sub">upscale</span> --binary -o human_hg38_test_calls.cg hg38_10k1.updecx human_hg38_test.cg
+yame summary human_hg38_test_calls.cg</code></pre>
+  <pre class="res"><code>QFile                      Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap  Log2OddsRatio   Beta  Depth
+human_hg38_test_calls.cg       1     NA  global   10000     6239   10000       6239             NA  0.624     NA</code></pre>
+  <p class="note">This decoder writes one 10,000-CpG block. The two rows describe the same
+    prediction from different sides: the fraction file spans the genome row space and reports
+    10,000 predicted CpGs at mean beta 0.617, while the binarized one is a <em>set</em> — 6,239
+    of the block's 10,000 CpGs called methylated, so its beta 0.624 is that fraction rather than
+    a mean level. Keep the default unless a downstream tool demands format 6: thresholding is
+    lossy, and it is what the accuracy check below needs.</p>
 </section>
 
 <section class="card">
   <h2>Score against the truth <span class="m">— exact-match accuracy</span></h2>
-  <p>Score the calls against the truth (the <code class="inl">.cg</code> holds binary 0/1 calls,
-    so this is exact-match accuracy; <code class="inl">--probs</code> emits probabilities
-    instead).</p>
+  <p>Score against the truth, which is a set of 0/1 calls — so compare the
+    <code class="inl">--binary</code> output, not the fractions. Against the fraction file every
+    row differs and this prints <code class="inl">0/9794 (0.0%)</code>, which looks like a
+    broken model rather than a mismatched format.</p>
   <pre><code>yame fetch -c hg38/data/human_hg38_test.truth.cg
-paste &lt;(yame rowsub -I 1_10000 human_hg38_test_reconstructed.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;</code></pre>
+paste &lt;(yame rowsub -I 1_10000 human_hg38_test_calls.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;</code></pre>
   <pre class="res"><code>9211/9794 (94.0%)</code></pre>
 </section>
 
@@ -610,7 +634,7 @@ mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 <span class="cm"># the whole pipeline from scratch, on the 40-cell-type chr20 reference
 # 1. define the features</span>
 yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
-methscope <span class="sub">mrmp-build</span> --flat human_hg38_40_celltypes_chr20.cg chr20.mrmp</code></pre>
+methscope <span class="sub">mrmp-build</span> --flat --force human_hg38_40_celltypes_chr20.cg chr20.mrmp</code></pre>
   <pre class="res"><code>samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450</code></pre>
   <pre><code><span class="cm"># 2. featurize the truth atlas -> sampling/truth msur</span>
 methscope <span class="sub">upscale-featurize</span> --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></code></pre>
