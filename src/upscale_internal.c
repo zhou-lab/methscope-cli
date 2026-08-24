@@ -4,21 +4,20 @@
 #include <string.h>
 #include "methscope.h"
 
-static int internal_usage(void) {
-  ms_help(stderr,
+static int internal_usage(FILE *out) {
+  ms_help(out,
     "Usage: methscope _upscale <command> [options]\n\n"
     "Internal development tools; interfaces and file formats may change:\n"
     "  trunk-train Train a research shared 512-dimensional decoder trunk\n\n"
     "The pipeline steps are public: upscale-featurize, upscale-set-units.\n\n"
     "These commands are intentionally omitted from the public command list.\n");
-  return 1;
+  return out == stdout ? 0 : 1;
 }
 
 int main_upscale_internal(int argc, char **argv) {
-  if (argc < 2) return internal_usage();
+  if (argc < 2) return internal_usage(stderr);
   if (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) {
-    internal_usage();
-    return 0;
+    return internal_usage(stdout);
   }
   if (!strcmp(argv[1], "trunk-train"))
     return main_upscale_trunk_train(argc - 1, argv + 1);

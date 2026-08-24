@@ -81,8 +81,8 @@ static int looks_like_header(const char *line) {
   return header;
 }
 
-static int upscale_usage(void) {
-  ms_help(stderr,
+static int upscale_usage(FILE *out) {
+  ms_help(out,
     "\n"
     "Usage:\n"
     "  methscope upscale [options] <model.updec|.updecx> [input]\n"
@@ -115,7 +115,7 @@ static int upscale_usage(void) {
     "  otherwise a dense block of n_out CpGs. With --binary, format 6 of 0/1 calls;\n"
     "  with --probs, a TSV of per-CpG probabilities (one row per sample).\n"
     "\n");
-  return 1;
+  return out == stdout ? 0 : 1;
 }
 
 /* Output sink: a .cg stream (default) or a TSV of per-CpG probabilities
@@ -417,14 +417,13 @@ int main_upscale(int argc, char *argv[]) {
     else if (strcmp(argv[i], "--probs") == 0) with_probs = 1;
     else if (strcmp(argv[i], "--binary") == 0) as_binary = 1;
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-      upscale_usage();
-      return 0;
+      return upscale_usage(stdout);
     }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
       udie("unrecognized or incomplete option", argv[i]);
     else break;
   }
-  if (argc - i < 1 || argc - i > 2) return upscale_usage();
+  if (argc - i < 1 || argc - i > 2) return upscale_usage(stderr);
   const char *model_path = argv[i];
   const char *input_path = (argc - i == 2) ? argv[i + 1] : "-";
   int bundled = ms_bundle_is(model_path);

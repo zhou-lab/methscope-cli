@@ -54,8 +54,8 @@ static double real(const char *s, const char *name) {
   return x;
 }
 
-static int usage(void) {
-  ms_help(stderr,
+static int usage(FILE *out) {
+  ms_help(out,
     "Usage: methscope upscale-train -i DATA.msur --units UNITS.msui\n"
     "       --mrmp TOP1000.mrmp -o MODEL.updecx --work-dir DIR [options]\n\n"
     "Train whole-genome UPDEC2 processing units on CUDA. Each MRMP contributes\n"
@@ -105,7 +105,7 @@ static int usage(void) {
     "  --force                  replace final output and manifest\n"
     "  --dry-run                validate options and print configuration\n"
     "  -h, --help               show this help\n");
-  return 1;
+  return out == stdout ? 0 : 1;
 }
 
 static void ensure_dir(const char *path) {
@@ -134,7 +134,7 @@ int main_upscale_train(int argc, char **argv) {
 
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
-    if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(); return 0; }
+    if (!strcmp(a, "-h") || !strcmp(a, "--help")) { return usage(stdout); }
     else if ((!strcmp(a, "-i") || !strcmp(a, "--data")) && i + 1 < argc) data = argv[++i];
     else if (!strcmp(a, "--units") && i + 1 < argc) index = argv[++i];
     else if (!strcmp(a, "--mrmp") && i + 1 < argc) mrmp = argv[++i];
@@ -180,9 +180,9 @@ int main_upscale_train(int argc, char **argv) {
     else if (!strcmp(a, "--pilot-units") && i + 1 < argc) c.pilot_units_path = argv[++i];
     else if (!strcmp(a, "--force")) force = 1;
     else if (!strcmp(a, "--dry-run")) dry = 1;
-    else { usage(); terr("unrecognized or incomplete option", a); }
+    else { usage(stderr); terr("unrecognized or incomplete option", a); }
   }
-  if (!data || !index || !mrmp || !out || !work) return usage();
+  if (!data || !index || !mrmp || !out || !work) return usage(stderr);
   /* The feature width is the msur's, full stop. It was a flag until 2026-08-22,
    * which let a run silently use a prefix of the columns -- and for a chain that
    * prefix is the ROOT set, since the sets are concatenated in tree order. So a

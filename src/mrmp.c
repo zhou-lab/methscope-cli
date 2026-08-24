@@ -910,7 +910,7 @@ int main_mrmp_inspect(int argc, char *argv[]) {
   const char *path = NULL; int show_patterns = 0; uint32_t top_k = 20;
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-      ms_help(stderr, "Usage: methscope inspect [options] IN.mrmp\n\n"
+      ms_help(stdout, "Usage: methscope inspect [options] IN.mrmp\n\n"
         "  IN.mrmp      MRMPIDX1 artifact to report on\n\n"
         "  --patterns   list the top-ranked patterns after the header\n"
         "  --top K      how many to list (default 20)\n");
@@ -1081,7 +1081,7 @@ int main_mrmp_export(int argc, char *argv[]) {
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
-      ms_help(stderr,
+      ms_help(stdout,
         "Usage: methscope mrmp-export [options] IN.mrmp OUT.cm\n\n"
         "  IN               a .mrmp: one set, or a chain of several\n"
         "  OUT.cm           per-CpG P1..PK/Pna labels as a YAME format-2 mask\n"
@@ -1465,7 +1465,7 @@ int main_mrmp_pool(int argc, char *argv[]) {
     else if (!strcmp(argv[i], "--include-all-0")) inc_all0 = 1;
     else if (!strcmp(argv[i], "--include-all-1")) inc_all1 = 1;
     else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-      ms_help(stderr,
+      ms_help(stdout,
         "Usage: methscope mrmp-pool [options] -o OUT.mrmp IN.mrmp [IN.mrmp ...]\n\n"
         "Pool several MRMP sets into one chain and cut them to a\n"
         "shared pattern budget. Needs no store and no reference -- pattern CpG\n"
@@ -2635,7 +2635,7 @@ int main_mrmp_build(int argc, char *argv[]) {
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
-      ms_help(stderr,
+      ms_help(stdout,
         "Usage: methscope mrmp-build [options] REF.cg OUT.mrmp\n\n"
         "Build a routing-tree MRMP from a labelled reference store. Each node\n"
         "uses its own class subset. Rebuilding a child can admit CpGs that its\n"

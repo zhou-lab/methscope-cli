@@ -18,63 +18,62 @@
 
 /* Grouped, ANSI-styled overview. Colors are emitted only when stderr is a TTY,
  * so redirected/piped output stays plain (cf. the ls-alias foot-gun). */
-static int usage(void) {
-  int tty = isatty(STDERR_FILENO);
+static int usage(FILE *out) {
+  int tty = isatty(fileno(out));
   const char *A = tty ? "\033[1;36m" : ""; /* accent: title + command names */
   const char *B = tty ? "\033[1m"    : ""; /* section headers */
   const char *D = tty ? "\033[2m"    : ""; /* dim: version, hints */
   const char *R = tty ? "\033[0m"    : "";
-#define CMD(n, d) fprintf(stderr, "  %s%-17s%s %s\n", A, n, R, d)
+#define CMD(n, d) fprintf(out, "  %s%-17s%s %s\n", A, n, R, d)
   char store[4096];
   yame_assets_root(NULL, NULL, store, sizeof(store));
   const char *dh = getenv("YAME_DATA_HOME");
-  fprintf(stderr, "\n%smethscope%s %sv%s%s\n", A, R, D, METHSCOPE_VERSION, R);
-  fprintf(stderr, "%sDNA methylome analysis via MRMP encoding%s\n", D, R);
-  fprintf(stderr, "%sbuilt against YAME %s%s\n", D, YAME_VERSION, R);
-  fprintf(stderr, "%sYAME_DATA_HOME%s  %s %s%s%s\n", B, R, store, D,
+  fprintf(out, "\n%smethscope%s %sv%s%s\n", A, R, D, METHSCOPE_VERSION, R);
+  fprintf(out, "%sDNA methylome analysis via MRMP encoding%s\n", D, R);
+  fprintf(out, "%sbuilt against YAME %s%s\n", D, YAME_VERSION, R);
+  fprintf(out, "%sYAME_DATA_HOME%s  %s %s%s%s\n", B, R, store, D,
           dh && *dh ? "(from $YAME_DATA_HOME)" : "(unset; -d overrides)", R);
-  fprintf(stderr, "\n%sUsage%s  methscope <command> [options] [args]\n\n", D, R);
+  fprintf(out, "\n%sUsage%s  methscope <command> [options] [args]\n\n", D, R);
 
-  fprintf(stderr, "%sModels & data%s %s— fetched with 'yame fetch methscope/...'%s\n",
+  fprintf(out, "%sModels & data%s %s— fetched with 'yame fetch methscope/...'%s\n",
           B, R, D, R);
 
-  fprintf(stderr, "\n%sMRMP construction%s %s— the feature foundation%s\n", B, R, D, R);
+  fprintf(out, "\n%sMRMP construction%s %s— the feature foundation%s\n", B, R, D, R);
   CMD("mrmp-build",   "Build the MRMP routing tree (--flat for one flat set)");
   CMD("mrmp-export",  "Emit the runtime .cm mask (and pattern / count tables)");
   CMD("mrmp-pool",    "Combine MRMP sets and cut them to a shared column budget");
 
-  fprintf(stderr, "\n%sClassification%s %s(cell type, sex, ...)%s\n", B, R, D, R);
+  fprintf(out, "\n%sClassification%s %s(cell type, sex, ...)%s\n", B, R, D, R);
   CMD("classify",     "Classify a methylome -> labels + confidence");
   CMD("classify-train","Fit a label classifier (xgboost / threshold / logistic)");
   CMD("classify-featurize","Prebuild the .msfm feature matrix (parallel, reusable)");
 
-  fprintf(stderr, "\n%sDeconvolution%s\n", B, R);
+  fprintf(out, "\n%sDeconvolution%s\n", B, R);
   CMD("deconv-build-ref","Pack a cell-type store into the .msdref deconvolution reference");
   CMD("deconv",           "Estimate cell-type proportions, rebuilding the MRMP per query");
 
-  fprintf(stderr, "\n%sUpscaling%s %s(imputation)%s\n", B, R, D, R);
+  fprintf(out, "\n%sUpscaling%s %s(imputation)%s\n", B, R, D, R);
   CMD("upscale",      "Impute genome-wide CpG methylation from a sparse methylome");
   CMD("upscale-featurize", "Build the MSURAW2/3 training msur from a truth .cg");
   CMD("upscale-set-units", "Build the MSUIDX1 processing-unit index from the reference store");
   CMD("upscale-train","Train the whole-genome upscale decoder (CUDA)");
 
-  fprintf(stderr, "\n%sModel bundles%s\n", B, R);
+  fprintf(out, "\n%sModel bundles%s\n", B, R);
   CMD("bundle",       "Wrap a model + its MRMP into a self-contained bundle");
   CMD("relabel",      "Rename a class label in a trained model, no retraining");
   CMD("unbundle",     "Unpack a bundle into its model, MRMP, and outcpg mask");
   CMD("inspect",      "Describe any artifact: bundle, .mrmp, .msui, .msur, or .msfm");
 
-  fprintf(stderr, "\n%sRun 'methscope <command> -h' for command-specific options.%s\n\n",
+  fprintf(out, "\n%sRun 'methscope <command> -h' for command-specific options.%s\n\n",
           D, R);
 #undef CMD
-  return 1;
+  return out == stdout ? 0 : 1;
 }
 
 int main(int argc, char *argv[]) {
-  if (argc < 2) return usage();
+  if (argc < 2) return usage(stderr);
   if (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
-    usage();
-    return 0;
+    return usage(stdout);
   }
   if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0) {
     printf("methscope %s (yame %s)\n", METHSCOPE_VERSION, YAME_VERSION);

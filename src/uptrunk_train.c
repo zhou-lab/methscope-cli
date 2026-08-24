@@ -11,8 +11,8 @@
 #include "upsplit.h"
 #include "methscope.h"
 
-static int usage(void) {
-  ms_help(stderr,
+static int usage(FILE *out) {
+  ms_help(out,
     "Usage: methscope _upscale trunk-train -i DATA.msur -o TRUNK.upfac [options]\n\n"
     "  --features MODE   beta, missing, or count (default count)\n"
     "  --patterns N      MRMPs (default 1000)\n"
@@ -29,7 +29,7 @@ static int usage(void) {
     "  --split FILE      curated cell split (default seeded 70/15/15)\n"
     "  --seed N          default 1\n"
     "  --device N        default 0\n");
-  return 1;
+  return out == stdout ? 0 : 1;
 }
 
 static uint64_t u64(const char *s, const char *name) {
@@ -58,7 +58,7 @@ int main_upscale_trunk_train(int argc, char **argv) {
   c.homogeneous_fraction = 0.1; c.feature_mode = MS_UPFEATURE_COUNT;
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
-    if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(); return 0; }
+    if (!strcmp(a, "-h") || !strcmp(a, "--help")) { return usage(stdout); }
     else if (!strcmp(a, "-i") && i + 1 < argc) c.data_path = argv[++i];
     else if (!strcmp(a, "-o") && i + 1 < argc) c.model_path = argv[++i];
     else if (!strcmp(a, "--features") && i + 1 < argc) {
@@ -82,12 +82,12 @@ int main_upscale_trunk_train(int argc, char **argv) {
     else if (!strcmp(a, "--split") && i + 1 < argc) c.split_path = argv[++i];
     else if (!strcmp(a, "--seed") && i + 1 < argc) c.seed = u64(argv[++i], a);
     else if (!strcmp(a, "--device") && i + 1 < argc) c.device = (int)u64(argv[++i], a);
-    else { usage(); fprintf(stderr, "[methscope] _upscale trunk-train: bad option: %s\n", a); return 1; }
+    else { usage(stderr); fprintf(stderr, "[methscope] _upscale trunk-train: bad option: %s\n", a); return 1; }
   }
   if (!c.data_path || !c.model_path || !c.patterns || !c.rank || !c.hidden ||
       !c.steps || !c.batch || !c.eval_batches || !c.log_every ||
       c.homogeneous_fraction < 0 || c.homogeneous_fraction > 1)
-    return usage();
+    return usage(stderr);
   if (c.split_path) ms_upsplit_check("_upscale trunk-train", c.data_path, c.split_path);
   if (!ms_upfactor_cuda_available()) {
     fprintf(stderr, "[methscope] _upscale trunk-train: CUDA backend unavailable\n");

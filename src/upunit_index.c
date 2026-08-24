@@ -211,8 +211,8 @@ static uint64_t file_size(const char *path) {
   return (uint64_t)st.st_size;
 }
 
-static int usage(void) {
-  ms_help(stderr,
+static int usage(FILE *out) {
+  ms_help(out,
     "Usage: methscope upscale-set-units [options] REF.cg OUT.msui\n\n"
     "Build the whole-genome processing-unit index used by UPDEC2. Each CpG's\n"
     "binstring is derived from the reference store itself. Memberships are\n"
@@ -232,7 +232,7 @@ static int usage(void) {
     "  --unit-cpgs N         target CpGs per unit (default 16384)\n"
     "  --bin-cpgs N          deprecated alias for --unit-cpgs\n"
     "  -h, --help            show this help\n");
-  return 1;
+  return out == stdout ? 0 : 1;
 }
 
 int main_upscale_set_units(int argc, char **argv) {
@@ -243,7 +243,7 @@ int main_upscale_set_units(int argc, char **argv) {
   float beta_thr = MS_BS_DEF_BETA_THRESH;
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-      usage(); return 0;
+      return usage(stdout);
     } else if (!strcmp(argv[i], "--store") && i + 1 < argc) {
       store_path = argv[++i];
     } else if (!strcmp(argv[i], "--mincov") && i + 1 < argc) {
@@ -261,7 +261,7 @@ int main_upscale_set_units(int argc, char **argv) {
     } else if (!strcmp(argv[i], "--top-patterns") && i + 1 < argc) {
       ++i; /* accepted temporarily so old scripts fail only on changed output semantics */
     } else if (argv[i][0] == '-') {
-      usage();
+      usage(stderr);
       fprintf(stderr, "[methscope] upscale-set-units: bad option: %s\n", argv[i]);
       return 1;
     } else if (npos < 2) {
@@ -273,10 +273,10 @@ int main_upscale_set_units(int argc, char **argv) {
   /* REF.cg may be given positionally or as --store, the spelling the recipes
    * in the lab journal already use. Either way it is the only input. */
   if (store_path) {
-    if (npos != 1) { usage(); fail("--store takes only OUT.msui"); }
+    if (npos != 1) { usage(stderr); fail("--store takes only OUT.msui"); }
     out_path = pos[0];
   } else {
-    if (npos != 2) { usage(); fail("need REF.cg and OUT.msui"); }
+    if (npos != 2) { usage(stderr); fail("need REF.cg and OUT.msui"); }
     /* Recipes predating 2026-08-22 passed a built .mrmp here. That mode is
      * gone -- see the header comment -- and the generic "no .idx" error it
      * would otherwise hit reads like a missing file rather than a retirement. */

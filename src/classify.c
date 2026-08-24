@@ -34,8 +34,8 @@ static void pdie(const char *msg, const char *arg) {
   exit(1);
 }
 
-static int predict_usage(void) {
-  ms_help(stderr,
+static int predict_usage(FILE *out) {
+  ms_help(out,
     "\n"
     "Usage:\n"
     "  methscope classify [options] <model.clfx> <query.cg>\n"
@@ -88,7 +88,7 @@ static int predict_usage(void) {
     "  uniform posterior and 1 at a decided one. `violation` has no posterior\n"
     "  and reports a margin instead.\n"
     "\n");
-  return 1;
+  return out == stdout ? 0 : 1;
 }
 
 /* Inference for the linear frameworks (threshold / logistic): featurize the
@@ -662,7 +662,7 @@ int main_predict(int argc, char *argv[]) {
     }
     else if (strcmp(argv[i], "--no-header") == 0) no_header = 1;
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-      predict_usage(); return 0;
+      return predict_usage(stdout);
     }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
       pdie("unrecognized or incomplete option", argv[i]);
@@ -675,8 +675,8 @@ int main_predict(int argc, char *argv[]) {
   /* Exactly one model argument. The loose <ref.mrmp> <booster.ubj> form went
    * with the flat format: a bare booster has no framework mark and no chain, so
    * there is nothing to route and nothing to check the featurization against. */
-  if (data_path) { if (argc - i != 1) return predict_usage(); }
-  else           { if (argc - i != 2) return predict_usage(); }
+  if (data_path) { if (argc - i != 1) return predict_usage(stderr); }
+  else           { if (argc - i != 2) return predict_usage(stderr); }
   if (data_path) --i;                 /* so argv[i+1], argv[i+2] stay the model */
   const char *model_arg = argv[i];
   const char *query_cg  = data_path ? NULL : argv[i + 1];
@@ -686,7 +686,7 @@ int main_predict(int argc, char *argv[]) {
   /* --framework violation: the second argument is the .mrmp itself, not a
    * bundle. Nothing is trained, so there is no model file in between. */
   if (fw_violation) {
-    if (argc - i != 2) return predict_usage();
+    if (argc - i != 2) return predict_usage(stderr);
     const char *art = argv[i];
     if (!ms_mrmp_is_artifact(art))
       pdie("--framework violation needs the MRMPIDX1 artifact (.mrmp); an "

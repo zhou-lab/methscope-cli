@@ -66,8 +66,8 @@ static int inspect_msdref(const char *path) {
   return 0;
 }
 
-static int inspect_usage(void) {
-  ms_help(stderr,
+static int inspect_usage(FILE *out) {
+  ms_help(out,
     "\n"
     "Usage:\n"
     "  methscope inspect <FILE>\n"
@@ -90,7 +90,7 @@ static int inspect_usage(void) {
     "  --top K      .mrmp only: how many to list (default 20)\n"
     "  -h           Show this help message.\n"
     "\n");
-  return 1;
+  return out == stdout ? 0 : 1;
 }
 
 static char *buf_to_tmp(const void *buf, size_t len) {
@@ -327,7 +327,7 @@ static int inspect_tree(const char *path) {
 
 int main_inspect(int argc, char *argv[]) {
   if (argc == 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
-    inspect_usage(); return 0;
+    return inspect_usage(stdout);
   }
   /* The first bare argument is the file; --top takes a value, so skip its. */
   const char *path = NULL;
@@ -342,7 +342,7 @@ int main_inspect(int argc, char *argv[]) {
   for (int i = 1; i < argc && !path; ++i)
     if (argv[i][0] != '-' && (i == 1 || strcmp(argv[i - 1], "--top")))
       path = argv[i];
-  if (!path) return inspect_usage();
+  if (!path) return inspect_usage(stderr);
   if (want_tree) return inspect_tree(path);
 
   /* Detect the artifact from its magic and hand off to the owning reporter. */
@@ -371,7 +371,7 @@ int main_inspect(int argc, char *argv[]) {
   if (!memcmp(magic, MSDREF_MAGIC, 7)) return inspect_msdref(path);
   if (!memcmp(magic, "MSFMAT1", 7)) { ms_msfm_report(path); return 0; }
 
-  if (argc != 2) return inspect_usage();
+  if (argc != 2) return inspect_usage(stderr);
   if (!ms_bundle_is(path))
     idie("not a methscope bundle, .mrmp, .msui, .msur, or .msdref", path);
 bundle_report:;

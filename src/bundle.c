@@ -226,8 +226,8 @@ static void stream_path(FILE *out, const char *path, uint64_t expected,
 /* ------------------------------------------------------------------ */
 /* bundle                                                             */
 /* ------------------------------------------------------------------ */
-static int bundle_usage(void) {
-  ms_help(stderr,
+static int bundle_usage(FILE *out) {
+  ms_help(out,
     "\n"
     "Usage:\n"
     "  methscope bundle -m <ref.mrmp> -o <out> <model>\n"
@@ -260,7 +260,7 @@ static int bundle_usage(void) {
     "                  `classify query.cg tree.clfx`.\n"
     "  -h              Show this help message.\n"
     "\n");
-  return 1;
+  return out == stdout ? 0 : 1;
 }
 
 void ms_bundle_pack(const char *out, const char *kind, const char *model_path,
@@ -400,15 +400,15 @@ int main_bundle(int argc, char *argv[]) {
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out    = argv[++i];
     else if (strcmp(argv[i], "--tree") == 0) tree = 1;
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-      bundle_usage(); return 0;
+      return bundle_usage(stdout);
     }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
       bdie("unrecognized or incomplete option", argv[i]);
     else break;
   }
-  if (!mrmp || !out) return bundle_usage();
+  if (!mrmp || !out) return bundle_usage(stderr);
   if (tree) { inner_list = argv + i; n_inner = argc - i; }
-  if (!tree && argc - i != 1) return bundle_usage();
+  if (!tree && argc - i != 1) return bundle_usage(stderr);
   const char *model = tree ? NULL : argv[i];
 
   /* -l: embed labels into the (raw) booster first, then bundle the annotated copy. */
@@ -475,8 +475,8 @@ int main_bundle(int argc, char *argv[]) {
 /* ------------------------------------------------------------------ */
 /* unbundle                                                           */
 /* ------------------------------------------------------------------ */
-static int unbundle_usage(void) {
-  ms_help(stderr,
+static int unbundle_usage(FILE *out) {
+  ms_help(out,
     "\n"
     "Usage:\n"
     "  methscope unbundle [-o <model_out>] [--mrmp <mrmp_out>] <bundle>\n"
@@ -496,7 +496,7 @@ static int unbundle_usage(void) {
     "  --mrmp <mrmp_out> write the bundled MRMP (.cm) here (default: derived).\n"
     "  -h                Show this help message.\n"
     "\n");
-  return 1;
+  return out == stdout ? 0 : 1;
 }
 
 static void write_out(const char *path, void *buf, size_t len) {
@@ -532,13 +532,13 @@ int main_unbundle(int argc, char *argv[]) {
     if      (strcmp(argv[i], "-o") == 0 && i+1 < argc) model_out = argv[++i];
     else if (strcmp(argv[i], "--mrmp") == 0 && i+1 < argc) mrmp_out = argv[++i];
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-      unbundle_usage(); return 0;
+      return unbundle_usage(stdout);
     }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
       bdie("unrecognized or incomplete option", argv[i]);
     else break;
   }
-  if (argc - i != 1) return unbundle_usage();
+  if (argc - i != 1) return unbundle_usage(stderr);
   const char *bundle = argv[i];
 
   char *model_def = model_out ? NULL : derive_model_out(bundle);

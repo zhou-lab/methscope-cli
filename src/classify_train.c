@@ -124,8 +124,8 @@ static const char *commafmt_tr(uint64_t v, char *buf) {
   return buf;
 }
 
-static int train_usage(void) {
-  ms_help(stderr,
+static int train_usage(FILE *out) {
+  ms_help(out,
     "\n"
     "Usage:\n"
     "  methscope classify-train -l <labels.txt> -o <out.clfx> [options] <query.cg> <ref.cm>\n"
@@ -220,7 +220,7 @@ static int train_usage(void) {
     "                   not because it helped.\n"
     "  -h               Show this help message.\n"
     "\n");
-  return 1;
+  return out == stdout ? 0 : 1;
 }
 
 /* --------------------------------------------------------- classify-train-tree
@@ -528,7 +528,7 @@ int main_train(int argc, char *argv[]) {
     }
     /* -h before the --data check, or `classify-train -h` -- the commonest way
      * to ask what the flags ARE -- dies telling you to pass one. */
-    if (want_help) { train_usage(); return 0; }
+    if (want_help) { return train_usage(stdout); }
     if (!strcmp(fw, "xgboost")) {
       /* xgboost is tree-only now. The flat single-booster format is gone --
        * scoring it was deleted with the second featurizer it depended on, so
@@ -598,7 +598,7 @@ int main_train(int argc, char *argv[]) {
     else if (strcmp(argv[i], "-n") == 0 && i+1 < argc)
       nrounds = parse_nonneg_int(argv[++i], "-n expects a non-negative integer");
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-      train_usage(); return 0;
+      return train_usage(stdout);
     }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
       tdie("unrecognized or incomplete option", argv[i]);
@@ -624,7 +624,7 @@ int main_train(int argc, char *argv[]) {
    * not the binstrings). Writing the mask at exactly the model's pattern count
    * is what keeps the shipped mask and the model dimension from drifting. */
   if (fw_vio) {
-    if (!out_path || argc - i != 1) return train_usage();
+    if (!out_path || argc - i != 1) return train_usage(stderr);
     if (!ms_path_is_bundle_ext(out_path))
       tdie("the violation framework requires a .clfx output (bundled with the MRMP)",
            out_path);
@@ -658,8 +658,8 @@ int main_train(int argc, char *argv[]) {
   /* With --data the features are already built, so <query.cg> drops out and
    * only <ref.cm> stays positional -- the bundle still has to carry the MRMP. */
   int want_pos = data_path ? 1 : 2;
-  if (!out_path || argc - i != want_pos) return train_usage();
-  if (!data_path && !labels_path) return train_usage();
+  if (!out_path || argc - i != want_pos) return train_usage(stderr);
+  if (!data_path && !labels_path) return train_usage(stderr);
   if (fw_lin && !ms_path_is_bundle_ext(out_path))
     tdie("threshold/logistic frameworks require a .clfx output (bundled with the MRMP)", out_path);
   if (scalar_cov && !data_path)

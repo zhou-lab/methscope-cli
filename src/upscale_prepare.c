@@ -286,8 +286,8 @@ static void *rep_worker(void *arg) {
   return NULL;
 }
 
-static int usage(void) {
-  ms_help(stderr,
+static int usage(FILE *out) {
+  ms_help(out,
     "Usage: methscope upscale-featurize [options] TRUTH.cg IN.mrmp OUT.msur\n\n"
     "Create a compact exact-YAME sampling msur for global upscale training.\n"
     "The original TRUTH.cg remains the truth store and is never copied.\n\n"
@@ -330,7 +330,7 @@ static int usage(void) {
     "TRAINING time, so one msur covers every `upscale-train --features` mode\n"
     "(missing / count / beta / scalar). Only the *simulation* is fixed here: the\n"
     "cells, the replicate count, the coverage ladder and --binarize.\n");
-  return 1;
+  return out == stdout ? 0 : 1;
 }
 
 
@@ -347,8 +347,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
   int embed_truth = 1;   /* always embed truth -- upscale-train requires it */
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-      usage();
-      return 0;
+      return usage(stdout);
     }
     if (!strcmp(argv[i], "--manifest") && i + 1 < argc) manifest = argv[++i];
     else if (!strcmp(argv[i], "--reps") && i + 1 < argc) reps = (uint32_t)parse_u64(argv[++i], "--reps");
@@ -389,15 +388,15 @@ int main_upscale_prepare(int argc, char *argv[]) {
     else if (!strcmp(argv[i], "--threads") && i + 1 < argc)
       nthreads = (uint32_t)parse_u64(argv[++i], "--threads");
     else if (!strcmp(argv[i], "--in-memory")) in_memory = 1;
-    else if (argv[i][0] == '-') { usage(); pdie("unrecognized or incomplete option", argv[i]); }
+    else if (argv[i][0] == '-') { usage(stderr); pdie("unrecognized or incomplete option", argv[i]); }
     else if (npos < 3) pos[npos++] = argv[i];
     else pdie("too many arguments", argv[i]);
   }
   if (npos != 3) {
-    usage();
+    usage(stderr);
     pdie("need TRUTH.cg, IN.mrmp, and OUT.msur", NULL);
   }
-  if (!reps || (!log_min && !n_levels)) return usage();
+  if (!reps || (!log_min && !n_levels)) return usage(stderr);
   /* Both pools read the inflated records, so without --in-memory memory_cells
    * is NULL and the replicate pool dereferences it. Refuse up front: this used
    * to SEGFAULT, because the guard lived in the replicate loop and was lost

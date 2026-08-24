@@ -597,8 +597,8 @@ static int merge_msfm(const char *out, char **in, int n_in) {
 
 /* ---- CLI --------------------------------------------------------------- */
 
-static int usage(void) {
-  ms_help(stderr,
+static int usage(FILE *out) {
+  ms_help(out,
     "\n"
     "Usage:\n"
     "  methscope classify-featurize [options] -o <out.msfm> <query.cg> <ref.mrmp>\n"
@@ -698,7 +698,7 @@ static int usage(void) {
     "  `classify-train --patterns N`. Betas are u16 fixed point (code/65534,\n"
     "  65535 = NA), the same encoding the upscale msur uses for truth.\n"
     "\n");
-  return 1;
+  return out == stdout ? 0 : 1;
 }
 
 /* Expand the mask arguments into one .cm per set.
@@ -853,18 +853,18 @@ int main_classify_featurize(int argc, char *argv[]) {
     }
     else if (!strcmp(argv[i], "--legacy-summarize")) legacy = 1;
     else if (!strcmp(argv[i], "--merge")) merge = 1;
-    else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(); return 0; }
+    else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { return usage(stdout); }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-")) fdie("unrecognized option", argv[i]);
     else break;
   }
-  if (!out) return usage();
+  if (!out) return usage(stderr);
 
   if (merge) {
-    if (argc - i < 1) return usage();
+    if (argc - i < 1) return usage(stderr);
     return merge_msfm(out, argv + i, argc - i);
   }
 
-  if (argc - i < 2) return usage();
+  if (argc - i < 2) return usage(stderr);
   const char *query = argv[i];
   uint32_t n_sets; const char **refs; char **tmps; char **snames;
   uint64_t *mbase, *mlen; uint32_t *mpat;
