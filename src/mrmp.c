@@ -2529,8 +2529,15 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
     fprintf(rep, "%s  pair separation: min %s, median %s CpGs\n%s",
             cyan, commafmt_local(sorted[0], b3),
             commafmt_local(sorted[npair / 2], b4), reset);
-  fprintf(rep, "  split threshold: %s%s%s CpGs -> %u group(s)\n",
-          yellow, commafmt_local(min_seg, b5), reset, ng);
+  /* --flat carries min_seg as UINT64_MAX, which printed as
+   * "18,446,744,073,709,551,615 CpGs" -- a number no reader can parse as
+   * "there is no threshold". Say that instead. */
+  if (min_seg == UINT64_MAX)
+    fprintf(rep, "  split threshold: %snone%s (flat) -> %u group(s)\n",
+            yellow, reset, ng);
+  else
+    fprintf(rep, "  split threshold: %s%s%s CpGs -> %u group(s)\n",
+            yellow, commafmt_local(min_seg, b5), reset, ng);
 
   if (dry) {   /* what a threshold is actually chosen from: how the partition
                 * moves as it rises, across this node's own observed pairs */
