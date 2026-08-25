@@ -1369,6 +1369,19 @@ static void d2_record(const d2ref_t *Rr, const d2opt_t *o, d2ws_t *w,
         if (verbose) {
           uint64_t tot = 0;
           for (uint32_t r = 0; r < P2.n_pat; ++r) tot += P2.n[r];
+          /* --pair-count reports its conjunction loss once, against ALL
+           * classes, so it cannot follow one contrast down the rounds. The
+           * panel's own segregating matrix can: this is how many measured
+           * CpGs THIS round's panel offers for telling the tracked pair
+           * apart, which is the number the total CpG count obscures -- the
+           * total falls as classes leave, while the evidence for a pair the
+           * mixture actually contains does not. */
+          if (ia < R.n_class && ib < R.n_class)
+            fprintf(stderr,
+              "[methscope] deconv: %s: round %u pair %s|%s -> %u seg CpGs\n",
+              rec < n_qname ? qname[rec] : "record", round,
+              R.name[ia], R.name[ib],
+              seg2[(size_t)ia * R.n_class + ib]);
           fprintf(stderr,
             "[methscope] deconv: %s: round %u on %u classes -> %u patterns "
             "over %llu CpGs (w=n^%.2f)", rec < n_qname ? qname[rec] : "record",
