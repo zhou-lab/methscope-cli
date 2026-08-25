@@ -415,10 +415,11 @@ Blood-Monocytes  Monocyte                 0.999126   0.993053</code></pre>
 methscope <span class="sub">inspect</span> hg38_sex.clfx</code></pre>
   <pre class="res"><code>container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 30,931 bytes
 
-    #  section         offset         size  content
-    0  mrmp                 0       30,653  fmt2 MRMP definition, 3 states
-    1  kind            30,761            8  "logistic" framework mark
-    2  model           30,769          154  methscope-linear text spec
+    #  section               offset         size  content
+  ---  ---------------  -----------  -----------  --------------------------------
+    0  mrmp                       0       30,653  YAME .cm mask, 3 states
+    1  kind                  30,761            8  "logistic" framework mark
+    2  model                 30,769          154  methscope-linear text spec
 
   [2] model      logistic linear classifier - run via `classify`
       method     logistic
@@ -505,8 +506,8 @@ methscope <span class="sub">deconv</span> hg38_62celltypes.msdref human_hg38_imm
   <pre class="res"><code>cell                  class       fraction
 mac70_mono30_2pow22   Macrophage  0.696336
 mac70_mono30_2pow22   Mono        0.303664
-cd4_70_cd8_30_2pow22  Tmem_CD4    0.498300
-cd4_70_cd8_30_2pow22  Tmem_CD8    0.268400
+cd4_70_cd8_30_2pow22  Tmem_CD4    0.498298
+cd4_70_cd8_30_2pow22  Tmem_CD8    0.268361
 …</code></pre>
   <p>Only the classes at or above <code class="inl">--min-frac</code> are listed, largest
     first. <code class="inl">--report</code> gives the same thing to read rather than to
@@ -532,8 +533,11 @@ tnaive_cd4_70_cd8_30_2pow22: Tnaive_CD4 69.9%; Tnaive_CD8 30.1%</code></pre>
 yame fetch -c hg38/models/hg38_celltype.clfx
 methscope <span class="sub">deconv-build-ref</span> -o self.msdref human_hg38_celltypes.cg
 methscope <span class="sub">deconv</span> self.msdref human_hg38_celltypes.cg</code></pre>
-  <pre class="res"><code># Oligodendrocyte  Oligodendrocyte=100%
-# Pancreas-Beta    Pancreas-Beta=100%    ... (each 100% itself)</code></pre>
+  <pre class="res"><code>cell             class            fraction
+Oligodendrocyte  Oligodendrocyte  1.000000
+Pancreas-Beta    Pancreas-Beta    1.000000
+Blood-NK         Blood-NK         1.000000
+Blood-Monocytes  Blood-Monocytes  1.000000</code></pre>
 
 </section>
 
@@ -635,10 +639,12 @@ mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 # 1. define the features</span>
 yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
 methscope <span class="sub">mrmp-build</span> --flat --force human_hg38_40_celltypes_chr20.cg chr20.mrmp</code></pre>
-  <pre class="res"><code>samples=40  CpGs=773477  distinct patterns=116450 (+PNA)  candidates=116450</code></pre>
+  <pre class="res"><code>root  40 classes | 491 patterns | 7,218 CpGs
+  1 node(s), 29,904 bytes -> chr20.mrmp</code></pre>
   <pre><code><span class="cm"># 2. featurize the truth atlas -> sampling/truth msur</span>
 methscope <span class="sub">upscale-featurize</span> --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></code></pre>
-  <pre class="res"><code>wrote chr20.msur and chr20.msur.tsv   # 40 cells x 20 reps, 91 MB</code></pre>
+  <pre class="res"><code>[methscope] upscale-featurize: inflating 40 truth cells (1 worker, about 0.2 GB resident)
+[methscope] upscale-featurize: wrote chr20.msur and chr20.msur.tsv</code></pre>
   <pre><code><span class="cm"># 3. group CpGs into processing units</span>
 methscope <span class="sub">upscale-set-units</span> --unit-cpgs 4096 human_hg38_40_celltypes_chr20.cg <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></code></pre>
   <pre class="res"><code>units=109 pure=13 mixed=67 PNA=29 oversized=7
@@ -700,9 +706,13 @@ embedded_truth    yes (trainable)</code></pre>
   <p>Training runs on CPU by default and threads over units, which are independent — that is what
     makes the run resumable. The 109 chr20 units take ~17&nbsp;s on 8 threads.</p>
   <pre><code>methscope <span class="sub">upscale-train</span> -i <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span> --units <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span> --mrmp chr20.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">chr20.updecx</span> --work-dir work/ --threads 8</code></pre>
-  <pre class="res"><code>backend=cpu; cells=40 reps=20 patterns=1000 input=2000 units=109 threads=8
-units 109/109 (resumed=0) last_val_mae=0.156606
-wrote bare UPDEC2 work/model.updec2 (109288672 bytes)</code></pre>
+  <pre class="res"><code>P=491 features=beta+count input=982 trunk=none pure=16 mixed=factor/32
+backend=cpu
+units 109/109 (resumed=0) last_val_mae=0.193608
+wrote bare UPDEC2 work//model.updec2 (95924368 bytes), resumed=0</code></pre>
+  <p class="note">The validation MAE moves a little between runs — 0.171 and 0.194 on two
+    passes over this same input — so treat it as a scale, not a checksum. The unit count,
+    the pattern count and the model size are stable.</p>
   <p><code class="inl">make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80</code> builds the GPU
     backend, which is picked automatically when a device answers; checkpoints are interchangeable,
     so you can start on CPU and finish on a GPU node. The chr20 demo is small; a whole-genome
