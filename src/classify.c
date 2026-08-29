@@ -677,7 +677,11 @@ int main_predict(int argc, char *argv[]) {
    * there is nothing to route and nothing to check the featurization against. */
   if (data_path) { if (argc - i != 1) return predict_usage(stderr); }
   else           { if (argc - i != 2) return predict_usage(stderr); }
-  if (data_path) --i;                 /* so argv[i+1], argv[i+2] stay the model */
+  /* No index fixup here. a2df9a8 changed argv[i] from meaning the QUERY to
+   * meaning the MODEL, but left behind the --i that compensated for the old
+   * layout, so `classify --data x.msfm model.clfx` read the argument BEFORE
+   * the model and died with "expected a .clfx bundle: x.msfm". With --data
+   * there is exactly one positional and it is the model, at argv[i]. */
   const char *model_arg = argv[i];
   const char *query_cg  = data_path ? NULL : argv[i + 1];
   const char *ref_mrmp  = NULL;     /* mrmp path (loose arg, or the bundle path itself) */
