@@ -18,6 +18,25 @@
 #include "index.h"        /* get_fname_index -- the resolve temp has a sibling .idx */
 
 #define NAMELEN 16
+
+/* Section names live in a fixed char[16], which capped node names at 15
+ * characters -- and a routing tree only six levels deep breaks that
+ * ("root.0.0.0.3.0.7.2" is 18). Long names are stored under a deterministic
+ * ALIAS instead: '~' + 14 hex chars of the name's FNV-1a hash, 15 chars
+ * exactly. Writer and reader both apply it, so no mapping section is needed;
+ * a name that fits is stored verbatim, so every bundle written before this
+ * reads identically. A collision needs two >=16-char node names sharing 56
+ * hash bits -- and the writer's duplicate check runs on aliases, so even that
+ * would refuse loudly rather than misroute. */
+static void sec_alias(const char *name, char out[NAMELEN]) {
+  size_t len = strlen(name);
+  if (len < NAMELEN) { memcpy(out, name, len + 1); return; }
+  uint64_t h = 0xcbf29ce484222325ull;
+  for (const unsigned char *p2 = (const unsigned char *)name; *p2; ++p2)
+    h = (h ^ *p2) * 0x100000001b3ull;
+  snprintf(out, NAMELEN, "~%014llx",
+           (unsigned long long)(h & 0xFFFFFFFFFFFFFFull));
+}
 #define FOOTER_BYTES 8         /* trailing uint64 container-header offset */
 #define CONTAINER_HDR_BYTES 12 /* MSBNDL1 magic (8) + section count (4) */
 
@@ -94,9 +113,10 @@ void *ms_bundle_section_opt(const char *path, const char *name, size_t *len_out)
   uint64_t total, container_off; uint32_t n;
   entry_t *entries = bundle_directory(fp, path, &total, &container_off, &n);
   (void)total; (void)container_off;
+  char want[NAMELEN]; sec_alias(name, want);
   for (uint32_t i = 0; i < n; ++i) {
     entry_t e = entries[i];
-    if (strcmp(e.name, name) == 0) {
+    if (strcmp(e.name, want) == 0) {
       if (e.length > SIZE_MAX) bdie("section is too large to materialize", name);
       void *buf = malloc(e.length ? e.length : 1);
       if (!buf) bdie("out of memory", name);
@@ -325,12 +345,13 @@ void ms_bundle_pack_tree(const char *out, const char *chain_path,
   int nsec = 2 + (int)n_nodes;                 /* mrmp + kind + one per node */
   uint64_t container_off = rlen;
   uint64_t hdr = CONTAINER_HDR_BYTES + (uint64_t)nsec * sizeof(entry_t);
+  char (*alias)[NAMELEN] = malloc((size_t)(n_nodes ? n_nodes : 1) * NAMELEN);
+  if (!alias) bdie("out of memory", out);
   for (uint32_t k = 0; k < n_nodes; ++k) {
-    if (strlen(node_name[k]) >= NAMELEN)
-      bdie("node name too long for a bundle section (max 15 chars)", node_name[k]);
+    sec_alias(node_name[k], alias[k]);
     for (uint32_t j = 0; j < k; ++j)
-      if (!strcmp(node_name[k], node_name[j]))
-        bdie("duplicate node name", node_name[k]);
+      if (!strcmp(alias[k], alias[j]))
+        bdie("duplicate node name (or alias collision)", node_name[k]);
   }
   FILE *fp = fopen(out, "wb");
   if (!fp) bdie("cannot open output", out);
@@ -347,10 +368,11 @@ void ms_bundle_pack_tree(const char *out, const char *chain_path,
   e.offset = off; e.length = strlen(kind); off += e.length;
   if (fwrite(&e, sizeof(e), 1, fp) != 1) bdie("write error", out);
   for (uint32_t k = 0; k < n_nodes; ++k) {
-    memset(&e, 0, sizeof(e)); strncpy(e.name, node_name[k], NAMELEN - 1);
+    memset(&e, 0, sizeof(e)); memcpy(e.name, alias[k], NAMELEN);
     e.offset = off; e.length = booster_len[k]; off += booster_len[k];
     if (fwrite(&e, sizeof(e), 1, fp) != 1) bdie("write error", out);
   }
+  free(alias);
   if (fwrite(kind, 1, strlen(kind), fp) != strlen(kind)) bdie("write error", out);
   for (uint32_t k = 0; k < n_nodes; ++k)
     if (booster_len[k] &&
