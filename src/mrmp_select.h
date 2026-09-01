@@ -71,7 +71,27 @@
 
 typedef struct {
   float    qfilter_lo, qfilter_hi;   /* expected-0 ceiling, expected-1 floor */
+  float    min_sbeta_gap;              /* when > 0, REPLACES the band: admit on
+                                      * min1 - max0 >= gap (shrunk betas). The
+                                      * band's absolute anchors made sense for
+                                      * 0.5-binarized pattern features, where
+                                      * distance from the cut was the margin;
+                                      * rank-contrast features are
+                                      * shift-invariant, so only the gap
+                                      * carries meaning -- and the binstring
+                                      * already anchors 1-classes above 0.5 and
+                                      * 0-classes below it. Same statistic
+                                      * deconv's --rescue-gap tests. */
   uint32_t delta_mean_top;           /* per binstring; 0 disables the floor leg */
+  float    shrink_pseudocnt;         /* per-class beta shrinkage (M+a)/(M+U+2a),
+                                      * applied to BOTH the admission band and
+                                      * the delta_mean ranking. Default 3: a
+                                      * unanimous site needs depth 4 to clear
+                                      * the 0.70 leg, one dissent pushes that
+                                      * to ~8. Without it a single read scores
+                                      * beta exactly 0 or 1, passing the band
+                                      * more easily than measured evidence and
+                                      * taking the maximum rank. 0 = raw. */
   uint32_t min_cg_depth;             /* absolute, required of EVERY class */
   float    max_frac_na;              /* fraction of classes allowed absent */
   float    depth_floor_frac;         /* relative to each class's OWN mean */

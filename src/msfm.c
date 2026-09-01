@@ -218,7 +218,8 @@ void ms_msfm_report(const char *path) {
       (h->flags & MSFM_FLAG_BIN_FLAT) ? "patterns binarised at 0.5"
     : (h->flags & MSFM_FLAG_BIN_PAT)  ? "patterns cut at per-pattern midpoints"
                                       : "continuous pattern betas";
-    printf("  %-14s MSFMAT1 v%u, %s%s\n", "format", h->version, coding, sat); }
+    printf("  %-14s MSFMAT1 v%u, %s%s\n", "format", h->version, coding, sat);
+ }
   printf("\n");
   printf("  %-14s %s\n", "records", commafmt_msfm(h->n_records, cb));
   printf("  %-14s %s\n", "patterns", commafmt_msfm(h->n_patterns, cb));
@@ -544,7 +545,12 @@ static int merge_msfm(const char *out, char **in, int n_in) {
   memset(&h, 0, sizeof(h));
   memcpy(h.magic, MSFM_MAGIC, 7);
   h.version = 1; h.n_records = (uint32_t)nr_tot; h.n_patterns = np; h.n_classes = nk;
-  h.flags = 0;
+  /* Chunks of one featurization share one coding and one K; refuse a mix
+   * rather than stamp the merge with whichever input came first. */
+  for (int i = 1; i < n_in; ++i)
+    if (f[i].header->flags != f[0].header->flags)
+      fdie("input flags disagree (chunks from different codings)", in[i]);
+  h.flags = f[0].header->flags;
   h.names_offset  = sizeof(h);
   h.rows_offset   = h.names_offset + names_b;
   h.labels_offset = h.rows_offset + rows_b;
@@ -679,6 +685,12 @@ static int usage(FILE *out) {
     "                 is fitted to this reference and travels worse.\n"
     "  --seed S       Sampling seed (default 1). The draw is a pure function of it\n"
     "                 and is NOT affected by --threads.\n"
+    "  --side-floor N Pairwise features only: a side backed by fewer than N\n"
+    "                 observed CpGs contributes the neutral 0.5 instead of a\n"
+    "                 one-read coin flip; both sides under N -> NA. Default 3.\n"
+    "                 The 0.30/0.70 admission band is what makes 0.5 a\n"
+    "                 calibrated anchor between the reference poles. Score\n"
+    "                 with the same value the model was trained with.\n"
     "  --threads T    Worker threads (default 1). Cells are partitioned across\n"
     "                 workers, each seeking its own records via the .cg index.\n"
     "  --legacy-summarize  Use the old genome-scan featurizer (single-threaded, no\n"
@@ -831,6 +843,8 @@ int main_classify_featurize(int argc, char *argv[]) {
     else if (!strcmp(argv[i], "--patterns") && i + 1 < argc) patterns = (uint32_t)strtoul(argv[++i], NULL, 10);
     else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = strtoull(argv[++i], NULL, 10);
     else if (!strcmp(argv[i], "--threads") && i + 1 < argc) threads = (unsigned)strtoul(argv[++i], NULL, 10);
+    else if (!strcmp(argv[i], "--side-floor") && i + 1 < argc)
+      ms_msfm_side_floor = (uint32_t)strtoul(argv[++i], NULL, 10);
     else if (!strcmp(argv[i], "-b") || !strcmp(argv[i], "--binarize")) binarize = 1;
     else if (!strcmp(argv[i], "--counts") && i + 1 < argc)
       min_cpgs = (uint32_t)strtoul(argv[++i], NULL, 10);

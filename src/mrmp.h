@@ -84,7 +84,16 @@
  * section is always inflated whole. */
 #define MRMP_FLAG_MEMB_BGZF 8u
 
-/* 128-byte fixed header; all little-endian, offsets are absolute file bytes. */
+/* `split_minseg` is valid: the node records the segregating-CpG threshold its
+ * own split (or final split attempt) used -- under --anneal-min-seg that is
+ * the node's annealed value, otherwise the fixed --min-segregating. Absent in
+ * artifacts written before the field existed; the field appends to the header
+ * (same compatibility discipline as MRMP_FLAG_THRESH), so old files stay
+ * readable and old readers skip content by the stored offsets. */
+#define MRMP_FLAG_MINSEG 16u
+
+/* Fixed header (136 bytes since split_minseg; 128 before); all little-endian,
+ * offsets are absolute file bytes. */
 typedef struct {
   char     magic[8];          /* "MRMPIDX1" */
   uint32_t version;           /* MRMPIDX_VERSION */
@@ -126,6 +135,8 @@ typedef struct {
   uint64_t thresh_offset;     /* n_candidates float32 binarisation midpoints,
                                * or 0 in an artifact written before they were
                                * stored. See MRMP_FLAG_THRESH. */
+  uint64_t split_minseg;      /* the min-seg threshold this node's split used
+                               * (annealed or fixed). See MRMP_FLAG_MINSEG. */
 } mrmp_header_t;
 
 /* One ranked candidate pattern (rank == array index; label = P(rank+1)).
@@ -301,6 +312,7 @@ typedef void (*ms_mrmp_run_cb)(void *ctx, uint64_t start, uint64_t len,
 void ms_mrmp_membership_runs(const char *path, uint64_t base, uint64_t blk_bytes,
                              ms_mrmp_run_cb cb, void *ctx);
 
+
 /* Fill group[0..n_cpg-1] with each CpG's 1-based selected-pattern index, or 0
  * for PNA and ranks at or beyond `patterns`. Fatal on error or size mismatch. */
 void ms_mrmp_group_map(const char *artifact, uint16_t *group, uint64_t n_cpg,
@@ -317,6 +329,8 @@ typedef struct {
   char    **labels;       /* n_samples reference sample names */
   char    **binstring;    /* n_patterns strings, n_samples chars each */
   uint64_t *count;        /* n_patterns CpG counts */
+  uint64_t  split_minseg; /* valid when has_minseg (MRMP_FLAG_MINSEG) */
+  int       has_minseg;
 } mrmp_top_t;
 
 /* Read the top `top_k` ranked patterns. Fatal on error; free with the below. */
@@ -335,7 +349,7 @@ void ms_mrmp_top_free(mrmp_top_t *t);
  *
  * They travel by CONCATENATION. A file is one or more complete MRMPIDX1 blocks
  * laid end to end -- no wrapper, no table, no second magic. A reader walks it:
- * read a 128-byte header, check the magic, take the block's own size, seek past
+ * read a fixed-size header, check the magic, take the block's own size, seek past
  * it, repeat until EOF. A single-set file is exactly one block, so "one set" and
  * "many sets" are the same format and there is no .mrmp / .mrmpset ambiguity.
  *
@@ -415,5 +429,17 @@ void ms_mrmp_chain_write(const char *out, uint32_t n_sets,
 mrmp_top_t *ms_mrmp_top_read_at(const char *path, uint64_t base, uint32_t top_k);
 void ms_mrmp_group_map_at(const char *path, uint64_t base, uint16_t *group,
                           uint64_t n_cpg, uint32_t patterns);
+
+/* mrmp_calib.c: leak-free leave-one-cell-out calibration of
+ * (shrink-pseudocnt, min-sbeta-gap) for one class pair, from a per-cell
+ * store (fmt3 + .idx). Fills out_a/out_G/out_valid (and, when non-NULL,
+ * the cell count used and the CpGs the pick admits from the full pools);
+ * returns 0 when calibration is impossible, leaving the caller's defaults
+ * in force. See the file comment for the method and its validation. */
+int ms_pair_calibrate(const char *cellstore, char *const *cellsA, uint32_t nA,
+                      char *const *cellsB, uint32_t nB,
+                      float eps, uint32_t threads,
+                      double *out_a, double *out_G, double *out_valid,
+                      uint32_t *out_ncell, uint64_t *out_nadm);
 
 #endif /* MS_MRMP_H */

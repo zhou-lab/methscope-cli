@@ -176,7 +176,8 @@ static void print_labels(char *const *labels, int K) {
  * of its own -- so soft siblings may OVERLAP, which is the whole point: in the
  * mouse leaf PAL-Inh is a member of 20 of them, impossible under a partition. */
 typedef struct { char *name; uint32_t nc, npat; uint64_t cpg; char **cls;
-                 int par; int soft; } inode_t;
+                 int par; int soft;
+                 uint64_t minseg; int has_minseg; } inode_t;
 
 static void itree_render(const inode_t *nd, uint32_t n, uint32_t k,
                          const char *pre, int last) {
@@ -190,9 +191,12 @@ static void itree_render(const inode_t *nd, uint32_t n, uint32_t k,
    * the thing you actually compare between nodes stops lining up. */
   int used = (int)strlen(pre) + (top ? 0 : 4);
   int w = 26 - used; if (w < 8) w = 8;
-  printf("%s%s%-*s %2u classes  %7s patterns  %9s CpGs\n", pre,
+  printf("%s%s%-*s %2u classes  %7s patterns  %9s CpGs", pre,
          top ? "" : (last ? "`-- " : "|-- "), w, nd[k].name,
          nd[k].nc, commafmt(nd[k].npat, b1), commafmt(nd[k].cpg, b2));
+  /* the split threshold the node recorded (annealed or fixed) */
+  if (nd[k].has_minseg) printf("  split@%s", commafmt(nd[k].minseg, b1));
+  putchar('\n');
   char sub[512];
   snprintf(sub, sizeof sub, "%s%s", pre, top ? "  " : (last ? "    " : "|   "));
   uint32_t nhard = 0, nsoft = 0;
@@ -266,6 +270,8 @@ static int inspect_tree(const char *path) {
     nd[k].nc   = top[k]->n_samples;
     nd[k].cls  = top[k]->labels;
     nd[k].npat = top[k]->n_patterns;
+    nd[k].minseg = top[k]->split_minseg;
+    nd[k].has_minseg = top[k]->has_minseg;
     nd[k].cpg  = 0;
     for (uint32_t p = 0; p < top[k]->n_patterns; ++p) nd[k].cpg += top[k]->count[p];
     tot_cpg += nd[k].cpg;

@@ -167,6 +167,21 @@ static const char *commafmt_mb(uint64_t v, char *buf) {
   return buf;
 }
 
+/* Side-support floor for PAIRWISE features (satellite contrasts and rank
+ * columns). A side backed by fewer observed CpGs than this contributes 0.5 --
+ * the neutral anchor -- instead of a coin-flip estimate from one or two
+ * reads; both sides under the floor is a real abstention (NA). Why 0.5 is
+ * meaningful: selection admits a CpG only when the reference poles clear the
+ * 0.30/0.70 band, so 0.5 sits squarely between them and "reliable side vs
+ * 0.5" is a calibrated absolute call -- the same coding philosophy as the
+ * 0.5-binarized pattern columns. Motivating case: the NK CD16/CD56 contrast
+ * is 53 vs 4,342 CpGs at a=3 (the imbalance is biological -- three selection
+ * regimes agree), so a native cell observes ~0.7 CpGs on the thin pole and
+ * 26%% of held-out CD56 cells flipped on that single read. A knob, not a
+ * parameter, so classify's internal featurization and classify-featurize
+ * cannot disagree. */
+uint32_t ms_msfm_side_floor = 3;
+
 static void *worker(void *arg) {
   job_t *J = (job_t *)arg;
   cfile_t cf = open_cfile((char *)J->query);
@@ -280,17 +295,14 @@ static void *worker(void *arg) {
             uint32_t g2 = J->rk_idx[k];
             a0 += sum[g2]; c0 += cnt[g2];
           }
-          /* min_cpgs now gates the SIDE, which is what it should have meant all
-           * along here: the question is whether the side has evidence, not
-           * whether some individual pattern does. */
-          if (c1 < J->min_cpgs || c0 < J->min_cpgs) { out[j] = MSFM_NA; continue; }
-          /* Both sides must be observed or there is no comparison to make. That
-           * is a REAL abstention, not a shortfall: the thin side sets the floor,
-           * and on the human root the B.Cell-favouring half of the B.Cell vs
-           * Endothel.(Vascular) contrast carries 3,114 CpGs against the other
-           * side's 16,448, so a cell under ~10k covered CpGs expects no hit on
-           * it at all. */
-          double m1 = a1 / c1, m0 = a0 / c0;
+          /* Side-floor anchor (see ms_msfm_side_floor above): a thin side
+           * reads 0.5 rather than a one-read coin flip; both sides thin is a
+           * real abstention. Subsumes the old min_cpgs side gate for pairwise
+           * columns -- min_cpgs still governs pattern columns. */
+          const uint32_t sf = ms_msfm_side_floor ? ms_msfm_side_floor : 1;
+          if (c1 < sf && c0 < sf) { out[j] = MSFM_NA; continue; }
+          double m1 = c1 >= sf ? a1 / c1 : 0.5;
+          double m0 = c0 >= sf ? a0 / c0 : 0.5;
           if (m1 == m0) { out[j] = MSFM_NA; continue; }   /* no direction */
           /* Binarised: the SIGN is the shift-invariant claim. Continuous: the
            * gap itself, mapped from [-1,1] onto the stored [0,1]. */
@@ -301,8 +313,10 @@ static void *worker(void *arg) {
         const uint32_t g = (uint32_t)J->em_a[j];
         if (J->em_b[j] >= 0) {                     /* CONTRAST column */
           const uint32_t g2 = (uint32_t)J->em_b[j];
-          if (cnt[g] < J->min_cpgs || cnt[g2] < J->min_cpgs) { out[j] = MSFM_NA; continue; }
-          double b1 = sum[g] / (double)cnt[g], b2 = sum[g2] / (double)cnt[g2];
+          const uint32_t sf = ms_msfm_side_floor ? ms_msfm_side_floor : 1;
+          if (cnt[g] < sf && cnt[g2] < sf) { out[j] = MSFM_NA; continue; }
+          double b1 = cnt[g]  >= sf ? sum[g]  / (double)cnt[g]  : 0.5;
+          double b2 = cnt[g2] >= sf ? sum[g2] / (double)cnt[g2] : 0.5;
           /* Ties carry no direction, exactly as at the 0.5 cut. */
           if (b1 == b2) { out[j] = MSFM_NA; continue; }
           out[j] = msfm_encode(b1 > b2 ? 1.0 : 0.0);
@@ -446,8 +460,12 @@ static uint32_t set_ncol(const mrmp_top_t *t, uint32_t npat, uint32_t flags) {
           char x = t->binstring[p][a], y = t->binstring[p][b];
           if (x == '1' && y == '0') ++n1; else if (x == '0' && y == '1') ++n0;
         }
-        /* a pair this set never separates has no contrast to report */
+        /* a pair this set never separates has no contrast to report; a
+         * 2-class set counts a ONE-SIDED contrast too -- the anchored
+         * absolute call (see the emit map's guard, the other reading of
+         * this rule) */
         if (n1 && n0) ++n;
+        else if ((n1 || n0) && t->n_samples == 2) ++n;
       }
     return (flags & MSFM_FLAG_RANK_ADD) ? npat + n : n;
   }
@@ -779,8 +797,20 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
           char x = t->binstring[p][ca], y = t->binstring[p][cb];
           if (x == '1' && y == '0') ++n1; else if (x == '0' && y == '1') ++n0;
         }
-        /* A pair this set never separates has no contrast to report. */
-        if (!n1 || !n0) continue;
+        /* A pair this set never separates has no contrast to report. For a
+         * 2-CLASS set, one populated side is enough: the empty side reads
+         * the 0.5 anchor at run time (side-floor above), so the column is
+         * the anchored absolute call -- and the binstring binarizes at 0.5
+         * whatever the admission rule, so the anchor stays calibrated even
+         * under gap-form (calibrated) selection. Seen on Ent Ileum/Gob SI,
+         * whose calibrated selection admits ONE direction pattern (179
+         * Ileum-hyper CpGs): the old both-sides guard left that node with
+         * zero columns and killed training. Multi-class sets keep the
+         * strict guard -- their pairs have other columns to lean on, and a
+         * one-sided pair contrast inside a wide set is where the anchored
+         * absolute call is noisiest. */
+        if (!n1 && !n0) continue;
+        if ((!n1 || !n0) && t->n_samples != 2) continue;
         EM_ROOM(1);
         if (rk_n + n1 + n0 > rk_cap) {
           rk_cap = (rk_cap ? rk_cap * 2 : 4096);

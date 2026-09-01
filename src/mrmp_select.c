@@ -29,11 +29,18 @@ void ms_select_defaults(ms_select_opt_t *o) {
    * justify the two halves of the pipeline disagreeing about what a
    * segregating CpG is. */
   o->qfilter_lo = 0.30f; o->qfilter_hi = 0.70f;
+  o->min_sbeta_gap = 0.0f;           /* 0 = band mode */
   /* 20000, not the old 1000: the budget is per BINSTRING, and a 2-class
    * satellite holds two of them, so 1000 capped a focused set at 2,000 CpGs --
    * far below what the same pair carries once its filter is a 2-way rather
    * than a 41-way conjunction. Every set built since has passed 20000. */
   o->delta_mean_top = 20000;
+  /* a=3: a unanimous site needs depth >= 4 to clear the 0.70 band leg, one
+   * dissenting read pushes that to ~8, and a depth-26 site at raw 0.69
+   * shrinks to 0.66 and fails -- quality-first selection, measured on the
+   * fold-0 stringency arms (a=3 band: native macro 0.9353 with the specific
+   * confuser pairs at their best). Set 0 for the old unshrunk behaviour. */
+  o->shrink_pseudocnt = 3.0f;
   o->min_cg_depth = 0;
   o->max_frac_na = 0.0f;
   o->depth_floor_frac = 0.0f;      /* off; satellites turn it on */
@@ -138,6 +145,7 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
   /* One streaming pass. For each class we know, per CpG, whether its binstring
    * calls that class 1 or 0, so the expected-high and expected-low groups can
    * be accumulated without ever holding all betas. */
+  const float pc = o->shrink_pseudocnt;
   cfile_t cf = open_cfile((char *)ref);
   for (uint32_t k = 0; k < ns; ++k) {
     seek_record(&cf, rec_off, k);
@@ -155,12 +163,34 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
       if (cov < mincv[i]) mincv[i] = (uint16_t)(cov > 0xFFFF ? 0xFFFF : cov);
       if (target && (double)cov < tk) floor_ok[i] = 0;
       float b = (float)MU2beta(mu);
+      /* The RANK gets a shrunk beta, the q-filter keeps the raw one. Without
+       * shrinkage delta_mean is MAXIMIZED by depth-1 CpGs: one read gives beta
+       * exactly 0 or 1, so a 1-vs-1 site scores the theoretical maximum of 1.0
+       * and outranks a real difference measured over 200 cells scoring 0.85.
+       * The selection then fills up on the noisiest sites -- measured, the
+       * Tmem CD4/CD8 leaf's 40,000 CpGs sat at mean reference depth 1.3 with
+       * 97.9% backed by <= 3 cells, and its feature scored AUC 1.0000 on the
+       * cells that built the reference and 0.5002 on held-out ones.
+       * (M+a)/(M+U+2a) demotes them without discarding anything: at a=1 the
+       * 1-vs-1 site scores 0.667-0.333 = 0.333 while 200-cell evidence keeps
+       * ~0.99. Set --shrink-pseudocnt 0 for the old, unshrunk ranking. */
+      float bs = pc > 0.0f
+               ? (float)(((double)(mu >> 32) + pc) / ((double)cov + 2.0 * pc))
+               : b;
+      (void)b;
+      /* The BAND tests the shrunk beta too. On the raw beta a depth-1 class
+       * reads exactly 0 or 1 -- the most extreme value possible -- so it
+       * passed the band MORE easily than a well-measured class and the
+       * admitted pool filled with unfalsifiable calls. Shrunk, a lone read
+       * lands at 0.333/0.667 and can never clear a 0.30/0.70 band; unanimous
+       * depth-2 can, and a site with dissent needs ~depth 5. A soft,
+       * self-scaling depth floor instead of --min-cg-depth's hard veto. */
       if (binstr[r][k] == '1') {
-        if (b < min1[i]) min1[i] = b;
-        sum1[i] += b; ++n1[i];
+        if (bs < min1[i]) min1[i] = bs;
+        sum1[i] += bs; ++n1[i];
       } else if (binstr[r][k] == '0') {
-        if (b > max0[i]) max0[i] = b;
-        sum0[i] += b; ++n0[i];
+        if (bs > max0[i]) max0[i] = bs;
+        sum0[i] += bs; ++n0[i];
       }
     }
     free_cdata(&c);
@@ -185,7 +215,9 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
     if (o->min_cg_depth && mincv[i] < o->min_cg_depth) continue;
     if (!floor_ok[i]) continue;
     rank[i] = sum1[i] / n1[i] - sum0[i] / n0[i];
-    if (max0[i] <= o->qfilter_lo && min1[i] >= o->qfilter_hi) qok[i] = 1;
+    if (o->min_sbeta_gap > 0.0f) {
+      if (min1[i] - max0[i] >= o->min_sbeta_gap) qok[i] = 1;
+    } else if (max0[i] <= o->qfilter_lo && min1[i] >= o->qfilter_hi) qok[i] = 1;
   }
   free(min1); free(max0); free(sum1); free(sum0);
   free(n1); free(n0); free(npres); free(floor_ok); free(mincv);
@@ -195,11 +227,7 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
    * rather than one global sort of 21.9M keys. */
   const uint32_t top = o->delta_mean_top;
   uint64_t n_floor = 0;
-  if (!top) {
-    /* Uncapped: admission IS the selection, so there is nothing left to rank. */
-    for (uint64_t i = 0; i < n_cpg; ++i)
-      if (qok[i]) { keep[i] = 1; ++n_floor; }
-  } else if (top) {
+  {
     uint64_t *cnt = xc(n_cand + 1, sizeof(uint64_t), "per-pattern counts");
     for (uint64_t i = 0; i < n_cpg; ++i)
       if (qok[i]) ++cnt[memb[i]];
@@ -216,8 +244,8 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
       uint64_t m = cnt[r];
       if (!m) continue;
       uint32_t *v = idx + off[r];
-      if (m > top) qsort(v, m, sizeof(uint32_t), by_rank_desc);
-      uint64_t take = m < top ? m : top;
+      uint64_t take = (!top || m < top) ? m : top;
+      if (take < m) qsort(v, m, sizeof(uint32_t), by_rank_desc);
       for (uint64_t t = 0; t < take; ++t)
         if (!keep[v[t]]) { keep[v[t]] = 1; ++n_floor; }
     }

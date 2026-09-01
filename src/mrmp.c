@@ -636,6 +636,9 @@ mrmp_top_t *ms_mrmp_top_read_at(const char *artifact, uint64_t base,
     key_to_string(pat_key(&r, p), h->n_samples, t->binstring[p]);
     t->count[p] = pat_count(&r, p);
   }
+  if (h->flags & MRMP_FLAG_MINSEG) {
+    t->split_minseg = h->split_minseg; t->has_minseg = 1;
+  }
   mrmp_close(&r);
   return t;
 }
@@ -2299,6 +2302,30 @@ static uint32_t tree_partition(const uint64_t *seg, uint32_t ns,
   return ng;
 }
 
+/* Largest edge on the minimum spanning tree of the pair graph -- the smallest
+ * threshold at which single-linkage CONNECTS every class (merging edges
+ * <= t), so any threshold strictly below it splits the node, and bottleneck-1
+ * is the largest splitting threshold. Prim on the dense symmetric matrix;
+ * n <= a few hundred classes, so O(n^2) is nothing. */
+static uint64_t tree_mst_bottleneck(const uint64_t *seg, uint32_t ns) {
+  uint64_t *d = xcalloc(ns, sizeof(uint64_t), "mst dist");
+  uint8_t *in = xcalloc(ns, 1, "mst done");
+  for (uint32_t i = 1; i < ns; ++i) d[i] = UINT64_MAX;
+  uint64_t bneck = 0;
+  for (uint32_t it = 0; it < ns; ++it) {
+    uint32_t b = UINT32_MAX;
+    for (uint32_t i = 0; i < ns; ++i)
+      if (!in[i] && (b == UINT32_MAX || d[i] < d[b])) b = i;
+    in[b] = 1;
+    if (d[b] > bneck) bneck = d[b];
+    for (uint32_t i = 0; i < ns; ++i)
+      if (!in[i] && seg[(uint64_t)b * ns + i] < d[i])
+        d[i] = seg[(uint64_t)b * ns + i];
+  }
+  free(d); free(in);
+  return bneck;
+}
+
 /* Weakest cross-group pair, i.e. the separation the routing between two
  * children actually rests on. */
 static uint64_t tree_group_gap(const uint64_t *seg, uint32_t ns,
@@ -2394,12 +2421,147 @@ static void sat_tag(const char *in, char *out, size_t cap) {
  * starves exactly the pairs needing help. Rebuilt over 2 classes the same
  * contrast is far thicker -- MGE-Sst/PAL-Inh goes from 10 CpGs on the side a
  * rank column needs to 3,034. */
+/* ---- per-pair LOO calibration (--cell-store / --cell-labels) ----------
+ *
+ * File-scope because the alternative is threading four more parameters
+ * through tree_build -> tree_satellites -> tree_thin_pair for a feature
+ * that is one optional table and a store path. Set once in main, read-only
+ * during the build. */
+/* ---- annealed split threshold (--anneal-min-seg) ----------------------
+ * Redone at EVERY node: try HI first, and when nothing separates, drop to
+ * the largest threshold at which the single-linkage graph disconnects (the
+ * MST bottleneck minus one) -- the slowest possible peel -- stopping at LO.
+ * A non-zero STEP quantizes that drop downward to the grid HI, HI-STEP, ...:
+ * near-simultaneous disconnections then land in ONE split instead of a
+ * cascade of near-duplicate single-peel levels, and the recorded thresholds
+ * are round, fold-comparable values rather than jittery bottleneck-1s.
+ * File-scope for the same reason as the calibration state below. */
+static uint64_t g_anneal_hi = 0, g_anneal_lo = 0;   /* 0 = annealing off */
+static uint64_t g_anneal_step = 0;                  /* 0 = continuous */
+
+static const char *g_cal_store = NULL;   /* per-cell fmt3 .cg (with .idx) */
+static float g_cal_eps = 0.02f;          /* tolerance below best LOO macro */
+static uint32_t g_cal_threads = 8;
+static char **g_cal_cell = NULL, **g_cal_cls = NULL;  /* parallel arrays */
+static uint32_t g_cal_n = 0;
+
+static void calib_load_labels(const char *path) {
+  FILE *f = fopen(path, "r");
+  if (!f) die("cannot open --cell-labels", path);
+  char *line = NULL; size_t cap = 0; ssize_t len;
+  uint32_t alloc = 1024;
+  g_cal_cell = xcalloc(alloc, sizeof(char *), "calib cells");
+  g_cal_cls = xcalloc(alloc, sizeof(char *), "calib classes");
+  while ((len = getline(&line, &cap, f)) > 0) {
+    while (len && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+      line[--len] = '\0';
+    if (!len) continue;
+    char *tab = strchr(line, '\t');
+    if (!tab || !tab[1]) die("--cell-labels wants cell<TAB>class", line);
+    *tab = '\0';
+    if (g_cal_n == alloc) {
+      alloc <<= 1;
+      g_cal_cell = realloc(g_cal_cell, (size_t)alloc * sizeof(char *));
+      g_cal_cls = realloc(g_cal_cls, (size_t)alloc * sizeof(char *));
+      if (!g_cal_cell || !g_cal_cls) die("out of memory", path);
+    }
+    g_cal_cell[g_cal_n] = strdup(line);
+    g_cal_cls[g_cal_n] = strdup(tab + 1);
+    ++g_cal_n;
+  }
+  free(line); fclose(f);
+  if (!g_cal_n) die("--cell-labels is empty", path);
+}
+
+/* Override sel's (shrink_pseudocnt, min_sbeta_gap) with the pair's own
+ * LOO-calibrated values. Returns 1 when the override happened; on any skip
+ * (no calibration configured, no labelled cells, calibration declined) the
+ * caller's sel is untouched and the build proceeds on defaults. */
+static int calib_pair(char *const *lab, ms_select_opt_t *sel,
+                      const char *sname, int tty, FILE *rep) {
+  if (!g_cal_store) return 0;
+  uint32_t nA = 0, nB = 0;
+  for (uint32_t k = 0; k < g_cal_n; ++k) {
+    if (!strcmp(g_cal_cls[k], lab[0])) ++nA;
+    else if (!strcmp(g_cal_cls[k], lab[1])) ++nB;
+  }
+  if (!nA || !nB) {
+    fprintf(rep, "  %s. %s: no labelled cells for %s; defaults kept\n",
+            tty ? "\r\033[K" : "", sname, nA ? lab[1] : lab[0]);
+    return 0;
+  }
+  char **ca = xcalloc(nA, sizeof(char *), "calib cells A");
+  char **cb = xcalloc(nB, sizeof(char *), "calib cells B");
+  nA = nB = 0;
+  for (uint32_t k = 0; k < g_cal_n; ++k) {
+    if (!strcmp(g_cal_cls[k], lab[0])) ca[nA++] = g_cal_cell[k];
+    else if (!strcmp(g_cal_cls[k], lab[1])) cb[nB++] = g_cal_cell[k];
+  }
+  double a, G, v; uint32_t nc; uint64_t nadm;
+  { char m[192];
+    snprintf(m, sizeof m, "[%.160s] calibrating", sname);
+    spin_start(tty, m); }
+  int ok = ms_pair_calibrate(g_cal_store, ca, nA, cb, nB, g_cal_eps,
+                             g_cal_threads, &a, &G, &v, &nc, &nadm);
+  spin_stop();
+  free(ca); free(cb);
+  if (!ok) return 0;
+  sel->shrink_pseudocnt = (float)a;
+  sel->min_sbeta_gap = (float)G;      /* gap form replaces the band */
+  char b1[32];
+  fprintf(rep, "  %s= calibrated %s: shrink %g, gap %.3f "
+          "(LOO macro %.3f over %u cells; admits %s CpGs)\n",
+          tty ? "\r\033[K" : "", sname, a, G, v, nc,
+          commafmt_local(nadm, b1));
+  fflush(rep);
+  return 1;
+}
+
+/* THIN-PAIR relaxation: a 2-class leaf whose admitted pool is under
+ * `relax_below` gets ONE soft satellite over the same pair, selected by
+ * shrunk-beta GAP ORDER (--min-sbeta-gap) instead of the positional band --
+ * coverage over purity, confined to soft columns the booster can weigh.
+ *
+ * Why: the band's anchors cost the Tnaive CD4/CD8 pair ~8x its evidence
+ * (5,972 CpGs at gap >= 0.40 vs 733 admitted), and the recovered sites are
+ * deep (3,730 at >= 10 reads both classes) and two-sided. Measured on held
+ * -out cells, the single gap-selected sign feature matched the whole node
+ * (test 87-88%), peaking at gap 0.35-0.40; 0.30 is a trap (train-test gap
+ * -29 points on CD8 -- loose admission re-couples selection to the
+ * reference). Hence the 0.35 default and a floor rather than always-on:
+ * where the band already feeds a pair richly, relaxation only dilutes. */
+static uint32_t tree_thin_pair(const char *store, uint32_t n,
+                               char *const *lab, const int64_t *vo,
+                               const mrmp_header_t *gh,
+                               const ms_select_opt_t *sel, const char *name,
+                               uint64_t n_kept, uint64_t relax_below,
+                               float relax_gap, int tty, treeout_t *out,
+                               FILE *rep) {
+  if (n != 2 || !relax_below || n_kept >= relax_below) return 0;
+  ms_select_opt_t rs = *sel;
+  rs.min_sbeta_gap = relax_gap;          /* replaces the band */
+  char sname[256];
+  snprintf(sname, sizeof sname, "%s@gap", name);
+  calib_pair(lab, &rs, sname, tty, rep); /* pair-specific (a, G) if enabled */
+  subset_block_t s2;
+  { char m[192]; snprintf(m, sizeof m, "[%.180s]", sname); spin_start(tty, m); }
+  build_subset_block(store, 2, (char *const *)lab, (const int64_t *)vo, gh,
+                     &rs, sname, &s2);
+  spin_stop();
+  tree_push(out, s2.img, s2.bytes, sname);
+  char b1[32], b2[32];
+  fprintf(rep, "  %s+ thin-pair satellite %s: %s CpGs (gap >= %.2f; node had %s)\n",
+          tty ? "\r\033[K" : "", sname, commafmt_local(s2.n_kept, b1),
+          relax_gap, commafmt_local(n_kept, b2));
+  return 1;
+}
+
 static uint32_t tree_satellites(const char *store, const subset_block_t *sb,
                                uint32_t n, char *const *lab,
                                const int64_t *vo, const mrmp_header_t *gh,
                                const ms_select_opt_t *sel, const char *name,
-                               uint32_t n_partner, int tty, treeout_t *out,
-                               FILE *rep) {
+                               uint32_t n_partner, float relax_gap, int tty,
+                               treeout_t *out, FILE *rep) {
   /* A 2-class node needs no satellite: its only pair IS its own class pair, so
    * the satellite rebuilds the identical MRMP and hands the booster a second
    * copy of the column it already has. Seen on the human tree, where
@@ -2420,6 +2582,12 @@ static uint32_t tree_satellites(const char *store, const subset_block_t *sb,
    * error does not, and a 2-class set spent 2 pooled columns for 7.4% of error
    * where a 6-class one spent 62 for 4.6%. */
   if (n < 3 || !n_partner) return 0;
+  /* Satellites are soft, relaxed evidence by design: select by the universal
+   * shrunk-beta gap rather than the positional band (see tree_thin_pair for
+   * the measurements behind 0.40). */
+  ms_select_opt_t rs = *sel;
+  rs.min_sbeta_gap = relax_gap;
+  sel = &rs;
   double *d = sat_hamming(sb->img);
   uint8_t *want = xcalloc((size_t)n * n, 1, "satellite pairs");
   uint32_t *ord = xcalloc(n, sizeof(uint32_t), "near order");
@@ -2464,10 +2632,12 @@ static uint32_t tree_satellites(const char *store, const subset_block_t *sb,
         }
       char *two[2]; int64_t vv[2];
       two[0] = lab[a]; two[1] = lab[b]; vv[0] = vo[a]; vv[1] = vo[b];
+      ms_select_opt_t ps = *sel;         /* per-pair (a, G) when enabled */
+      calib_pair(two, &ps, sname, tty, rep);
       subset_block_t s2;
       { char m[192];
         snprintf(m, sizeof m, "[%.180s]", sname); spin_start(tty, m); }
-      build_subset_block(store, 2, two, vv, gh, sel, sname, &s2);
+      build_subset_block(store, 2, two, vv, gh, &ps, sname, &s2);
       spin_stop();
       tree_push(out, s2.img, s2.bytes, sname);
       ++made;
@@ -2485,7 +2655,8 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
                        const uint32_t *idx, uint32_t n, const mrmp_header_t *gh,
                        const ms_select_opt_t *sel, const char *name,
                        uint64_t min_seg, uint32_t depth, uint32_t max_depth,
-                       int dry, uint32_t sat_n, int tty, treeout_t *out,
+                       int dry, uint32_t sat_n, uint64_t relax_below,
+                       float relax_gap, int tty, treeout_t *out,
                        FILE *rep) {
   char **lab = xcalloc(n, sizeof(char *), "node labels");
   int64_t *vo = xcalloc(n, sizeof(int64_t), "node offsets");
@@ -2495,6 +2666,15 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
   memset(ind, ' ', w); ind[w] = '\0';
 
   subset_block_t sb;
+  /* A 2-class node's own MRMP IS the pair classifier, so it gets the pair's
+   * calibrated (a, G) directly -- and a calibrated node needs no thin-pair
+   * satellite, which would rebuild the identical selection under @gap. */
+  ms_select_opt_t selc; int calibed = 0;
+  if (n == 2 && !dry) {
+    selc = *sel;
+    calibed = calib_pair(lab, &selc, name, tty, rep);
+    if (calibed) sel = &selc;
+  }
   { char m[192]; snprintf(m, sizeof m, "[%s] %u classes", name, n);
     spin_start(tty, m); }
   build_subset_block(store, n, lab, vo, gh, sel, name, &sb);
@@ -2507,15 +2687,46 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
             ind, name, n, commafmt_local(sb.n_pat, b1),
             commafmt_local(sb.n_kept, b2));
     if (!dry)
-      tree_satellites(store, &sb, n, lab, vo, gh, sel, name, sat_n, tty,
-                      out, rep);
+      tree_satellites(store, &sb, n, lab, vo, gh, sel, name, sat_n,
+                      relax_gap, tty, out, rep);
     free(lab); free(vo); return;
   }
 
   uint64_t *seg = tree_pair_seg(sb.img);
   uint64_t npair = 0, *sorted = tree_pair_sorted(seg, n, &npair);
   uint32_t *grp = xcalloc(n, sizeof(uint32_t), "grouping");
-  uint32_t ng = tree_partition(seg, n, min_seg, grp);
+  /* The threshold this node's split actually uses. Fixed mode: --min-
+   * segregating as given. Annealed mode: start at HI, and when nothing
+   * separates there, drop exactly to the first disconnection (bottleneck-1)
+   * -- the largest splitting threshold, hence the slowest peel -- unless it
+   * is under the LO floor, which makes this node a genuine leaf. */
+  uint64_t t_eff = min_seg, bneck = 0;
+  uint32_t ng;
+  if (g_anneal_hi && min_seg != UINT64_MAX) {
+    t_eff = g_anneal_hi;
+    ng = tree_partition(seg, n, t_eff, grp);
+    if (ng < 2) {
+      bneck = tree_mst_bottleneck(seg, n);
+      if (bneck > g_anneal_lo) {           /* bneck-1 >= LO: split in range */
+        t_eff = bneck - 1;
+        /* quantize downward to the HI - k*STEP grid (never below LO) */
+        if (g_anneal_step && t_eff < g_anneal_hi) {
+          t_eff = g_anneal_hi
+                - ((g_anneal_hi - t_eff + g_anneal_step - 1) / g_anneal_step)
+                  * g_anneal_step;
+          if (t_eff < g_anneal_lo) t_eff = g_anneal_lo;
+        }
+        ng = tree_partition(seg, n, t_eff, grp);
+      } else t_eff = g_anneal_lo;          /* leaf; record the floor tried */
+    }
+  } else ng = tree_partition(seg, n, t_eff, grp);
+  /* Record the threshold in the node's own header (the block was already
+   * pushed by pointer, so the stored chain sees this too). */
+  if (min_seg != UINT64_MAX) {
+    mrmp_header_t *hh = (mrmp_header_t *)sb.img;
+    hh->split_minseg = t_eff;
+    hh->flags |= MRMP_FLAG_MINSEG;
+  }
 
   /* Report the node's pairwise separation range and the resulting split. */
   const char *bold = tty ? "\033[1m" : "";
@@ -2535,9 +2746,13 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
   if (min_seg == UINT64_MAX)
     fprintf(rep, "  split threshold: %snone%s (flat) -> %u group(s)\n",
             yellow, reset, ng);
+  else if (g_anneal_hi && t_eff != g_anneal_hi)
+    fprintf(rep, "  split threshold: %s%s%s CpGs (annealed from %s) -> "
+            "%u group(s)\n", yellow, commafmt_local(t_eff, b5), reset,
+            commafmt_local(g_anneal_hi, b4), ng);
   else
     fprintf(rep, "  split threshold: %s%s%s CpGs -> %u group(s)\n",
-            yellow, commafmt_local(min_seg, b5), reset, ng);
+            yellow, commafmt_local(t_eff, b5), reset, ng);
 
   if (dry) {   /* what a threshold is actually chosen from: how the partition
                 * moves as it rises, across this node's own observed pairs */
@@ -2591,13 +2806,20 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
       for (uint32_t k = 0; k < show; ++k) fprintf(rep, " %s", lab[k]);
       if (show < n) fprintf(rep, " ... (%u more)", n - show);
       fprintf(rep, "\n");
+      if (g_anneal_hi && bneck)
+        fprintf(rep, "%s    (anneal floor %s reached; a split needs "
+                "threshold %s)\n", ind, commafmt_local(g_anneal_lo, b1),
+                commafmt_local(bneck - 1, b2));
     }
     /* This is the node satellites are FOR: the classes it carries are the
      * ones its own evidence cannot separate, and a 2-class rebuild is where
      * the CpGs to separate them come from. */
-    if (!dry)
-      tree_satellites(store, &sb, n, lab, vo, gh, sel, name, sat_n, tty,
-                      out, rep);
+    if (!dry) {
+      tree_satellites(store, &sb, n, lab, vo, gh, sel, name, sat_n,
+                      relax_gap, tty, out, rep);
+      tree_thin_pair(store, n, lab, vo, gh, sel, name, sb.n_kept,
+                     calibed ? 0 : relax_below, relax_gap, tty, out, rep);
+    }
     free(sorted); free(seg); free(grp); free(lab); free(vo); return;
   }
   for (uint32_t g = 0; g < ng; ++g) {
@@ -2620,9 +2842,16 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
     if (dry) { free(sub); continue; }
     char cn[256]; snprintf(cn, sizeof cn, "%s.%u", name, g);
     tree_build(store, slab, voff, sub, m, gh, sel, cn, min_seg,
-               depth + 1, max_depth, dry, sat_n, tty, out, rep);
+               depth + 1, max_depth, dry, sat_n, relax_below, relax_gap,
+               tty, out, rep);
     free(sub);
   }
+  /* A 2-class node that split into two singletons decides the pair with its
+   * own booster all the same -- it qualifies for the thin-pair relaxation
+   * exactly as an unsplittable pair does. */
+  if (!dry)
+    tree_thin_pair(store, n, lab, vo, gh, sel, name, sb.n_kept,
+                   calibed ? 0 : relax_below, relax_gap, tty, out, rep);
   free(sorted); free(seg); free(grp); free(lab); free(vo);
 }
 
@@ -2631,8 +2860,12 @@ int main_mrmp_build(int argc, char *argv[]) {
   if (argc == 1) { char *h[2]; h[0] = argv[0]; h[1] = (char *)"-h";
                    (void)main_mrmp_build(2, h); return 1; }
   const char *pos[2] = {NULL, NULL}, *nodedir = NULL, *setname = "root";
+  const char *cal_labels = NULL;
   int npos = 0, force = 0, dry = 0, have_fixed = 1, flat = 0;
   uint32_t sat_n = 0;                /* --satellite-n; 0 = no satellites */
+  uint64_t relax_below = 0;          /* --relax-below; 0 = no thin-pair sats */
+  float relax_gap = 0.40f;           /* --relax-gap; the universal satellite
+                                      * selection gap (see tree_thin_pair) */
   uint64_t min_seg = 20000; uint32_t max_depth = 16;
   ms_select_opt_t sel; ms_select_defaults(&sel);
   sel.quiet = 1;                     /* one line per node, not per selection */
@@ -2654,20 +2887,93 @@ int main_mrmp_build(int argc, char *argv[]) {
         "  --min-segregating N   Split threshold in CpGs. Default: 20000. Classes\n"
         "                        with <= N separating CpGs share a child. Keep\n"
         "                        this absolute threshold fixed across the tree.\n"
+        "  --anneal-min-seg HI,LO[,STEP]\n"
+        "                        Anneal the split threshold PER NODE instead of\n"
+        "                        fixing it: try HI, and when nothing separates,\n"
+        "                        drop exactly to the first disconnection of the\n"
+        "                        single-linkage graph (the largest threshold\n"
+        "                        that splits anything -- the slowest possible\n"
+        "                        peel), stopping at LO. A node unsplittable at\n"
+        "                        LO is a leaf. Each node re-anneals from HI, so\n"
+        "                        the root peels only its best-separated groups\n"
+        "                        while deep leaves can still split fine\n"
+        "                        structure. A STEP quantizes the drop to the\n"
+        "                        grid HI, HI-STEP, ...: near-tied\n"
+        "                        disconnections land in one split instead of a\n"
+        "                        cascade of near-duplicate levels, and the\n"
+        "                        recorded thresholds are round numbers. Every\n"
+        "                        node records the threshold it used in its\n"
+        "                        header (inspect --tree shows it). Overrides\n"
+        "                        --min-segregating.\n"
         "  --flat                Build one MRMP over all classes, without a tree.\n"
         "  --max-depth N         Maximum tree depth. Default: 16.\n"
         "  --dry-run             Report root pair counts and candidate splits.\n"
         "                        Write nothing. Does not require a threshold.\n\n"
         "Satellites\n"
+        "  --relax-below N       A 2-class pair node whose admitted pool is\n"
+        "                        under N CpGs gets one soft satellite over the\n"
+        "                        same pair, selected by shrunk-beta GAP order\n"
+        "                        (--relax-gap, default 0.40) instead of the\n"
+        "                        positional band -- coverage over purity, in\n"
+        "                        soft columns the booster can weigh. Measured:\n"
+        "                        the band cost Tnaive CD4/CD8 ~8x its evidence\n"
+        "                        (733 admitted vs 5,972 at gap 0.40), and the\n"
+        "                        gap-selected sign alone scored 87%% held-out.\n"
+        "                        Looser than ~0.35 re-couples selection to the\n"
+        "                        reference (train-test gap -29 at 0.30).\n"
+        "                        Default: 0 (off).\n"
+        "  --relax-gap G         The thin-pair satellite gap. Default: 0.40.\n"
         "  --satellite-n N       At each leaf with 3+ classes, append two-class\n"
         "                        MRMPs for every class's N nearest neighbours.\n"
         "                        They add leaf features but do not route.\n"
         "                        Default: 0 (off).\n\n"
+        "Per-pair calibration\n"
+        "  --cell-store F.cg     Per-cell fmt3 store (with F.cg.idx) holding\n"
+        "                        the training cells. With --cell-labels, every\n"
+        "                        2-class set -- pair nodes, satellites, thin-\n"
+        "                        pair satellites -- gets its own\n"
+        "                        (shrink-pseudocnt, gap) by leave-one-cell-out:\n"
+        "                        selection pools drop the held-out cell (no\n"
+        "                        leak, and the inner pool depth matches the\n"
+        "                        final build), the anchored sign feature\n"
+        "                        scores it, and the LEAST RESTRICTIVE grid\n"
+        "                        cell within --calib-eps of the best LOO\n"
+        "                        macro wins -- looser admission keeps more\n"
+        "                        CpGs for sparse queries. Grid: pseudocount\n"
+        "                        1-14, gap 0.28-0.53. Validated on fold-0:\n"
+        "                        13 pairs, mean 2.8 points off the per-pair\n"
+        "                        oracle, worst 10.7.\n"
+        "  --cell-labels F.tsv   cell<TAB>class, class names as in REF.cg.\n"
+        "                        Cells missing from the store index are\n"
+        "                        skipped with a note.\n"
+        "  --calib-eps E         Tolerance below the best LOO macro when\n"
+        "                        picking the loosest grid cell. Default: 0.02.\n"
+        "  --calib-threads N     Threads per calibration pass. Default: 8.\n\n"
         "Feature selection\n"
         "  --qfilter LO,HI       Keep CpGs where every 0-class <= LO and every\n"
         "                        1-class >= HI.\n"
+        "  --min-sbeta-gap G     Replace the band with a minimum SHRUNK-beta gap:\n"
+        "                        lowest 1-class minus highest 0-class >= G. The\n"
+        "                        band's absolute anchors made sense for\n"
+        "                        0.5-binarized features; rank contrasts are\n"
+        "                        shift-invariant, so only the gap matters.\n"
+        "                        Same statistic deconv rescue tests as\n"
+        "                        --rescue-gap.\n"
         "  --delta-mean-top N    Keep at most N CpGs per binstring, ranked by\n"
         "                        mean class gap. Default: 20000; 0 keeps all.\n"
+        "  --shrink-pseudocnt A  Shrink the per-class beta to (M+A)/(M+U+2A)\n"
+        "                        for BOTH the admission test and the ranking.\n"
+        "                        In Bayesian terms this is the posterior mean\n"
+        "                        under a Beta(A,A) prior: A is the PRIOR\n"
+        "                        INERTIA, A pseudo-observations on each side\n"
+        "                        pulling the estimate toward 0.5 until real\n"
+        "                        votes outweigh them. Default: 3 -- a\n"
+        "                        unanimous site needs depth 4 to clear the\n"
+        "                        0.70 leg, one dissenting read pushes that to\n"
+        "                        ~8. Without it a single read scores beta\n"
+        "                        exactly 0 or 1, passing admission more easily\n"
+        "                        than well-measured evidence and taking the\n"
+        "                        maximum rank. 0 restores raw betas.\n"
         "  --mincov N            Minimum per-class coverage. Default: 1.\n"
         "  --depth-floor-frac F  Require F times each class's genome-wide mean\n"
         "                        depth. Default: 0 (off).\n"
@@ -2676,7 +2982,9 @@ int main_mrmp_build(int argc, char *argv[]) {
         "  --max-ambig-frac F    Maximum ambiguous-call fraction.\n"
         "  --min-major-fold F    Minimum major-call depth fold.\n"
         "  --max-frac-na F       Maximum missing-class fraction per CpG.\n"
-        "  --min-cg-depth N      Minimum per-class CpG depth.\n"
+        "  --min-cg-depth N      Minimum per-class CpG depth. Required of\n"
+        "                        EVERY class, so one thin class drops the CpG\n"
+        "                        for all of them and the pool shrinks sharply.\n"
         "  --include-all-0       Keep all-unmethylated patterns.\n"
         "  --include-all-1       Keep all-methylated patterns.\n\n"
         "Output\n"
@@ -2689,13 +2997,35 @@ int main_mrmp_build(int argc, char *argv[]) {
     else if (!strcmp(a, "--min-segregating") && i + 1 < argc) {
       min_seg = parse_u64(argv[++i], a); have_fixed = 1;
     }
+    else if (!strcmp(a, "--anneal-min-seg") && i + 1 < argc) {
+      const char *v = argv[++i]; char *end = NULL;
+      g_anneal_hi = strtoull(v, &end, 10);
+      if (!end || *end != ',') die("--anneal-min-seg wants HI,LO[,STEP]", v);
+      g_anneal_lo = strtoull(end + 1, &end, 10);
+      if (end && *end == ',') g_anneal_step = strtoull(end + 1, NULL, 10);
+      if (!g_anneal_hi || g_anneal_lo > g_anneal_hi)
+        die("--anneal-min-seg needs HI >= LO and HI > 0", v);
+      have_fixed = 1;
+    }
     else if (!strcmp(a, "--dry-run")) dry = 1;
     /* One MRMP over every class, no routing. What mrmp-build meant before it
      * became the tree builder, kept because a flat global is still the right
      * artifact for deconvolution and for a reference too shallow to split. */
     else if (!strcmp(a, "--flat")) flat = 1;
+    else if (!strcmp(a, "--relax-below") && i + 1 < argc)
+      relax_below = parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--relax-gap") && i + 1 < argc)
+      relax_gap = (float)atof(argv[++i]);
     else if (!strcmp(a, "--satellite-n") && i + 1 < argc)
       sat_n = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--cell-store") && i + 1 < argc)
+      g_cal_store = argv[++i];
+    else if (!strcmp(a, "--cell-labels") && i + 1 < argc)
+      cal_labels = argv[++i];
+    else if (!strcmp(a, "--calib-eps") && i + 1 < argc)
+      g_cal_eps = (float)atof(argv[++i]);
+    else if (!strcmp(a, "--calib-threads") && i + 1 < argc)
+      g_cal_threads = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
       sel.depth_floor_frac = (float)atof(argv[++i]);
     else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
@@ -2711,6 +3041,10 @@ int main_mrmp_build(int argc, char *argv[]) {
       sel.max_frac_na = (float)atof(argv[++i]);
     else if (!strcmp(a, "--min-cg-depth") && i + 1 < argc)
       sel.min_cg_depth = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--min-sbeta-gap") && i + 1 < argc)
+      sel.min_sbeta_gap = (float)atof(argv[++i]);
+    else if (!strcmp(a, "--shrink-pseudocnt") && i + 1 < argc)
+      sel.shrink_pseudocnt = (float)atof(argv[++i]);
     else if (!strcmp(a, "--include-all-0")) sel.inc_all0 = 1;
     else if (!strcmp(a, "--include-all-1")) sel.inc_all1 = 1;
     else if (!strcmp(a, "--max-depth") && i + 1 < argc)
@@ -2737,9 +3071,14 @@ int main_mrmp_build(int argc, char *argv[]) {
     else die("too many arguments", a);
   }
   if (npos != 2) die("need REF.cg and OUT.mrmp (see mrmp-build -h)", NULL);
+  if (!!g_cal_store != !!cal_labels)
+    die("--cell-store and --cell-labels go together", NULL);
+  if (cal_labels) calib_load_labels(cal_labels);
   /* 20,000 is the current default; --dry-run uses zero only to report the
    * root distribution without committing to a split threshold. */
   if (dry && !have_fixed) min_seg = 0;
+  if (flat && g_anneal_hi)
+    die("--flat and --anneal-min-seg contradict each other", NULL);
   if (flat) min_seg = UINT64_MAX;   /* nothing can split */
   /* The floor stays OFF by default, including under --flat. It was briefly
    * defaulted on here, because the standalone satellite builder that --flat
@@ -2769,12 +3108,17 @@ int main_mrmp_build(int argc, char *argv[]) {
   if (flat)
     fprintf(stderr, "[methscope] %s: %u classes, one MRMP over all of them "
             "(--flat: a tree of one level)\n", g_cmd, nstore);
+  else if (g_anneal_hi)
+    fprintf(stderr, "[methscope] %s: %u classes, split threshold annealed "
+            "%" PRIu64 " -> %" PRIu64 " per node%s\n", g_cmd, nstore,
+            g_anneal_hi, g_anneal_lo, dry ? " (dry run)" : "");
   else
     fprintf(stderr, "[methscope] %s: %u classes, split above %" PRIu64
             " segregating CpGs%s\n", g_cmd, nstore, min_seg,
             dry ? " (dry run)" : "");
   tree_build(store, slab, voff, idx, nstore, &gh, &sel, setname, min_seg,
-             0, max_depth, dry, sat_n, rep == stderr ? tty : 0, &t, rep);
+             0, max_depth, dry, sat_n, relax_below, relax_gap,
+             rep == stderr ? tty : 0, &t, rep);
   if (dry) return 0;
 
   ms_mrmp_chain_write(out, t.n, (const void *const *)t.img, t.len);
@@ -2823,5 +3167,7 @@ int main_mrmp_build(int argc, char *argv[]) {
   free(t.img); free(t.len); free(t.name); free(idx);
   for (uint32_t k = 0; k < nstore; ++k) free(slab[k]);
   free(slab); free(voff);
+  for (uint32_t k = 0; k < g_cal_n; ++k) { free(g_cal_cell[k]); free(g_cal_cls[k]); }
+  free(g_cal_cell); free(g_cal_cls);
   return 0;
 }

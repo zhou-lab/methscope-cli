@@ -78,6 +78,7 @@
  * against 90.8% for the same cells' binarised absolute calls. */
 #define MSFM_FLAG_RANK_ADD      16u  /* per-class rank columns ALONGSIDE patterns */
 #define MSFM_FLAG_RANK_ONLY     32u  /* per-class rank columns INSTEAD of them */
+
 /* Ties (beta exactly on the cut) are MSFM_NA under both; see msfm_build.c. */
 
 static inline uint16_t msfm_encode(double beta) {
@@ -269,6 +270,13 @@ typedef struct {
  * elsewhere, not silently dropped here. */
 ms_colspan_t *ms_msfm_colspan(const ms_msfm_layout_t *l, const char *node);
 void ms_colspan_free(ms_colspan_t *c);
+
+/* Side-support floor for pairwise features (satellite contrasts and rank
+ * columns): a side with fewer observed CpGs contributes the neutral 0.5;
+ * both sides under the floor -> NA. Default 3. A knob so classify's internal
+ * featurization and classify-featurize cannot disagree; if overridden at
+ * train time, score with the same value. */
+extern uint32_t ms_msfm_side_floor;
 
 void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
                            const uint64_t *mrmp_base, const uint64_t *mrmp_len,
