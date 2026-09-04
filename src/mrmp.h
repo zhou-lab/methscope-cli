@@ -435,11 +435,15 @@ void ms_mrmp_group_map_at(const char *path, uint64_t base, uint16_t *group,
  * store (fmt3 + .idx). Fills out_a/out_G/out_valid (and, when non-NULL,
  * the cell count used and the CpGs the pick admits from the full pools);
  * returns 0 when calibration is impossible, leaving the caller's defaults
- * in force. See the file comment for the method and its validation. */
+ * in force. out_grid (nullable): 0 = the exact a=1-only early exit decided
+ * the pick, 1 = the full grid ran (a true confuser). Extracted cells are
+ * kept in a cross-call LRU cache (METHSCOPE_CALCACHE_MB, default 8192;
+ * 0 disables) so consecutive pairs sharing a class skip re-inflation.
+ * See the file comment for the method and its validation. */
 int ms_pair_calibrate(const char *cellstore, char *const *cellsA, uint32_t nA,
                       char *const *cellsB, uint32_t nB,
                       float eps, uint32_t threads,
                       double *out_a, double *out_G, double *out_valid,
-                      uint32_t *out_ncell, uint64_t *out_nadm);
+                      uint32_t *out_ncell, uint64_t *out_nadm, int *out_grid);
 
 #endif /* MS_MRMP_H */
