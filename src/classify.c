@@ -175,6 +175,44 @@ static uint32_t tree_mode(const char *bundle, tnode_t *nd, uint32_t n) {
     for (uint32_t k = 0; ok && k < n; ++k) {
       bst_ulong nf = 0;
       XGCHK(XGBoosterGetNumFeature(nd[k].bst, &nf));
+      if (ms_booster_get_pooled(nd[k].bst)) {
+        /* --pool-nodes: the booster spans the full layout -- or, with
+         * --keep-columns, the recorded index subset. Either way the span
+         * is built from the layout side so the width check still binds
+         * booster to matrix. Runs of consecutive indices merge into one
+         * segment; a fully scattered bank degrades to 1-wide segments,
+         * which the gather loops handle unchanged. */
+        uint32_t nsel = 0;
+        uint32_t *sel = ms_booster_get_colsel(nd[k].bst, &nsel);
+        ms_colspan_t *c = calloc(1, sizeof(*c));
+        if (!c) pdie("out of memory (pooled span)", NULL);
+        if (sel) {
+          int bad = 0;
+          for (uint32_t i = 0; i < nsel; ++i) if (sel[i] >= l->total) bad = 1;
+          uint32_t *c0 = malloc((size_t)nsel * sizeof(uint32_t));
+          uint32_t *nc = malloc((size_t)nsel * sizeof(uint32_t));
+          if (!c0 || !nc) pdie("out of memory (pooled span)", NULL);
+          uint32_t nseg = 0;
+          for (uint32_t i = 0; i < nsel; ++i) {
+            if (nseg && c0[nseg - 1] + nc[nseg - 1] == sel[i]) ++nc[nseg - 1];
+            else { c0[nseg] = sel[i]; nc[nseg] = 1; ++nseg; }
+          }
+          c->n_seg = nseg; c->total = nsel; c->col0 = c0; c->ncol = nc;
+          cs[k] = c;
+          ok = !bad && ((uint32_t)nf == nsel);
+          free(sel);
+        } else {
+          uint32_t *c0 = calloc(1, sizeof(uint32_t));
+          uint32_t *nc = calloc(1, sizeof(uint32_t));
+          if (!c0 || !nc) pdie("out of memory (pooled span)", NULL);
+          c->n_seg = 1; c->total = l->total;
+          c0[0] = 0; nc[0] = l->total;
+          c->col0 = c0; c->ncol = nc;
+          cs[k] = c;
+          ok = ((uint32_t)nf == l->total);
+        }
+        continue;
+      }
       cs[k] = ms_msfm_colspan(l, nd[k].name);
       ok = cs[k] && ((uint32_t)nf == cs[k]->total);
     }
@@ -347,11 +385,27 @@ static int predict_tree(const char *query_cg, const char *bundle,
   uint32_t n = 0;
   for (uint32_t s = 0; s < ch->n_sets; ++s)
     if (!ms_set_is_satellite(ch->name[s])) ++n;
+  /* A --pool-nodes bundle holds ONE booster (under the root's name) while
+   * its chain carries many hard sets: detect it by which sections exist,
+   * then confirm by the booster's own attribute below -- so a genuinely
+   * incomplete tree bundle still refuses rather than silently scoring on
+   * the root alone. */
+  int pooled = 0; uint32_t pool_root = 0;
+  if (n > 1) {
+    uint32_t have = 0, last = 0;
+    for (uint32_t s = 0; s < ch->n_sets; ++s) {
+      if (ms_set_is_satellite(ch->name[s])) continue;
+      size_t bl2; void *bb = ms_bundle_section_opt(bundle, ch->name[s], &bl2);
+      if (bb) { free(bb); ++have; last = s; }
+    }
+    if (have == 1) { pooled = 1; pool_root = last; n = 1; }
+  }
   tnode_t *nd = calloc(n, sizeof(tnode_t));
   mrmp_top_t **top = calloc(n, sizeof(mrmp_top_t *));
   uint32_t *setof = calloc(n, sizeof(uint32_t));
   if (!nd || !top || !setof) pdie("out of memory (tree)", NULL);
-  for (uint32_t s = 0, k = 0; s < ch->n_sets; ++s) {
+  if (pooled) setof[0] = pool_root;
+  else for (uint32_t s = 0, k = 0; s < ch->n_sets; ++s) {
     if (ms_set_is_satellite(ch->name[s])) continue;
     setof[k++] = s;
   }
@@ -366,6 +420,10 @@ static int predict_tree(const char *query_cg, const char *bundle,
     free(bb);
     nd[k].lab = ms_booster_get_labels(nd[k].bst, &nd[k].K);
   }
+  if (pooled && !ms_booster_get_pooled(nd[0].bst))
+    pdie("this bundle holds one booster for a multi-node chain, but the "
+         "booster is not marked --pool-nodes -- an incomplete tree bundle",
+         bundle);
   /* Parent from the NAME, minus its last dotted component -- the tree's only
    * structural record, since the 128-byte MRMP header has no room for a
    * pointer. Checked rather than assumed: a missing parent, overlapping

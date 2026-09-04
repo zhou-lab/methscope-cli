@@ -100,7 +100,10 @@ static int bundle_model(const char *out, const char *kind, const char *inner_tmp
     tdie("cannot trim a .mrmp at train time; re-run mrmp-pool --pooled-top "
          "to cut it, or pass an exported .cm", ref_mrmp);
   if (!ref_is_mrmp && npattern < n_nonpna) {    /* real patterns dropped -> trim */
-    char tmpl[] = "/tmp/methscope_trim_XXXXXX.cm";
+    char tmpl[4096];
+    const char *td = getenv("TMPDIR");
+    snprintf(tmpl, sizeof tmpl, "%s/methscope_trim_XXXXXX.cm",
+             td && *td ? td : "/tmp");
     int fd = mkstemps(tmpl, 3);                /* keep the .cm suffix */
     if (fd < 0) tdie("cannot create temp trimmed mrmp", NULL);
     close(fd);
@@ -325,11 +328,14 @@ static char *slurp_file(const char *path, const char *what) {
 
 int main_train_tree(int argc, char *argv[]) {
   const char *data_path = NULL, *out = NULL, *hier_path = NULL;
-  int nrounds = 0, nthread = 0, balance = 0;
+  const char *keep_path = NULL;
+  int nrounds = 0, nthread = 0, balance = 0, pool_nodes = 0;
   tune_t tn = {0, 0, 0.0};
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "--data") && i + 1 < argc) data_path = argv[++i];
+    else if (!strcmp(a, "--pool-nodes")) pool_nodes = 1;
+    else if (!strcmp(a, "--keep-columns") && i + 1 < argc) keep_path = argv[++i];
     else if (!strcmp(a, "--balance-classes")) balance = 1;
     else if (!strcmp(a, "--hierarchy") && i + 1 < argc) hier_path = argv[++i];
     else if (!strcmp(a, "--max-depth") && i + 1 < argc) tn.max_depth = atoi(argv[++i]);
@@ -358,6 +364,21 @@ int main_train_tree(int argc, char *argv[]) {
         "  the chain's layout), so nothing is subset on disk and every node sees\n"
         "  the same coverage draw.\n\n"
         "  -n N        boosting rounds per node (default round(sqrt(rows)))\n"
+        "  --pool-nodes  SOFT ROUTING: train ONE booster over the pooled\n"
+        "              columns of EVERY set in the chain instead of one model\n"
+        "              per node. The tree is then a feature generator -- each\n"
+        "              node's subset rebuild and each calibrated pair still\n"
+        "              contribute their columns -- but no cell is ever\n"
+        "              committed at an internal node, so there are no\n"
+        "              compounding early routing mistakes. Class list and\n"
+        "              order come from the root set. `classify` detects the\n"
+        "              pooled bundle by its booster attribute and feeds the\n"
+        "              full layout width, no routing. Pooled training\n"
+        "              defaults to a constrained booster (--max-depth 4,\n"
+        "              --colsample 0.4): bank columns are selected on the\n"
+        "              training pools, and an unconstrained booster\n"
+        "              memorizes their optimism (give the flags explicitly\n"
+        "              to override).\n"
         "  --threads T thread pool\n"
         "  --hierarchy TSV  embed a label taxonomy (label, compartment, lineage,\n"
         "              group, subtype) in EVERY node, so `classify --levels`\n"
@@ -374,6 +395,19 @@ int main_train_tree(int argc, char *argv[]) {
   }
   if (!data_path || !out)
     tdie("need --data TRAIN.msfm -o TREE.clfx (see -h)", NULL);
+  /* Pooled training defaults to a CONSTRAINED booster (depth 4, 40% column
+   * subsample per tree). With a full pair bank every column was selected on
+   * the training pools, so each is slightly train-optimistic; the default
+   * deep, all-columns booster memorizes those separations (fold-0 human 63-
+   * class: train mlogloss < 0.01, held-out confusers degrade with coverage).
+   * Hiding 60% of the columns per tree and capping depth forces the ensemble
+   * to spread trust across redundant contrasts; measured fold-0 this lifts
+   * every human rung (native 0.9338 -> 0.9592) and is neutral on the mouse
+   * 41-class. Explicit --max-depth / --colsample still override. */
+  if (pool_nodes) {
+    if (tn.max_depth == 0) tn.max_depth = 4;
+    if (tn.colsample == 0.0) tn.colsample = 0.4;
+  }
   /* The matrix carries the chain it was featurized against, so there is no
    * second argument to get wrong: a mismatched pairing is not expressible. */
   char *chain = ms_msfm_chain(data_path);
@@ -436,7 +470,142 @@ int main_train_tree(int argc, char *argv[]) {
   fprintf(stderr, "  %-12s %d records x %d columns, %u node(s)", "data",
           m->n_cells, m->n_patterns, n);
   if (nsat) fprintf(stderr, " + %u satellite(s)", nsat);
+  if (pool_nodes) fprintf(stderr, ", POOLED into one booster");
   fputc('\n', stderr);
+  { /* column provenance: how much of the feature space each origin
+     * contributes. Sparse-coverage behaviour tracks the per-column CpG
+     * support, and that differs by origin -- wide-node rank columns carry
+     * tens of CpGs while pair/satellite columns carry tens of thousands --
+     * so the split is worth one line every run. */
+    uint32_t c_node = 0, c_pair = 0, c_sat = 0;
+    for (uint32_t s = 0; s < lay->n_sets; ++s) {
+      if (ms_set_is_satellite(lay->name[s])) { c_sat += lay->ncol[s]; continue; }
+      uint32_t j = 0;
+      for (; j < ch->n_sets; ++j)
+        if (!strcmp(ch->name[j], lay->name[s])) break;
+      mrmp_top_t *t2 = j < ch->n_sets
+        ? ms_mrmp_top_read_at(chain, ch->block_off[j], 1) : NULL;
+      if (t2 && t2->n_samples == 2) c_pair += lay->ncol[s];
+      else                          c_node += lay->ncol[s];
+      if (t2) ms_mrmp_top_free(t2);
+    }
+    fprintf(stderr, "  %-12s %u multi-class node, %u pair node, "
+            "%u satellite\n", "columns", c_node, c_pair, c_sat);
+  }
+
+  if (pool_nodes) {
+    /* SOFT ROUTING: one booster over the full layout width. The class list
+     * and its order come from the ROOT (the hard set without a parent),
+     * which covers every class by construction; rows are every labelled
+     * cell; columns are ALL of them, in layout order, which is exactly how
+     * the .msfm stores the matrix -- no gathering. */
+    uint32_t rk = UINT32_MAX;
+    for (uint32_t i = 0; i < n; ++i)
+      if (!strchr(ch->name[nodeof[i]], '.')) {
+        if (rk != UINT32_MAX)
+          tdie("two root-level sets; --pool-nodes needs exactly one root",
+               ch->name[nodeof[i]]);
+        rk = nodeof[i];
+      }
+    if (rk == UINT32_MAX) tdie("no root set in this chain", data_path);
+    mrmp_top_t *t = ms_mrmp_top_read_at(chain, ch->block_off[rk], 1);
+    /* --keep-columns: a BANK is a curated subset of the layout's columns
+     * (e.g. one LCA pair contrast per class pair), given as 0-based global
+     * indices, one per line, ascending. The kept set is recorded in the
+     * booster (MS_ATTR_COLSEL) so classify gathers exactly these. */
+    uint32_t *keep = NULL, nkeep = 0;
+    if (keep_path) {
+      FILE *kf = fopen(keep_path, "r");
+      if (!kf) tdie("cannot open --keep-columns", keep_path);
+      uint32_t cap = 4096;
+      keep = malloc((size_t)cap * sizeof(uint32_t));
+      if (!keep) tdie("out of memory", NULL);
+      char lb[64];
+      while (fgets(lb, sizeof lb, kf)) {
+        char *e = NULL;
+        unsigned long v = strtoul(lb, &e, 10);
+        if (e == lb) continue;
+        if (v >= (unsigned long)m->n_patterns)
+          tdie("--keep-columns index past the matrix width", lb);
+        if (nkeep && keep[nkeep - 1] >= (uint32_t)v)
+          tdie("--keep-columns must be ascending and unique", lb);
+        if (nkeep == cap) {
+          cap *= 2;
+          keep = realloc(keep, (size_t)cap * sizeof(uint32_t));
+          if (!keep) tdie("out of memory", NULL);
+        }
+        keep[nkeep++] = (uint32_t)v;
+      }
+      fclose(kf);
+      if (!nkeep) tdie("--keep-columns kept nothing", keep_path);
+      fprintf(stderr, "  %-12s %u of %d columns kept (--keep-columns)\n",
+              "bank", nkeep, m->n_patterns);
+    }
+    const uint32_t ncol = keep ? nkeep : (uint32_t)m->n_patterns;
+    uint32_t *row = malloc((size_t)m->n_cells * sizeof(uint32_t));
+    float *y = malloc((size_t)m->n_cells * sizeof(float));
+    if (!row || !y) tdie("out of memory", NULL);
+    uint32_t nr = 0;
+    for (int r = 0; r < m->n_cells; ++r)
+      for (uint32_t c = 0; c < t->n_samples; ++c)
+        if (!strcmp(row_lab[r], t->labels[c])) {
+          row[nr] = (uint32_t)r; y[nr++] = (float)c; break;
+        }
+    if (!nr) tdie("no training rows match the root's classes", data_path);
+    float *X = malloc((size_t)nr * ncol * sizeof(float));
+    if (!X) tdie("out of memory", NULL);
+    for (uint32_t r = 0; r < nr; ++r)
+      for (uint32_t c = 0; c < ncol; ++c)
+        X[(size_t)r * ncol + c] =
+          (float)m->M[(size_t)row[r] * m->n_patterns + (keep ? keep[c] : c)];
+    int nrd = nrounds > 0 ? nrounds : (int)(sqrt((double)nr) + 0.5);
+    if (nrd < 1) nrd = 1;
+    BoosterHandle b = train_one(X, y, nr, ncol, (int)t->n_samples, nrd,
+                                nthread, &tn, ch->name[rk], balance);
+    ms_booster_set_meta(b, t->labels, (int)t->n_samples);
+    if (hier_buf) ms_booster_set_hier(b, hier_buf);
+    if (flags & MSFM_FLAG_BIN_FLAT)     ms_booster_set_binarize(b, "0.5");
+    else if (flags & MSFM_FLAG_BIN_PAT) ms_booster_set_binarize(b, "pattern");
+    if (keep) {
+      char **fn = malloc((size_t)ncol * sizeof(char *));
+      if (!fn) tdie("out of memory", NULL);
+      for (uint32_t c = 0; c < ncol; ++c) fn[c] = m->pattern_names[keep[c]];
+      ms_booster_set_features(b, fn, (int)ncol);
+      free(fn);
+      ms_booster_set_colsel(b, keep, nkeep);
+    } else ms_booster_set_features(b, m->pattern_names, (int)ncol);
+    ms_booster_set_pooled(b);
+    void *blob = NULL; uint64_t blen = 0;
+    { char tmp[4096];
+      const char *td = getenv("TMPDIR");
+      snprintf(tmp, sizeof tmp, "%s/methscope_tree_XXXXXX.ubj",
+               td && *td ? td : "/tmp");
+      int fd = mkstemps(tmp, 4);
+      if (fd < 0) tdie("cannot create temporary model", tmp);
+      close(fd);
+      XGCHK(XGBoosterSaveModel(b, tmp));
+      FILE *f = fopen(tmp, "rb");
+      if (!f) tdie("cannot read temporary model", tmp);
+      fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+      blob = malloc((size_t)sz); blen = (uint64_t)sz;
+      if (!blob || fread(blob, 1, (size_t)sz, f) != (size_t)sz)
+        tdie("short read on temporary model", tmp);
+      fclose(f); unlink(tmp); }
+    XGBoosterFree(b);
+    { char *nm1 = strdup(ch->name[rk]);
+      void *bl1[1] = {blob}; uint64_t bn1[1] = {blen}; char *nms[1] = {nm1};
+      ms_bundle_pack_tree(out, chain, 1, nms, bl1, bn1);
+      free(nm1); }
+    fprintf(stderr, "\n  %-12s 1 pooled booster + the chain -> %s\n",
+            "wrote", out);
+    fprintf(stderr, "  %-12s methscope classify query.cg %s\n", "score with",
+            out);
+    free(blob); free(X); free(row); free(y); free(keep);
+    ms_mrmp_top_free(t); free(hier_buf); free(nodeof);
+    ms_msfm_layout_free(lay); ms_mrmpset_free(ch);
+    unlink(chain); free(chain);
+    return 0;
+  }
 
   void **bl = calloc(n, sizeof(void *));
   uint64_t *bn = calloc(n, sizeof(uint64_t));
@@ -488,7 +657,10 @@ int main_train_tree(int argc, char *argv[]) {
       ms_booster_set_features(b, fn, (int)ncol);
       free(fn);
     }
-    { char tmp[] = "/tmp/methscope_tree_XXXXXX.ubj";
+    { char tmp[4096];
+      const char *td = getenv("TMPDIR");
+      snprintf(tmp, sizeof tmp, "%s/methscope_tree_XXXXXX.ubj",
+               td && *td ? td : "/tmp");
       int fd = mkstemps(tmp, 4);
       if (fd < 0) tdie("cannot create temporary model", tmp);
       close(fd);
@@ -635,12 +807,17 @@ int main_train(int argc, char *argv[]) {
     uint32_t top_k = npattern > 0 ? (uint32_t)npattern : 1000u;
     viomodel_t *vm = ms_viomodel_from_mrmp(artifact, top_k, vio_threshold,
                                            vio_weight, vio_min_patterns);
-    char mtmp[] = "/tmp/methscope_vio_XXXXXX.vio";
+    const char *vtd = getenv("TMPDIR");
+    char mtmp[4096];
+    snprintf(mtmp, sizeof mtmp, "%s/methscope_vio_XXXXXX.vio",
+             vtd && *vtd ? vtd : "/tmp");
     int mfd = mkstemps(mtmp, 4);
     if (mfd < 0) tdie("cannot create temp violation model file", NULL);
     close(mfd);
     ms_viomodel_write(vm, mtmp);
-    char ctmp[] = "/tmp/methscope_viomask_XXXXXX.cm";
+    char ctmp[4096];
+    snprintf(ctmp, sizeof ctmp, "%s/methscope_viomask_XXXXXX.cm",
+             vtd && *vtd ? vtd : "/tmp");
     int cfd = mkstemps(ctmp, 3);
     if (cfd < 0) tdie("cannot create temp mask file", NULL);
     close(cfd);
@@ -779,7 +956,10 @@ int main_train(int argc, char *argv[]) {
   if (fw_lin) {
     /* ---- linear framework (threshold / logistic): interpretable binary rule ---- */
     linmodel_t *lm = ms_linmodel_fit(m, npattern, yidx, uniq[0], uniq[1], framework);
-    char tmpl[] = "/tmp/methscope_lin_XXXXXX.lin";
+    char tmpl[4096];
+    const char *td = getenv("TMPDIR");
+    snprintf(tmpl, sizeof tmpl, "%s/methscope_lin_XXXXXX.lin",
+             td && *td ? td : "/tmp");
     int fd = mkstemps(tmpl, 4);
     if (fd < 0) tdie("cannot create temp linear model file", NULL);
     close(fd);
@@ -930,7 +1110,10 @@ int main_train(int argc, char *argv[]) {
       free(buf);
     }
     if (bundled) {
-      char tmpl[] = "/tmp/methscope_ubj_XXXXXX.ubj";
+      char tmpl[4096];
+      const char *td = getenv("TMPDIR");
+      snprintf(tmpl, sizeof tmpl, "%s/methscope_ubj_XXXXXX.ubj",
+               td && *td ? td : "/tmp");
       int fd = mkstemps(tmpl, 4);
       if (fd < 0) tdie("cannot create temp booster file", NULL);
       close(fd);

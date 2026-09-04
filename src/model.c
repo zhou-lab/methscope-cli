@@ -131,6 +131,49 @@ int ms_booster_has_scalar_cov(BoosterHandle b) {
   return 1;
 }
 
+void ms_booster_set_pooled(BoosterHandle b) {
+  XGCHK(XGBoosterSetAttr(b, MS_ATTR_POOLED, "1"));
+}
+
+int ms_booster_get_pooled(BoosterHandle b) {
+  const char *val = NULL;
+  int success = 0;
+  if (XGBoosterGetAttr(b, MS_ATTR_POOLED, &val, &success) != 0 || !success || !val)
+    return 0;
+  return 1;
+}
+
+void ms_booster_set_colsel(BoosterHandle b, const uint32_t *idx, uint32_t n) {
+  /* comma list; 11 bytes/index is generous */
+  char *buf = malloc((size_t)n * 12 + 1);
+  if (!buf) die("out of memory (colsel)", NULL);
+  size_t at = 0;
+  for (uint32_t i = 0; i < n; ++i)
+    at += (size_t)sprintf(buf + at, i ? ",%u" : "%u", idx[i]);
+  XGCHK(XGBoosterSetAttr(b, MS_ATTR_COLSEL, buf));
+  free(buf);
+}
+
+uint32_t *ms_booster_get_colsel(BoosterHandle b, uint32_t *n_out) {
+  const char *val = NULL;
+  int success = 0;
+  *n_out = 0;
+  if (XGBoosterGetAttr(b, MS_ATTR_COLSEL, &val, &success) != 0 || !success || !val)
+    return NULL;
+  uint32_t n = 1;
+  for (const char *p = val; *p; ++p) if (*p == ',') ++n;
+  uint32_t *idx = malloc((size_t)n * sizeof(uint32_t));
+  if (!idx) die("out of memory (colsel)", NULL);
+  uint32_t k = 0;
+  const char *p = val;
+  while (k < n) {
+    idx[k++] = (uint32_t)strtoul(p, (char **)&p, 10);
+    if (*p == ',') ++p; else break;
+  }
+  *n_out = k;
+  return idx;
+}
+
 char **ms_booster_get_labels(BoosterHandle b, int *num_class) {
   const char *val = NULL;
   int success = 0;

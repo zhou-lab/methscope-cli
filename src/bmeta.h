@@ -11,6 +11,7 @@
 #ifndef METHSCOPE_BMETA_H
 #define METHSCOPE_BMETA_H
 
+#include <stdint.h>
 #include <xgboost/c_api.h>
 
 #define MS_ATTR_LABELS "methscope_labels"   /* comma-separated, class-index order */
@@ -77,6 +78,21 @@ char *ms_booster_get_binarize(BoosterHandle b);
 /* Mark / test the scalar coverage feature (see MS_ATTR_SCALARCOV). */
 void ms_booster_set_scalar_cov(BoosterHandle b);
 int  ms_booster_has_scalar_cov(BoosterHandle b);
+
+/* Marks a booster trained over the POOLED columns of EVERY set in its chain
+ * (classify-train --pool-nodes): one model, no routing -- the tree's nodes
+ * are feature generators only, and classify feeds the full layout width. */
+#define MS_ATTR_POOLED "methscope_pooled"
+void ms_booster_set_pooled(BoosterHandle b);
+int  ms_booster_get_pooled(BoosterHandle b);
+
+/* For a pooled booster trained on a SUBSET of the layout's columns
+ * (classify-train --pool-nodes --keep-columns): the kept global column
+ * indices, comma-separated, ascending. classify gathers exactly these.
+ * Absent means the pooled booster spans the full layout width. */
+#define MS_ATTR_COLSEL "methscope_colsel"
+void      ms_booster_set_colsel(BoosterHandle b, const uint32_t *idx, uint32_t n);
+uint32_t *ms_booster_get_colsel(BoosterHandle b, uint32_t *n_out);
 
 /* Read the embedded labels. Returns a malloc'd array of malloc'd strings and
  * sets *num_class, or NULL if the attribute is absent (caller then falls back
