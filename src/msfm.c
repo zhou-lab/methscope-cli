@@ -134,7 +134,13 @@ char *ms_msfm_chain(const char *path) {
   if (fseek(f, (long)h.mrmp_offset, SEEK_SET)) { fclose(f); fdie("bad mrmp offset", path); }
   uint64_t n = 0;
   if (fread(&n, 1, sizeof n, f) != sizeof n) { fclose(f); fdie("short embedded mrmp", path); }
-  char tmp[] = "/tmp/methscope_chain_XXXXXX";
+  /* honour TMPDIR: /tmp on the cluster is a tiny shared partition, and a
+   * many-block chain is tens of MB -- a full node /tmp failed this write
+   * mid-run (2026-09-04). */
+  const char *td = getenv("TMPDIR");
+  char tmp[4096];
+  snprintf(tmp, sizeof tmp, "%s/methscope_chain_XXXXXX",
+           td && *td ? td : "/tmp");
   int fd = mkstemp(tmp);
   if (fd < 0) { fclose(f); fdie("cannot create a temp file for the chain", path); }
   FILE *o = fdopen(fd, "wb");

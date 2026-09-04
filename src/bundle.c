@@ -198,7 +198,10 @@ const char *ms_mrmp_resolve(const char *path, char **tmp_out) {
   fclose(f);
   if (!is_mrmp) return path;
 
-  char tpl[] = "/tmp/methscope_resolve_XXXXXX.cm";
+  char tpl[4096];
+  const char *td = getenv("TMPDIR");
+  snprintf(tpl, sizeof tpl, "%s/methscope_resolve_XXXXXX.cm",
+           td && *td ? td : "/tmp");
   int fd = mkstemps(tpl, 3);
   if (fd < 0) bdie("cannot create a temporary mask", tpl);
   close(fd);
@@ -440,7 +443,10 @@ int main_bundle(int argc, char *argv[]) {
          "labels already travel inside each booster", out);
   char *tmp_ubj = NULL;
   if (meta) {
-    char tmpl[] = "/tmp/methscope_ann_XXXXXX.ubj";
+    char tmpl[4096];
+    const char *td = getenv("TMPDIR");
+    snprintf(tmpl, sizeof tmpl, "%s/methscope_ann_XXXXXX.ubj",
+             td && *td ? td : "/tmp");
     int fd = mkstemps(tmpl, 4);          /* keep the .ubj suffix for XGBoost */
     if (fd < 0) bdie("cannot create temp booster file", NULL);
     close(fd);

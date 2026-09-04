@@ -94,7 +94,10 @@ static int inspect_usage(FILE *out) {
 }
 
 static char *buf_to_tmp(const void *buf, size_t len) {
-  char tmpl[] = "/tmp/methscope_insp_XXXXXX";
+  char tmpl[4096];
+  const char *td = getenv("TMPDIR");
+  snprintf(tmpl, sizeof tmpl, "%s/methscope_insp_XXXXXX",
+           td && *td ? td : "/tmp");
   int fd = mkstemp(tmpl);
   if (fd < 0) idie("cannot create temp file", NULL);
   for (size_t off = 0; off < len; ) {
