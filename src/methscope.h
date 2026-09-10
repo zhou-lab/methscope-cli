@@ -80,8 +80,11 @@ void ms_mrmp_trim(const char *in_cm, char *const *keep_names, int n_keep,
 /* ------------------------------------------------------------------ */
 /* Model artifacts                                                    */
 /* ------------------------------------------------------------------ */
-/* A methscope model ships as a self-contained bundle (`.ubjx`/`.updecx`/`.refx`,
- * see bundle.h) wrapping an inner model + its MRMP. The loose parts are:
+/* A methscope model ships as a self-contained bundle (`.clfx`/`.updecx`, see
+ * bundle.h) wrapping an inner model + its MRMP. `.ubjx` is the legacy
+ * classifier extension, still accepted on input; `.refx` was the legacy
+ * deconvolution reference and is superseded by .msdref (see deconv.c). The
+ * loose parts are:
  *   <mrmp>.mrmp            the MRMP pattern definition (a YAME .cm)
  *   <mrmp>-<panel>.ubj     an XGBoost booster with class labels embedded as
  *                          attributes (see bmeta.h)

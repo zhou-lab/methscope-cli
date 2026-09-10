@@ -86,25 +86,37 @@ static entry_t *bundle_directory(FILE *fp, const char *path, uint64_t *total_out
   return entries;
 }
 
-int ms_bundle_is(const char *path) {
+/* M if `path` is a bundle, -1 otherwise. Never exits: callers use it to ASK
+   whether a path is a bundle, so an unreadable or too-short file is an answer
+   ("not a bundle"), not a failure. */
+static int64_t bundle_container_off(const char *path) {
   FILE *fp = fopen(path, "rb");
-  if (!fp) return 0;
-  int ok = 0;
-  if (fseek(fp, 0, SEEK_END) == 0) {
-    long total = ftell(fp);
+  if (!fp) return -1;
+  int64_t off = -1;
+  if (fseeko(fp, 0, SEEK_END) == 0) {
+    off_t total = ftello(fp);
     uint64_t container_off;
     if (total >= FOOTER_BYTES + CONTAINER_HDR_BYTES &&
-        fseek(fp, total - FOOTER_BYTES, SEEK_SET) == 0 &&
+        fseeko(fp, total - FOOTER_BYTES, SEEK_SET) == 0 &&
         fread(&container_off, 8, 1, fp) == 1 &&
         container_off <= (uint64_t)total - FOOTER_BYTES &&
         (uint64_t)total - FOOTER_BYTES - container_off >= CONTAINER_HDR_BYTES) {
       char m[8];
-      if (fseek(fp, (long)container_off, SEEK_SET) == 0 && fread(m, 1, 8, fp) == 8)
-        ok = (memcmp(m, MS_BUNDLE_MAGIC, 8) == 0);
+      if (fseeko(fp, (off_t)container_off, SEEK_SET) == 0 && fread(m, 1, 8, fp) == 8 &&
+          memcmp(m, MS_BUNDLE_MAGIC, 8) == 0)
+        off = (int64_t)container_off;
     }
   }
   fclose(fp);
-  return ok;
+  return off;
+}
+
+int ms_bundle_is(const char *path) {
+  return bundle_container_off(path) >= 0;
+}
+
+int64_t ms_bundle_cx_limit(const char *path) {
+  return bundle_container_off(path);   /* -1 == CX_NO_LIMIT for a non-bundle */
 }
 
 void *ms_bundle_section_opt(const char *path, const char *name, size_t *len_out) {
@@ -183,8 +195,11 @@ int ms_bundle_find(const char *path, const char *name, ms_bundle_entry_t *out) {
 const char *ms_mrmp_resolve(const char *path, char **tmp_out) {
   *tmp_out = NULL;
   /* A loose .cm is already what open_cfile wants, and a .cm-bearing bundle is
-     too: its .cm is the file prefix and yame stops at that .cm's BGZF EOF,
-     ignoring the MSBNDL1 trailer. Either way the path goes straight through.
+     too: its .cm is the file prefix. Either way the path goes straight through
+     -- but a bundle only reads correctly if the CALLER bounds the read at
+     ms_bundle_cx_limit(). yame does NOT stop by itself at the prefix's BGZF EOF
+     marker; it did until YAME v1.40, and assuming it still does is what broke
+     `methscope upscale` in v0.7. See the layout note in bundle.h.
 
      A .mrmp does not: it is the artifact, not the runtime mask. Callers that
      want EVERY set of a chain expand it themselves (classify-featurize does).

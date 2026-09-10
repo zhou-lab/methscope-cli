@@ -15,48 +15,35 @@ It builds [YAME](https://github.com/zhou-lab/YAME) as a static library
 
 Pretrained models are hosted on HuggingFace
 ([zhou-lab/methscope](https://huggingface.co/zhou-lab/methscope)) — too large for
-git. `methscope fetch` carries the catalog and downloads them; the
+git. They are fetched with **`yame fetch`**, which serves the shared store every
+tool in the suite reads; the
 [methscope_data](https://github.com/zhou-lab/methscope_data) repo holds the query
 `.cg` test fixtures (`test/`) and the reproducibility archive.
 
 ```sh
-methscope fetch                       # a checkbox picker on a terminal;
-                                      # a plain listing anywhere else
-methscope fetch hg38_celltype.ubjx    # entries are named by their file
-methscope fetch models                # every model
-methscope fetch data                  # every example .cg fixture
-# -> $METHSCOPE_DATA_DIR, else ~/.cache/methscope (--store DIR overrides)
+yame fetch                                     # browse the catalogue
+yame fetch hg38/models/hg38_celltype.clfx      # one file
+yame fetch hg38/models                         # every human model
+yame fetch hg38/data                           # every example .cg fixture
+# -> $YAME_DATA_HOME, else ${XDG_DATA_HOME:-~/.local/share}/yame (-d DIR overrides)
 ```
 
-The catalog covers both the models and the query `.cg` fixtures the examples
-run against. Entries are named by their file, so what you ask for is what lands in the
-store. Human-facing lines go to stderr and stdout is one absolute path per
-requested file, so fetching also composes when a script wants a path:
+`-c` puts the files in the current directory instead, which is what the
+[examples](https://zhou-lab.github.io/methscope-cli/) do:
 
 ```sh
 mkdir -p ~/tmp/methscope && cd ~/tmp/methscope
-export METHSCOPE_DATA_DIR="."          # fetch into the working directory
-methscope fetch hg38_celltype.ubjx human_hg38_celltypes.cg
+yame fetch -c hg38/models/hg38_celltype.clfx hg38/data/human_hg38_celltypes.cg
 methscope classify hg38_celltype.clfx human_hg38_celltypes.cg
 ```
 
-It is idempotent — the first run downloads, every run after just resolves the
-path — and a `.cg`'s `.cg.idx` sibling rides along without being a second name
-to remember. Every entry carries a pinned SHA-256; a download that misses it is
-discarded, and `--verify` re-checks files already in the store.
+Fetching is idempotent, every entry carries a pinned SHA-256, and a `.cg`'s
+`.cg.idx` sibling rides along without being a second name to remember. See
+`yame fetch -h` for the browser keys, `-g` filtering, and the store rules.
 
-On a terminal a bare `fetch` opens a full-screen picker over the catalog, with
-the same keys as `kycg fetch`: arrows or `j`/`k` move, space toggles, `a`/`n`
-select all or none, `/` filters, `f` fetches what is checked, enter accepts,
-`q` or Esc cancels. It uses the alternate screen, so your scrollback comes back
-untouched. Browsing the catalog and choosing from it are the same
-act, so there is no separate `list` command to drift out of step. Off a
-terminal it prints the identical catalog and exits, and a named target never
-prompts either way, so a container build or workflow step can never hang. It is
-the only command that touches the network. Downloads land on a
-`.part` sibling and are renamed only once the byte count matches the catalog.
-libcurl is optional: without it the build still lists the catalog and prints the
-URL to download by hand.
+`methscope fetch` no longer exists — it was retired once YAME's registry grew to
+cover methscope's own assets, so there is one store and one catalogue rather than
+two that drift apart. The binary still recognises the name and says where to go.
 
 ## Build
 
@@ -65,7 +52,7 @@ methscope-cli depends on YAME (vendored as a git submodule) and on `libxgboost`
 
 ```sh
 # 1. clone with the YAME submodule
-git clone --recurse-submodules git@github.com:zhou-lab/methscope-cli.git
+git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli.git
 cd methscope-cli
 
 # 2. libxgboost (provides c_api.h + libxgboost.{so,dylib})

@@ -3,13 +3,21 @@
  * Generic model bundle (MSBNDL1): wraps an inner model together with the MRMP
  * definition it needs, so one self-contained file lets a query .cg be featurized +
  * run without a separate .mrmp. The `x` extension suffix marks the bundled form:
- *   .ubj   (cell-type booster / linear model) -> .ubjx   (run by `predict`)
+ *   .ubj   (cell-type booster / linear model) -> .clfx   (run by `classify`;
+ *                                                .ubjx is the legacy name,
+ *                                                still accepted on input)
  *   .updec (upscale block decoder)            -> .updecx  (run by `upscale`)
  *
- * layout — the MRMP .cm is the FIRST bytes of the file, so `yame` (and any tool
- * reading a .cm) can read a bundle directly: yame stops at the .cm's BGZF EOF marker
- * and ignores the MSBNDL1 trailer. A footer at the very end points back at the
- * container, so readers don't have to parse the .cm to find it. Native byte order:
+ * layout — the MRMP .cm is the FIRST bytes of the file, so a tool reading a .cm
+ * can read a bundle directly PROVIDED it bounds the read at M: pass
+ * ms_bundle_cx_limit() to YAME's cx_read_record(), which reports CX_READ_END
+ * there. Do NOT rely on the reader stopping by itself at the .cm's BGZF EOF
+ * marker. It used to, and this comment used to say so, but that was a promise
+ * about YAME's behaviour recorded only here; YAME never knew it was making it,
+ * and v1.40 (YAME 6b4fa8e) made reading into the trailer a fatal error, which
+ * broke `methscope upscale` in v0.7. A footer at the very end points back at
+ * the container, so readers don't have to parse the .cm to find it. Native
+ * byte order:
  *
  *   [ MRMP .cm bytes ]                                  offset 0 (a complete YAME .cm)
  *   "MSBNDL1\0"                                         8 bytes   (container magic at offset M)
@@ -26,7 +34,7 @@
  *   "mrmp"       the bundled MRMP (a YAME .cm) = the file prefix; featurizes the
  *                query internally (ms_mrmp_resolve just hands back the bundle path).
  *   "model"      the inner-model bytes; meaning is format-specific:
- *                  .ubjx   -> an XGBoost .ubj booster OR a "methscope-linear" text
+ *                  .clfx   -> an XGBoost .ubj booster OR a "methscope-linear" text
  *                             spec (threshold/logistic). Class labels live INSIDE
  *                             the .ubj as XGBoost attributes, not a separate section.
  *                  .updecx -> a .updec MLP decoder (little-endian float32 weights).
@@ -35,11 +43,11 @@
  *                format allows repeated (outcpg, model) pairs for a multi-block
  *                .updecx (execution of multiple models is not yet implemented).
  *   "kind"       the framework mark string:
- *                  .ubjx   -> "xgboost" | "threshold" | "logistic"  (REQUIRED;
- *                             `predict` rejects an unmarked bundle).
+ *                  .clfx   -> "tree" | "xgboost" | "threshold" | "logistic"
+ *                             (REQUIRED; `classify` rejects an unmarked bundle).
  *                  .updecx has no kind (dispatched by the `upscale` subcommand).
  *
- * A wrong pairing (e.g. a .updecx fed to `predict`) fails on the inner model's own
+ * A wrong pairing (e.g. a .updecx fed to `classify`) fails on the inner model's own
  * magic. Build/read via ms_bundle_pack() / ms_bundle_kind() / ms_bundle_section() /
  * ms_bundle_list() below; ms_mrmp_resolve() returns the path as-is (the front .cm is
  * read directly wherever a loose <ref.mrmp> is expected).
@@ -67,6 +75,19 @@ int ms_bundle_find(const char *path, const char *name, ms_bundle_entry_t *out);
 /* 1 if `path` is a bundle (its trailing footer points at the MSBNDL1 magic), else 0. */
 int ms_bundle_is(const char *path);
 
+/**
+ * The byte offset at which a bundle's CX prefix ends: M, the MSBNDL1 container,
+ * read from the 8-byte footer. Returns -1 (YAME's CX_NO_LIMIT) for anything
+ * that is not a bundle, so a caller can pass the result straight to
+ * cx_read_record() without branching on the file type.
+ *
+ * Any loop that reads records until one comes back empty MUST bound itself this
+ * way when its path may be a bundle -- otherwise it walks into the container and
+ * YAME reports CX_READ_NOT_CX. Reading a fixed number of records that is known
+ * to be within the prefix does not need it.
+ */
+int64_t ms_bundle_cx_limit(const char *path);
+
 /* Extract a named section into a malloc'd buffer (caller frees); exits on a
  * missing section or read error. */
 void *ms_bundle_section(const char *path, const char *name, size_t *len_out);
@@ -92,7 +113,7 @@ void ms_bundle_pack(const char *out, const char *kind, const char *model_path,
                     const char *mrmp_path, const char *outcpg_path);
 
 /* Read the framework mark (the "kind" section) as a malloc'd NUL-terminated
- * string, or NULL if the bundle has no kind section. (`predict` requires a kind
+ * string, or NULL if the bundle has no kind section. (`classify` requires a kind
  * and rejects an unmarked bundle; upscale/deconv dispatch by subcommand.) */
 /* Write a TREE bundle: chain as the prefix, one booster section per node named
  * for that node. `booster[k]` are the inner model bytes, e.g. the "model"

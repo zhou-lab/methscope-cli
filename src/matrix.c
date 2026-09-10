@@ -113,10 +113,19 @@ static ms_matrix_t *matrix_build(const char *query_cg, const char *ref_cm,
   /* ---- load all mask records into memory, once ---- */
   cfile_t  cf_mask     = open_cfile((char *)ref_cm);
   snames_t snames_mask = loadSampleNamesFromIndex((char *)ref_cm);
+  /* ref_cm may be a BUNDLE (.updecx / .ubjx), whose .cm is only the file
+     prefix. Bound the walk at the MSBNDL1 container or it reads into the
+     trailer, which YAME has treated as a fatal since v1.40 -- the v0.7
+     `upscale` regression. -1 for a plain .cm, i.e. read to end of stream. */
+  const int64_t cx_limit = ms_bundle_cx_limit(ref_cm);
   cdata_t *c_masks = NULL;
   size_t   n_masks = 0, mcap = 0;
   for (;;) {
-    cdata_t cm = read_cdata1(&cf_mask);
+    cdata_t cm = {0};
+    char rerr[CX_ERRBUF];
+    cx_read_t st = cx_read_record(&cf_mask, &cm, cx_limit, rerr, sizeof rerr);
+    if (st == CX_READ_END) break;
+    if (st != CX_READ_OK) mdie(rerr, ref_cm);
     if (cm.n == 0) break;
     prepare_mask(&cm);
     if (n_masks == mcap) {

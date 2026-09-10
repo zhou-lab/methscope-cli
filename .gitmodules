@@ -1,4 +1,9 @@
 [submodule "YAME"]
 	path = YAME
-	url = git@github.com:zhou-lab/YAME.git
+	# HTTPS, not SSH: YAME is public, and an SSH URL here makes
+	# `git clone --recurse-submodules` fail for anyone without a
+	# deploy key -- including CI, which used to paper over it with
+	# an insteadOf rewrite. Maintainers push from their own YAME
+	# clone, not through the submodule.
+	url = https://github.com/zhou-lab/YAME.git
 	ignore = dirty

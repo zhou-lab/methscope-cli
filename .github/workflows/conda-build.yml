@@ -21,11 +21,6 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
-      # .gitmodules pins YAME by SSH URL, which the runner cannot use. Rewrite
-      # it to HTTPS (YAME is public) so the submodule checkout succeeds.
-      - name: Use HTTPS for submodules
-        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
-
       # The recipe builds the checked-out tree, so the pinned YAME submodule
       # must be present.
       - uses: actions/checkout@v4
@@ -129,9 +124,6 @@ jobs:
     permissions:
       contents: write     # required to create a release
     steps:
-      - name: Use HTTPS for submodules
-        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
-
       # `make dist` reads git ls-files and derives DIST_VERSION from
       # `git describe --tags`, so it needs the submodule AND full tag history.
       - uses: actions/checkout@v4

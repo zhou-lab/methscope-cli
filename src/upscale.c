@@ -492,8 +492,13 @@ int main_upscale(int argc, char *argv[]) {
 
   if (sk.as_cg) bgzf_close(sk.cg);
   else if (sk.tsv != stdout) fclose(sk.tsv);
+  /* Read the count BEFORE the free. free_cdata() zeroes n since YAME 6b4fa8e
+     (v1.40); before that it only released the buffer, so reporting off a freed
+     record printed the stale value and looked right. */
+  const int n_cpg_out = sk.mask ? (int)mask.n : n_out;
+  const int genome_dim = sk.mask != NULL;
   if (sk.mask) free_cdata(&mask);
   fprintf(stderr, "[methscope] upscaled %ld sample(s) x %d CpGs%s\n",
-          row, sk.mask ? (int)mask.n : n_out, sk.mask ? " (genome .cg)" : "");
+          row, n_cpg_out, genome_dim ? " (genome .cg)" : "");
   return 0;
 }

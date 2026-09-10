@@ -22,6 +22,7 @@
 #include "cfile.h"
 #include "summary.h"
 #include "mrmp.h"
+#include "bundle.h"   /* ms_bundle_cx_limit: a bundle's .cm is only its prefix */
 
 #include "msur.h"
 
@@ -485,8 +486,20 @@ int main_upscale_prepare(int argc, char *argv[]) {
     for (uint64_t i = 0; i < n_cpg; ++i) if (group[i] > ncol) ncol = group[i];
   } else {
     cfile_t cmf = open_cfile((char *)mrmp);
-    cdata_t cm = read_cdata1(&cmf);
-    cdata_t extra = read_cdata1(&cmf);
+    /* The second read is the "exactly one record" probe, and it is the one that
+       walks off the end. On a bundle that end is the MSBNDL1 container, not
+       end of file, so bound it -- unbounded, YAME fatals there (v1.40+). */
+    const int64_t cx_limit = ms_bundle_cx_limit(mrmp);
+    cdata_t cm = {0}, extra = {0};
+    char rerr[CX_ERRBUF];
+    /* END is not an error at either read -- an empty file leaves cm.n == 0 and
+       a well-formed one leaves extra.n == 0. Both are caught by the count check
+       below, which says what is actually wrong. Only a malformed record dies
+       with the reader's own message. */
+    cx_read_t st1 = cx_read_record(&cmf, &cm, cx_limit, rerr, sizeof rerr);
+    if (st1 != CX_READ_OK && st1 != CX_READ_END) pdie(rerr, mrmp);
+    cx_read_t st2 = cx_read_record(&cmf, &extra, cx_limit, rerr, sizeof rerr);
+    if (st2 != CX_READ_OK && st2 != CX_READ_END) pdie(rerr, mrmp);
     bgzf_close(cmf.fh);
     if (!cm.n || extra.n) pdie("MRMP must contain exactly one record", mrmp);
     free_cdata(&extra);

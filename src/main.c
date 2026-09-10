@@ -106,8 +106,13 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   if (strcmp(argv[1], "fetch") == 0) {   /* retired: YAME's registry now covers methscope data */
+    /* Spell the names the way the registry, the README and the docs page do:
+       `hg38/models`, not the legacy `methscope/hg38/models`. Both resolve, but
+       two spellings in three places is how a reviewer ends up with
+       inconsistent instructions. */
     fprintf(stderr, "[methscope] 'methscope fetch' was retired; use YAME's shared store:\n"
-                    "  yame fetch methscope/hg38/models    # or hg38/data, mm10/models\n");
+                    "  yame fetch hg38/models                     # or hg38/data, mm10/models\n"
+                    "  yame fetch -c hg38/models/hg38_celltype.clfx   # -c: into the current dir\n");
     return 1;
   }
   if (strcmp(argv[1], "mrmp-build")   == 0) return main_mrmp_build(argc - 1, argv + 1);

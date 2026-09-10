@@ -102,7 +102,6 @@
   /* --- masonry card grid: a short card never leaves a hole --- */
   .grid{column-count:1;column-gap:16px}
   @media(min-width:700px){.grid{column-count:2}}
-  @media(min-width:1120px){.grid{column-count:3}}
   .card{break-inside:avoid;margin:0 0 16px;border:1px solid var(--line);border-radius:12px;
      background:var(--card);padding:14px 15px;box-shadow:var(--shadow);
      transition:border-color .12s,transform .12s}
@@ -260,7 +259,11 @@ conda install -c zhou-lab -c conda-forge methscope
 <span class="cm"># deconv — is pure C and needs no GPU, so most users can skip this.</span>
 conda install -c zhou-lab -c conda-forge methscope-cuda
 
-<span class="cm"># or build from source (bundles YAME)</span>
+<span class="cm"># or build from source (bundles YAME). libxgboost is the one external</span>
+<span class="cm"># dependency: the Makefile reads $CONDA_PREFIX, so activate the env first</span>
+<span class="cm"># or pass XGB_PREFIX=/path/to/env.</span>
+conda create -n methscope -c conda-forge libxgboost
+conda activate methscope
 git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli
 cd methscope-cli &amp;&amp; make          <span class="cm"># add CUDA=1 for the training backend</span>
 
@@ -430,59 +433,39 @@ methscope <span class="sub">inspect</span> hg38_sex.clfx</code></pre>
         Xa_lo        weight=-13.9125     mean=0.24253
         Xa_hi        weight=13.6301      mean=0.752643</code></pre>
   <figure class="dia">
-<pre><span class="c">hg38_celltype.clfx · 24.5 MB · 62 human cell types</span>
+<pre><span class="c">hg38_celltype.clfx · 13.4 MB · 33 classes at the root</span>
 
-<span class="k">mrmp</span>    fmt2 MRMP definition — the feature set the model was fit on
-<span class="k">kind</span>    framework mark: xgboost | logistic | threshold
-<span class="k">model</span>   the booster / linear spec, labels embedded
-<span class="k">labels</span>  62 cell types (linear models also store per-feature means)</pre>
-<figcaption><b>MSBNDL1</b> — a classifier bundle (<code>.ubjx</code>): one self-describing file
+<span class="k">mrmp</span>    MRMP chain (MRMPIDX1) — the feature sets the nodes were fit on
+<span class="k">kind</span>    framework mark: tree | xgboost | logistic | threshold
+<span class="k">booster chain</span>  one xgboost booster per tree node, labels embedded</pre>
+<figcaption><b>MSBNDL1</b> — a classifier bundle (<code>.clfx</code>): one self-describing file
   with the inner model, its MRMP feature definition, and the labels, so a query
-  <code>.cg</code> runs directly. Three frameworks (<code>xgboost</code> / <code>logistic</code> /
-  <code>threshold</code>) are supported and the <code>kind</code> section records which, so
-  <code>classify</code> needs no flag to know how to run it.</figcaption>
+  <code>.cg</code> runs directly. The <code>kind</code> section records the framework, so
+  <code>classify</code> needs no flag to know how to run it. The shipped human model is a
+  <code>tree</code>: 13 sections, 11 modelled nodes over a 14-set chain, routing 33 classes
+  from the root. A flat single-booster model (<code>xgboost</code>) or a linear one
+  (<code>logistic</code> / <code>threshold</code>, which also stores per-feature means) has the
+  simpler shape — one <code>model</code> section instead of the chain, as in the
+  <code>hg38_sex.clfx</code> listing above.</figcaption>
   </figure>
-</section>
-
-<section class="card">
-  <h2>Train your own classifier <span class="m">— features + labels &rarr; one bundle</span></h2>
-  <p>The 40-cell-type chr20 reference doubles as training data: label each cell by lineage,
-    straight from the sample names.</p>
-  <pre><code><span class="cm"># a scratch dir for the outputs</span>
-mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
-
-yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
-methscope <span class="sub">mrmp-build</span> --flat human_hg38_40_celltypes_chr20.cg chr20.mrmp
-methscope <span class="sub">mrmp-export</span> --top 1000 chr20.mrmp chr20.cm
-cut -f1 human_hg38_40_celltypes_chr20.cg.idx | sed &#x27;s/^GSM[0-9]*_//; s/-Z[0-9A-Z]*$//&#x27; | sed -E &#x27;s/.*Endothel.*|.*Endothelium.*/Endothelial/; s/.*Epithelial.*|.*Keratinocytes.*|.*Podocytes.*/Epithelial/; s/^Blood-.*|.*Macrophages.*/Immune/; s/.*Smooth-Muscle.*|Skeletal-Muscle|.*Cardiomyocyte.*/Muscle/; s/^Neuron$|.*Oligodendrocytes.*/Neural/; s/.*Fibroblasts.*|Adipocytes|Lung-Pleura/Mesenchymal/; s/^(Liver-Hepatocytes|Pancreas-Acinar|Pancreas-Beta)$/Secretory/&#x27; &gt; labels.txt</code></pre>
-  <p>Featurize once, then train from the artifact. The labels ride <em>inside</em> the
-    <code class="inl">.msfm</code>, so a later train cannot be handed a mismatched label
-    file, and the chain travels with it — <code class="inl">classify-train --data</code>
-    therefore takes no positional MRMP.</p>
-  <pre><code>methscope <span class="sub">classify-featurize</span> -l labels.txt -o chr20.msfm \
-  human_hg38_40_celltypes_chr20.cg chr20.mrmp
-methscope <span class="sub">classify-train</span> --data chr20.msfm -o chr20_lineage.clfx
-methscope <span class="sub">classify</span> chr20_lineage.clfx human_hg38_40_celltypes_chr20.cg</code></pre>
-  <p class="note"><b>Shape only — this particular example does not train.</b> The default
-    <code class="inl">xgboost</code> framework needs <code class="inl">--data</code>; the flat
-    single-booster form these commands used to take was removed. What is still missing here is
-    the labels: a node trains over the classes its MRMP declares, which for
-    <code class="inl">chr20.mrmp</code> are the 40 reference samples, so a 7-lineage
-    <code class="inl">labels.txt</code> leaves it with <span class="hl">no training rows for a
-    node's classes</span>. Give a label set that matches the MRMP's own classes, or build the
-    MRMP from a store already labelled the way you intend to train.
-    <code class="inl">--framework logistic | threshold</code> are unfitted and still take the
-    <code class="inl">&lt;query.cg&gt; &lt;ref.cm&gt;</code> positional form.</p>
 </section>
 
 <section class="card">
   <h2>Unbundle / re-wrap <span class="m">— round-trip a bundle by hand</span></h2>
   <p>The same wrapping by hand: unpack a bundle into its parts, then re-wrap
-    (<code class="inl">unbundle</code> writes <code class="inl">chr20_lineage.ubj</code> +
-    <code class="inl">chr20_lineage.mrmp</code>; <code class="inl">-k</code> re-stamps the kind).
-    Any <code class="inl">.clfx</code> works — the shipped models round-trip too.</p>
-  <pre><code>methscope <span class="sub">unbundle</span> chr20_lineage.clfx
-methscope <span class="sub">bundle</span> -m chr20_lineage.mrmp -k tree -o rewrapped.clfx chr20_lineage.ubj</code></pre>
+    (<code class="inl">unbundle</code> writes the inner model +
+    <code class="inl">hg38_sex.mrmp</code>; <code class="inl">-k</code> re-stamps the kind).
+    This round-trips the shipped sex model fetched above, and the result is
+    byte-identical to it. Flat and linear bundles round-trip this way; a
+    <code class="inl">tree</code> bundle carries a booster chain rather than one
+    <code class="inl">model</code> section, so <code class="inl">unbundle</code> does not take it.</p>
+  <pre><code>methscope <span class="sub">unbundle</span> hg38_sex.clfx
+methscope <span class="sub">bundle</span> -m hg38_sex.mrmp -k logistic -o rewrapped.clfx hg38_sex.clf
+cmp hg38_sex.clfx rewrapped.clfx &amp;&amp; echo identical</code></pre>
+  <pre class="res"><code>[methscope] wrote inner model -&gt; hg38_sex.clf
+[methscope] wrote bundled mrmp -&gt; hg38_sex.mrmp
+[methscope] bundled hg38_sex.clf + hg38_sex.mrmp -&gt; rewrapped.clfx
+identical</code></pre>
 </section>
 
 </div>
@@ -619,7 +602,7 @@ reconstructed         <span class="g1">1</span><span class="g0">0</span><span cl
   <p>Zoom to single CpGs over the same block the score used — the same
     <code class="inl">rowsub -I</code> as above. <code class="inl">-c</code> turns colour off,
     which <code class="inl">cut</code> needs since it counts bytes, not columns.</p>
-  <pre><code>cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1621-1680</code></pre>
+  <pre><code>cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_calls.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1621-1680</code></pre>
   <pre class="res term"><code>truth  <span class="hm">111111</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">000000</span><span class="hm">1</span><span class="hu">0000000000000000000000000</span>
 input  <span class="hn">22222222222222222</span><span class="hm">1</span><span class="hn">22222222222222222222222222</span><span class="hu">0</span><span class="hn">222222222222222</span>
 recon  <span class="hm">111111</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">000000</span><span class="hm">1</span><span class="hu">0000000000000000000000000</span></code></pre>
