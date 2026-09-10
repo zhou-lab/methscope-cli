@@ -116,8 +116,14 @@ Both `linux-64` and `osx-arm64` must be present at the new version. Then install
 into a throwaway env and confirm the binary agrees:
 
 ```sh
-conda create -y -n mstest -c zhou-lab -c conda-forge methscope
-conda run -n mstest methscope --version
+conda create -y -n mstest --override-channels -c zhou-lab -c conda-forge methscope
+## Run the env's binary by ABSOLUTE PATH. `conda run -n mstest methscope` is not
+## a valid check here: /mnt/isilon/zhoulab/labbin is ahead of the env on PATH,
+## so it reports whatever labbin currently holds -- which during a release is
+## still the PREVIOUS version, making a correct package look like a failed one.
+## (v0.8 hit exactly this and looked like it had published a 0.7 binary.)
+E=$(conda env list | awk '$1=="mstest"{print $2}')
+"$E/bin/methscope" --version      # must be the version you just tagged
 conda env remove -y -n mstest
 ```
 
