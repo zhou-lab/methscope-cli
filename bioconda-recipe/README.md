@@ -13,7 +13,7 @@ differences are forced by the destination — they are not accidental drift.
 
 |              | `../conda-recipe` (zhou-lab)   | `bioconda-recipe` (bioconda)          |
 | ------------ | ------------------------------ | ------------------------------------- |
-| package name | `methscope-cli`                | `methscope`                           |
+| package name | `methscope`                    | `methscope`                           |
 | source       | `path: ..` (checked-out tree)  | release tarball `url:` + `sha256:`    |
 | built by     | `.github/workflows/conda-build.yml` | bioconda CI on the PR            |
 | platforms    | linux-64, osx-arm64            | linux-64, osx-64                      |
@@ -27,13 +27,14 @@ byte-reproducible so the `sha256:` can be independently verified.
 ## Version skew
 
 `meta.yaml` here pins **0.1.0** because that is the version the open PR was
-reviewed and built against. The repo is now at 0.1.1. Bumping bioconda means:
-cut a `v0.1.1` release asset with `make dist`, upload it, then update `version`
-+ `sha256` in the PR.
+reviewed and built against; the repo has moved well past it. Bumping bioconda
+means: take the release asset the tag's CI already published (it prints the
+sha256), then update `version` + `sha256` in the PR. See
+[`../RELEASE.md`](../RELEASE.md) step 8.
 
 ## Name
 
-The bioconda package is `methscope`, not `methscope-cli`, so that it reads
-naturally next to the R package (installed in R, not conda). Note both packages
-install the same `bin/methscope`, so they will collide if installed into one
-environment — use one channel or the other, not both.
+Both channels publish under the package name `methscope` (the repo is called
+methscope-cli; the conda package is not), so it reads naturally next to the R
+package (installed in R, not conda). Both install the same `bin/methscope`, so
+they collide in one environment — use one channel or the other, not both.
