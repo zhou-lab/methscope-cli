@@ -130,11 +130,19 @@ Not every tag goes to bioconda. When one does, take the sha256 the release job
 printed (or recompute it from the uploaded asset) and update `version` +
 `sha256` in `bioconda-recipe/meta.yaml`, then mirror that change into
 [bioconda-recipes#66997](https://github.com/bioconda/bioconda-recipes/pull/66997).
-Keep `bioconda-recipe/build.sh` byte-identical to `conda-recipe/build.sh`:
+Keep `bioconda-recipe/build.sh` byte-identical to `conda-recipe/build.sh` — and
+remember the PR branch is a **third** copy that drifts on its own. Diff all
+three; the in-repo pair agreeing proves nothing about what the PR will build:
 
 ```sh
 diff conda-recipe/build.sh bioconda-recipe/build.sh
+gh api repos/zwdzwd/bioconda-recipes/contents/recipes/methscope/build.sh?ref=add-methscope \
+  --jq .content | base64 -d | diff - bioconda-recipe/build.sh
 ```
+
+That third diff is not hypothetical: on 20260910 the PR branch was still carrying
+the 20260708 `build.sh`, two months behind the 20260722 rework that every release
+since has actually built with.
 
 ## 9. Log it
 
