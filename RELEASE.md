@@ -40,21 +40,24 @@ Do **not** put a version in either `meta.yaml`. `conda-recipe/meta.yaml` reads
 `METHSCOPE_VERSION`, which CI sets from the tag name; a hardcoded literal once
 survived the `v0.2` tag and CI rebuilt-and-overwrote `0.1.1` instead.
 
-## 3. Clean rebuild — mandatory, not hygiene
-
-methscope's own objects are compiled **without** `-MMD`, so `make` does not know
-that `src/*.o` depend on `src/methscope.h` or on YAME's `yame_version.h`. After
-step 1 or 2 an incremental build relinks happily and the binary still reports the
-*old* versions. Always:
+## 3. Rebuild, and check both version numbers
 
 ```sh
-make clean
 make -j4 XGB_PREFIX=$HOME/conda_envs/methscope
 ./methscope --version          # must show the NEW methscope AND the NEW yame
 ```
 
-That one line is the check — if either half is stale, the tag would ship a
-mislabelled binary.
+That one line is the gate — if either half is stale, the tag would ship a
+mislabelled binary, and nothing downstream catches it: CI takes the package
+version from the tag name, so conda would publish a correctly-named package
+around a binary that lies about itself.
+
+The Makefile compiles with `-MMD -MP`, so `src/*.o` correctly depend on
+`src/methscope.h` and on YAME's `yame_version.h`, and a plain `make` picks up
+both bumps. That was added right after v0.7; up to and including v0.7 it was
+missing, and a version bump relinked a binary still reporting the old numbers —
+which is how v0.7 nearly shipped. On a tree older than that, or whenever you are
+unsure, `make clean` first.
 
 ## 4. Test
 

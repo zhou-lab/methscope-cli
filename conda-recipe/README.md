@@ -54,8 +54,11 @@ Before uploading, the workflow checks that a *built artifact* carries the tag's
 version -- a stronger guard than comparing the tag against a version literal,
 since it verifies what will actually be published rather than what was declared.
 
-`src/methscope.h` has no Makefile dependency, so clear `src/*.o` after bumping
-or the binary keeps reporting the old version.
+The Makefile compiles with `-MMD -MP`, so `src/*.o` track their headers and a
+bump to `src/methscope.h` (or to the YAME submodule) rebuilds what it should.
+That was added right after v0.7; before it, a bump silently relinked a binary
+still reporting the old version — check `methscope --version` either way. The
+full checklist is [`../RELEASE.md`](../RELEASE.md).
 
 ## Notes
 

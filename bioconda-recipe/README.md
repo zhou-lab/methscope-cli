@@ -26,10 +26,11 @@ byte-reproducible so the `sha256:` can be independently verified.
 
 ## Version skew
 
-`meta.yaml` here pins **0.1.0** because that is the version the open PR was
-reviewed and built against; the repo has moved well past it. Bumping bioconda
-means: take the release asset the tag's CI already published (it prints the
-sha256), then update `version` + `sha256` in the PR. See
+`meta.yaml` here is at **0.7**, in sync with the repo. The open PR was originally
+filed at 0.1.0 and sat unreviewed for two months, so it was bumped rather than
+reviewed against a stale version. Bumping again means: take the release asset the
+tag's CI already published (the release job prints the sha256), then update
+`version` + `sha256` both here and on the PR branch. See
 [`../RELEASE.md`](../RELEASE.md) step 8.
 
 ## Name
