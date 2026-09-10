@@ -71,9 +71,23 @@ YAME_DATA_HOME=/mnt/isilon/zhou_lab/projects/20191221_references/YAME \
 ```
 
 The docs harness puts `~/repo/YAME` on `PATH`, so rebuild that checkout too if it
-is behind the tag you just pinned, or the gate tests the wrong yame. Blocks 10
-and 11 (the Train tab) fail by design — chr20 toy data has no training rows for
-the root node. Any other failure blocks the release.
+is behind the tag you just pinned, or the gate tests the wrong yame.
+
+**Every runnable block must pass.** Since v0.8 the page carries no
+fail-by-design block, so the expected result is `25 blocks, 0 failed, 2 skipped`
+— the conda install and the GPU `sbatch` illustration. Any failure blocks the
+release.
+
+**Read the block bodies, not just the tally.** The harness scores a block by its
+*last* command's exit code, so a failure anywhere earlier in a multi-command
+block is invisible. That is exactly how the v0.7 `upscale` regression shipped
+past a green gate: the failing `upscale` was followed by a `yame summary` that
+exits 0 on the empty file `upscale` had just left behind. When a release touches
+a read path, spot-check `logs3/block<NN>.err` for the blocks that exercise it.
+
+**The `SKIP` set is by block index**, so adding or removing a block on the page
+shifts it. Removing the Train tab moved the GPU illustration from 27 to 25;
+unfixed, the harness would have run an `sbatch` on the login node.
 
 ## 5. Commit, tag, push
 
