@@ -9,6 +9,10 @@ order of operations, not a duplicate of those.
 Versions are `vX.Y`. The tag is the single source of truth: CI derives the conda
 package version from it, so nothing else may carry a version literal.
 
+This covers the **binary**. Publishing **models** is a separate procedure with
+its own tag series and its own registry pin — see [`MODELS.md`](MODELS.md). A
+code release does not require a model tag, or the reverse.
+
 ## 1. Bump the YAME submodule
 
 A methscope release pins one YAME release. Check what upstream has, then move
