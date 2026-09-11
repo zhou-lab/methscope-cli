@@ -60,12 +60,19 @@ OBJ += $(CUDA_OBJ)
 DEPFLAGS = -MMD -MP
 DEP = $(SRC:.c=.d)
 
-.PHONY: all clean clean-all dist yame-lib check-xgb check-updec2 force-link
+.PHONY: all clean clean-all dist yame-lib check-xgb check-updec2 test force-link
 
 all: $(PROG)
 
 check-updec2: $(PROG)
 	$(PYTHON) test/check_updec2.py ./$(PROG)
+
+## Command-level tests against the built binary. Self-contained: every test
+## packs its own fixtures with yame from inline text, so this needs no network
+## and no model store. Tests that DO want the shared store skip cleanly when
+## YAME_DATA_HOME is unset.
+test: $(PROG) yame-lib
+	MS=./$(PROG) YAME=$(YAME_DIR)/yame XGB_PREFIX=$(XGB_PREFIX) bash test/run.sh
 
 # Always (incrementally) rebuild libyame.a from the pinned submodule so the
 # static lib can never go stale relative to the checked-out YAME source.
