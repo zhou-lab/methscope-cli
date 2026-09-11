@@ -73,10 +73,9 @@ YAME_DATA_HOME=/mnt/isilon/zhou_lab/projects/20191221_references/YAME \
 The docs harness puts `~/repo/YAME` on `PATH`, so rebuild that checkout too if it
 is behind the tag you just pinned, or the gate tests the wrong yame.
 
-**Every runnable block must pass.** Since v0.8 the page carries no
-fail-by-design block, so the expected result is `25 blocks, 0 failed, 2 skipped`
-— the conda install and the GPU `sbatch` illustration. Any failure blocks the
-release.
+**Every runnable block must pass.** The page carries no fail-by-design block;
+skips are declared in the markup (see 4b), so the tally follows the page. Any
+failure blocks the release.
 
 **Read the block bodies, not just the tally.** The harness scores a block by its
 *last* command's exit code, so a failure anywhere earlier in a multi-command
@@ -85,9 +84,35 @@ past a green gate: the failing `upscale` was followed by a `yame summary` that
 exits 0 on the empty file `upscale` had just left behind. When a release touches
 a read path, spot-check `logs3/block<NN>.err` for the blocks that exercise it.
 
-**The `SKIP` set is by block index**, so adding or removing a block on the page
-shifts it. Removing the Train tab moved the GPU illustration from 27 to 25;
-unfixed, the harness would have run an `sbatch` on the login node.
+**Skips come from the page, not the harness.** They used to be hardcoded block
+indices, which shifted whenever a block was added or removed — removing the Train
+tab left the list pointing at a block that no longer existed while the GPU
+`sbatch` illustration became runnable. They are now `data-norun` attributes in
+the HTML; see 4b.
+
+## 4b. Illustrative blocks must still match the lab record
+
+Blocks the harness does not run carry `data-norun="<reason>"` on their `<pre>`;
+the page styles them distinctly and the harness derives its skip set from that
+attribute, so the two can never disagree about what is runnable. Nothing tests
+their *contents*, which is exactly why they rot — check them by hand:
+
+For each `data-norun` block, open the labjournal driver it cites and compare the
+commands token by token, not by eye. On 20260910 the page's `upscale-train`
+illustration had invented `--mrmp wg.mrmp` and dropped `--patterns 500
+--features scalar` — the two flags that fix the shipped decoder's shape
+(`input_dim 501`) — so a reader following it would have trained something else.
+A card written the same day cited the wrong driver entirely, naming the bank
+pipeline as the source of a model built by the tree pipeline.
+
+```sh
+grep -n 'data-norun' docs/index.html      # every block that needs checking
+```
+
+Each such block must name its driver in the surrounding prose, by repo-relative
+path, so the check has somewhere to start. If a driver changed since the model
+shipped, the page follows the driver that ACTUALLY BUILT the shipped artifact,
+not the current one.
 
 ## 5. Commit, tag, push
 
@@ -126,6 +151,36 @@ E=$(conda env list | awk '$1=="mstest"{print $2}')
 "$E/bin/methscope" --version      # must be the version you just tagged
 conda env remove -y -n mstest
 ```
+
+## 6b. Verify the CUDA package separately — CI will not tell you
+
+`methscope-cuda` is a **second conda package**, linux-64 only, built from
+[`conda-recipe-cuda/`](conda-recipe-cuda/) with `CUDA=1`. It installs its binary
+as `methscope-cuda`, so it coexists with `methscope` rather than replacing it;
+only `upscale-train` needs it, everything else is pure C.
+
+**Its CI step carries `continue-on-error: true`** — deliberately, so an optional
+GPU package can never block the main publish. The consequence is that it can
+fail, or silently not publish, and the release still goes green. Nothing else in
+this document would notice. So check the channel yourself:
+
+```sh
+curl -s https://api.anaconda.org/package/zhou-lab/methscope-cuda |
+  python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["latest_version"])'
+
+conda create -y -n mscuda --override-channels -c zhou-lab -c conda-forge methscope-cuda
+E=$(conda env list | awk '$1=="mscuda"{print $2}')
+"$E/bin/methscope-cuda" --version        # absolute path, per the step 6 note
+conda env remove -y -n mscuda
+```
+
+It must report the version you just tagged. `--version` and `-h` need no GPU, so
+this check runs on any node; only an actual `upscale-train` needs a device.
+
+**For local GPU work, install this package** rather than building from source —
+`make CUDA=1` needs a CUDA toolkit (`module load cuda12.2/toolkit/12.2.2`), an
+isolated worktree so it does not clobber the CPU binary, and it reproduces what
+the recipe already publishes.
 
 ## 7. Refresh the lab binary
 

@@ -99,6 +99,17 @@
   @media print{.tabs{display:none}.panel{display:block!important}}
   .hidden{display:none}
 
+  /* --- a block the reader is NOT meant to run here -----------------------
+     The recorded command, kept verbatim so it matches the lab record that
+     produced the shipped model. data-norun carries the reason and is also what
+     the docs harness reads to decide what to skip, so the page and the gate can
+     never disagree about which blocks are runnable. */
+  pre[data-norun]{border-left:3px solid var(--muted);padding-left:11px;
+     background:color-mix(in srgb,var(--muted) 7%,transparent)}
+  pre[data-norun]::before{content:"not run here — " attr(data-norun);
+     display:block;margin:-2px 0 8px;font-size:.76rem;letter-spacing:.02em;
+     text-transform:uppercase;color:var(--muted)}
+
   /* --- masonry card grid: a short card never leaves a hole --- */
   .grid{column-count:1;column-gap:16px}
   @media(min-width:700px){.grid{column-count:2}}
@@ -233,14 +244,12 @@
 <nav class="tabs" role="tablist" aria-label="Workflows">
   <button class="tab on" type="button" role="tab" id="tab-setup"
     aria-controls="panel-setup" aria-selected="true">Install</button>
-  <button class="tab" type="button" role="tab" id="tab-mrmp" tabindex="-1"
-    aria-controls="panel-mrmp" aria-selected="false">Build MRMP</button>
   <button class="tab" type="button" role="tab" id="tab-classify" tabindex="-1"
     aria-controls="panel-classify" aria-selected="false">Classify</button>
   <button class="tab" type="button" role="tab" id="tab-deconv" tabindex="-1"
     aria-controls="panel-deconv" aria-selected="false">Deconvolve</button>
   <button class="tab" type="button" role="tab" id="tab-upscale" tabindex="-1"
-    aria-controls="panel-upscale" aria-selected="false">Upscale / impute</button>
+    aria-controls="panel-upscale" aria-selected="false">Upscale</button>
 </nav>
 
 <div class="panel" id="panel-setup" role="tabpanel" aria-labelledby="tab-setup">
@@ -251,7 +260,7 @@
   <p>Every model is one self-contained bundle carrying its own MRMP feature definition (and
     labels), so a query <code class="inl">.cg</code> runs directly — no separate annotation
     files.</p>
-  <pre><code><span class="cm"># conda — installs the `methscope` binary</span>
+  <pre data-norun="installs packages, run it yourself"><code><span class="cm"># conda — installs the `methscope` binary</span>
 conda install -c zhou-lab -c conda-forge methscope
 
 <span class="cm"># optional, linux-64 only: adds a `methscope-cuda` binary with the CUDA</span>
@@ -285,10 +294,28 @@ conda install -c zhou-lab -c conda-forge yame</code></pre>
     <code class="inl">libxgboost</code>.</p>
 </section>
 
+<section class="card">
+  <h2>On disk <span class="m">— MRMPIDX1</span></h2>
+  <figure class="dia">
+<pre><span class="c">hg38 · 35 samples · 29,401,795 CpGs · 2,345,190 patterns · 155 MB</span>
+
+<span class="k">header</span>       128 B   reference, sample names, binstring params, checksum
+<span class="k">patterns</span>  16 B × 2,345,190   base-3 key + count, ranked
+             11111111111111111111111111111111111  10,736,116  <span class="c">P1</span>
+             11111111111011111111111111111111111   2,859,193  <span class="c">P2</span>
+             00000000000000000000000000000000000   2,214,235  <span class="c">P3</span>
+<span class="k">membership</span> 4 B × 29,401,795  rank per CpG
+             CpG 0 → 0  <span class="c">P1</span>    CpG 7 → 4294967295  <span class="c">PNA</span></pre>
+<figcaption><b>MRMPIDX1</b> — every candidate ranked, with no top-K baked in, so the top-K cut
+  belongs to the consumer. Ranking is deterministic, so the build is byte-reproducible from the
+  reference alone.</figcaption>
+  </figure>
+</section>
+
 </div>
 </div>
 
-<div class="panel hidden" id="panel-mrmp" role="tabpanel" aria-labelledby="tab-mrmp">
+<div class="panel hidden" id="panel-classify" role="tabpanel" aria-labelledby="tab-classify">
 <div class="grid">
 
 <section class="card">
@@ -367,30 +394,6 @@ root                       40 classes      491 patterns      7,218 CpGs
 </section>
 
 <section class="card">
-  <h2>On disk <span class="m">— MRMPIDX1</span></h2>
-  <figure class="dia">
-<pre><span class="c">hg38 · 35 samples · 29,401,795 CpGs · 2,345,190 patterns · 155 MB</span>
-
-<span class="k">header</span>       128 B   reference, sample names, binstring params, checksum
-<span class="k">patterns</span>  16 B × 2,345,190   base-3 key + count, ranked
-             11111111111111111111111111111111111  10,736,116  <span class="c">P1</span>
-             11111111111011111111111111111111111   2,859,193  <span class="c">P2</span>
-             00000000000000000000000000000000000   2,214,235  <span class="c">P3</span>
-<span class="k">membership</span> 4 B × 29,401,795  rank per CpG
-             CpG 0 → 0  <span class="c">P1</span>    CpG 7 → 4294967295  <span class="c">PNA</span></pre>
-<figcaption><b>MRMPIDX1</b> — every candidate ranked, with no top-K baked in, so the top-K cut
-  belongs to the consumer. Ranking is deterministic, so the build is byte-reproducible from the
-  reference alone.</figcaption>
-  </figure>
-</section>
-
-</div>
-</div>
-
-<div class="panel hidden" id="panel-classify" role="tabpanel" aria-labelledby="tab-classify">
-<div class="grid">
-
-<section class="card">
   <h2>Classify — shipped model <span class="m">— cell type, sex, any label</span></h2>
   <p>Classify a methylome against a bundled classifier. Each step fetches the file it needs with
     <code class="inl">yame fetch -c</code> (digest-checked), so the block runs as-is on a clean
@@ -448,6 +451,33 @@ methscope <span class="sub">inspect</span> hg38_sex.clfx</code></pre>
   simpler shape — one <code>model</code> section instead of the chain, as in the
   <code>hg38_sex.clfx</code> listing above.</figcaption>
   </figure>
+</section>
+
+<section class="card">
+  <h2>Train your own classifier <span class="m">— the recorded pipeline</span></h2>
+  <p>Three steps against a labelled reference store: build the chain, featurize the
+    training pseudobulks, fit the boosters. These are the commands that built the
+    shipped <code class="inl">hg38_celltype.clfx</code>, copied from the driver that
+    ran them (<code class="inl">labjournal/zhouw3/2026/20260815_human_clfx_build.sh</code>)
+    rather than simplified for the page — the flags are load-bearing and a reader who
+    drops them gets a different model. The driver writes
+    <code class="inl">hg38_celltype_tree.clfx</code>; it is renamed when staged.</p>
+  <pre data-norun="the recorded build of hg38_celltype.clfx; needs a labelled reference store"><code>methscope <span class="sub">mrmp-build</span> --qfilter 0.30,0.70 --delta-mean-top 20000 \
+  --min-segregating 20000 --satellite-n 5 --force $M/ref.cg $W/chain.mrmp
+
+methscope <span class="sub">classify-featurize</span> --threads 16 --rank-features replace \
+  --seed 20260810 -b --sample "$LADDER" --reps 1 \
+  -l $M/train.labels -o $W/train.msfm $M/train.cg $W/chain.mrmp
+
+methscope <span class="sub">classify-train</span> --threads 16 --data $W/train.msfm \
+  -o $W/hg38_celltype_tree.clfx</code></pre>
+  <p class="note"><b>Why it is not runnable here.</b> It wants the 33-class donor-pooled
+    reference, not a chr20 fixture. <code class="inl">$LADDER</code> is a 24-rung coverage
+    ladder that draws a different depth per record, which is what stops the model reading
+    sequencing depth as cell identity; <code class="inl">--satellite-n 5</code> appends
+    two-class MRMPs for each class's five nearest neighbours. It trains on the 286
+    training pseudobulks only, not all 552 — folding the held-out set in would buy a
+    little data and cost the only generalisation estimate the model has.</p>
 </section>
 
 <section class="card">
@@ -700,7 +730,10 @@ wrote bare UPDEC2 work//model.updec2 (95924368 bytes), resumed=0</code></pre>
     backend, which is picked automatically when a device answers; checkpoints are interchangeable,
     so you can start on CPU and finish on a GPU node. The chr20 demo is small; a whole-genome
     decoder is memory- and GPU-heavy, so submit it to a GPU node:</p>
-  <pre><code>sbatch -q gpu --gres=gpu:1 --mem=64G -c 8 -t 8:00:00 --wrap 'methscope upscale-train -i wg.msur --units wg.msui --mrmp wg.mrmp -o hg38_wg.updecx --work-dir work/'</code></pre>
+  <pre data-norun="the recorded command that built hg38_wg.updecx"><code>sbatch -q gpu --gres=gpu:1 --mem=64G -c 8 -t 8:00:00 --wrap '\
+  methscope <span class="sub">upscale-train</span> -i $W/loyfer_100r.msur --units $W/units_16k.msui \
+    -o $W/hg38_wg.updecx --work-dir $W/work --split $SPLIT \
+    --patterns 500 --features scalar'</code></pre>
   <p class="note"><code class="inl">--split</code> rows: <code class="inl">&lt;cell_index&gt;TAB&lt;train|val|test&gt;</code>,
     one per source cell; without it, cells are cut 70/15/15 by <code class="inl">--seed</code>.
     <code class="inl">--device cpu</code> forces the portable backend even on a GPU node.</p>
