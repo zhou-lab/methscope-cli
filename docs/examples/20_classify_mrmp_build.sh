@@ -5,4 +5,4 @@ mkdir -p ~/tmp/methscope && cd ~/tmp/methscope
 
 # a 40-cell-type chr20 reference (39.5 MB)
 methscope fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
-methscope mrmp-build human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp
+methscope mrmp-build --flat human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp

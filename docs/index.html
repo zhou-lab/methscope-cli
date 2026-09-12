@@ -356,14 +356,15 @@ cd methscope-cli &amp;&amp; make          <span class="cm"># add CUDA=1 for the 
     <code class="inl">mrmp-build</code> constructs it natively from a discretized reference
     <code class="inl">.cg</code> — no YAME + awk + sort pipeline, ~576&nbsp;MB peak, ~50&nbsp;s
     for a whole-genome reference. The fetchable example below is chr20 only, so it finishes in
-    about a second.</p>
+    about a second. <code class="inl">--flat</code> builds one set over every class, which is
+    what this demo, upscale, export and the violation rule use.</p>
   <!-- example:20_classify_mrmp_build -->
 <pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 <span class="cm"># a 40-cell-type chr20 reference (39.5 MB)</span>
 methscope <a class="sub" href="#ref-fetch">fetch</a> -c hg38/data/human_hg38_40_celltypes_chr20.cg
-methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</code></pre>
+methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --flat human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</code></pre>
 <!-- /example -->
   <pre class="res"><code>root  40 classes | 491 patterns | 7,218 CpGs
   split threshold: 20,000 CpGs -> 1 group(s)
