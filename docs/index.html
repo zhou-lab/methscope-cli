@@ -104,8 +104,10 @@
      produced the shipped model. data-norun carries the reason and is also what
      the docs harness reads to decide what to skip, so the page and the gate can
      never disagree about which blocks are runnable. */
-  pre[data-norun]{border-left:3px solid var(--muted);padding-left:11px;
-     background:color-mix(in srgb,var(--muted) 7%,transparent)}
+  pre[data-norun]{border-left:3px dashed var(--muted);padding-left:11px;
+     background:color-mix(in srgb,var(--muted) 14%,var(--card));color:var(--fg)}
+  pre[data-norun] .cm{color:var(--muted)}
+  pre[data-norun] .sub{color:var(--accent)}
   pre[data-norun]::before{content:"not run here — " attr(data-norun);
      display:block;margin:-2px 0 8px;font-size:.76rem;letter-spacing:.02em;
      text-transform:uppercase;color:var(--muted)}
