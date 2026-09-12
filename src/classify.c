@@ -91,7 +91,7 @@ static int predict_usage(FILE *out) {
   return out == stdout ? 0 : 1;
 }
 
-/* Inference for the linear frameworks (threshold / logistic): featurize the
+/* Inference for the linear framework (logistic): featurize the
  * query against the bundled mrmp, then score each record with the linear model. */
 static int predict_linear(const char *query_cg, const char *ref_mrmp,
                           void *model_buf, size_t model_len,
@@ -788,7 +788,7 @@ int main_predict(int argc, char *argv[]) {
            "train (or stamp one with 'bundle -k')", model_name);
     ref_mrmp = model_name;   /* the bundle's front bytes ARE the mrmp .cm */
 
-    if (strcmp(kind, "threshold") == 0 || strcmp(kind, "logistic") == 0) {
+    if (strcmp(kind, "logistic") == 0) {
       /* linear frameworks: score + return */
       if (data_path)
         pdie("--data is xgboost-only; the linear frameworks featurize their own "
@@ -835,7 +835,7 @@ int main_predict(int argc, char *argv[]) {
            "routing-tree bundle (a single-node tree if nothing splits)",
            model_name);
     pdie("unknown model framework 'kind' "
-         "(expected tree/violation/threshold/logistic)", kind);
+         "(expected tree/violation/logistic)", kind);
   }
   return 1;   /* not reached */
 }

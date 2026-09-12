@@ -169,15 +169,12 @@ static int train_usage(FILE *out) {
     "                   Default: every non-'Pna' state.\n"
     "  --framework <f>  Model framework (default: xgboost):\n"
     "                     xgboost    gradient-boosted trees (multiclass).\n"
-    "                     threshold  interpretable binary linear rule; per-feature\n"
-    "                                weight = class-mean difference, decision at the\n"
-    "                                midpoint of the two class score-centroids.\n"
     "                     logistic   binary L2-regularized logistic regression.\n"
     "                     violation  multiclass, UNFITTED. Calls the class the query\n"
     "                                contradicts least, straight from the MRMP's own\n"
     "                                binstrings. Takes ONE positional, <ref.mrmp>:\n"
     "                                no training data, no -l, nothing to overfit.\n"
-    "                   threshold/logistic are binary-only; all three need a .clfx out.\n"
+    "                   logistic is binary-only; both need a .clfx out.\n"
     "  --call-threshold <t>    violation only: beta cutoff for calling a pattern\n"
     "                   methylated (default 0.5).\n"
     "  --pattern-weight <w>    violation only: sqrt|log1p|linear|flat weighting of each\n"
@@ -215,12 +212,6 @@ static int train_usage(FILE *out) {
     "                   node made the call. An external cohort labelled only\n"
     "                   coarsely can then be scored at the level both sides\n"
     "                   resolve.\n"
-    "  --balance-classes  Weight each row nrow/(K*n_c), so every class contributes\n"
-    "                   the same total weight however many rows it has. Measured\n"
-    "                   NEUTRAL (2026-08-14: one of six arms, none beat the plain\n"
-    "                   400-cells/class baseline) and no shipped model uses it, so\n"
-    "                   expect nothing from it -- it is here to be re-measured,\n"
-    "                   not because it helped.\n"
     "  -h               Show this help message.\n"
     "\n");
   return out == stdout ? 0 : 1;
@@ -244,39 +235,10 @@ typedef struct { int max_depth, min_child; double colsample; } tune_t;
 
 static BoosterHandle train_one(const float *X, const float *y, uint32_t nrow,
                                uint32_t ncol, int K, int nrounds, int nt,
-                               const tune_t *tn, const char *tag, int balance) {
+                               const tune_t *tn, const char *tag) {
   DMatrixHandle dtrain; BoosterHandle b;
   XGCHK(XGDMatrixCreateFromMat(X, nrow, ncol, NAN, &dtrain));
   XGCHK(XGDMatrixSetFloatInfo(dtrain, "label", y, nrow));
-  /* --balance-classes: weight every row by nrow/(K * n_c) so each class
-   * contributes the same total weight to the loss however many rows it has.
-   *
-   * This is the weight-only form of class balancing. The alternative --
-   * repeating a thin class's cells until its row count matches -- was built
-   * and measured, and it made those classes WORSE (mouse fold 0, per-class
-   * recall 0.984 -> 0.934 for the classes it targeted). Repetition adds no
-   * information: the copies are genuinely different coverage draws, verified,
-   * but they are draws of the same few cells, so the booster fits those cells
-   * harder rather than the class. Weighting changes the objective without
-   * duplicating anything, which is the only remaining way to ask the question. */
-  float *w = NULL;
-  if (balance && K > 0) {
-    uint32_t *n_c = calloc((size_t)K, sizeof(uint32_t));
-    if (!n_c) tdie("out of memory", NULL);
-    for (uint32_t r = 0; r < nrow; ++r) {
-      int c = (int)y[r];
-      if (c >= 0 && c < K) ++n_c[c];
-    }
-    w = malloc((size_t)nrow * sizeof(float));
-    if (!w) tdie("out of memory", NULL);
-    for (uint32_t r = 0; r < nrow; ++r) {
-      int c = (int)y[r];
-      w[r] = (c >= 0 && c < K && n_c[c])
-                 ? (float)((double)nrow / ((double)K * (double)n_c[c])) : 1.0f;
-    }
-    XGCHK(XGDMatrixSetFloatInfo(dtrain, "weight", w, nrow));
-    free(n_c);
-  }
   XGCHK(XGBoosterCreate(&dtrain, 1, &b));
   char buf[16];
   snprintf(buf, sizeof buf, "%d", K);
@@ -329,14 +291,13 @@ static char *slurp_file(const char *path, const char *what) {
 int main_train_tree(int argc, char *argv[]) {
   const char *data_path = NULL, *out = NULL, *hier_path = NULL;
   const char *keep_path = NULL;
-  int nrounds = 0, nthread = 0, balance = 0, pool_nodes = 0;
+  int nrounds = 0, nthread = 0, pool_nodes = 0;
   tune_t tn = {0, 0, 0.0};
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "--data") && i + 1 < argc) data_path = argv[++i];
     else if (!strcmp(a, "--pool-nodes")) pool_nodes = 1;
     else if (!strcmp(a, "--keep-columns") && i + 1 < argc) keep_path = argv[++i];
-    else if (!strcmp(a, "--balance-classes")) balance = 1;
     else if (!strcmp(a, "--hierarchy") && i + 1 < argc) hier_path = argv[++i];
     else if (!strcmp(a, "--max-depth") && i + 1 < argc) tn.max_depth = atoi(argv[++i]);
     else if (!strcmp(a, "--min-child-weight") && i + 1 < argc) tn.min_child = atoi(argv[++i]);
@@ -383,10 +344,7 @@ int main_train_tree(int argc, char *argv[]) {
         "  --hierarchy TSV  embed a label taxonomy (label, compartment, lineage,\n"
         "              group, subtype) in EVERY node, so `classify --levels`\n"
         "              can read it back from whichever node made the call\n"
-        "  --balance-classes  weight each row nrow/(K*n_c) so every class\n"
-        "              contributes the same total weight. Measured NEUTRAL on\n"
-        "              2026-08-14 (one of six arms, none beat the plain\n"
-        "              400-cells/class baseline), and no shipped model uses it\n\n"
+        "\n"
         "  Score the result with: methscope classify TREE.clfx query.cg\n");
       return 0;
     }
@@ -561,7 +519,7 @@ int main_train_tree(int argc, char *argv[]) {
     int nrd = nrounds > 0 ? nrounds : (int)(sqrt((double)nr) + 0.5);
     if (nrd < 1) nrd = 1;
     BoosterHandle b = train_one(X, y, nr, ncol, (int)t->n_samples, nrd,
-                                nthread, &tn, ch->name[rk], balance);
+                                nthread, &tn, ch->name[rk]);
     ms_booster_set_meta(b, t->labels, (int)t->n_samples);
     if (hier_buf) ms_booster_set_hier(b, hier_buf);
     if (flags & MSFM_FLAG_BIN_FLAT)     ms_booster_set_binarize(b, "0.5");
@@ -642,7 +600,7 @@ int main_train_tree(int argc, char *argv[]) {
     int nrd = nrounds > 0 ? nrounds : (int)(sqrt((double)nr) + 0.5);
     if (nrd < 1) nrd = 1;
     BoosterHandle b = train_one(X, y, nr, ncol, (int)t->n_samples, nrd,
-                                nthread, &tn, nm[i], balance);
+                                nthread, &tn, nm[i]);
     ms_booster_set_meta(b, t->labels, (int)t->n_samples);
     if (hier_buf) ms_booster_set_hier(b, hier_buf);
     if (flags & MSFM_FLAG_BIN_FLAT)     ms_booster_set_binarize(b, "0.5");
@@ -716,7 +674,7 @@ int main_train(int argc, char *argv[]) {
 
   const char *labels_path = NULL, *out_path = NULL, *framework = "xgboost";
   const char *data_path = NULL, *hier_path = NULL;
-  int npattern = 0, nrounds = 0, include_pna = 0, scalar_cov = 0;
+  int npattern = 0, nrounds = 0;
   int nthread = 0;                    /* 0 = derive; see ms_train_threads() */
   int eval_every = -1;                /* -1 = auto (nrounds/20); 0 = off */
   /* xgboost tree-shape knobs. Default max_depth stays xgboost's 6; the point of
@@ -743,16 +701,10 @@ int main_train(int argc, char *argv[]) {
      * path went away -- without --data it dies below, and with --data every
      * xgboost run goes to the tree, which never parses it. Kept so the error
      * names the flag instead of "unrecognized option". */
-    else if (strcmp(argv[i], "--scalar-coverage") == 0) scalar_cov = 1;
     else if (strcmp(argv[i], "--hierarchy") == 0 && i+1 < argc) hier_path = argv[++i];
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out_path    = argv[++i];
     else if (strcmp(argv[i], "-p") == 0 && i+1 < argc)
       npattern = parse_nonneg_int(argv[++i], "-p expects a non-negative integer");
-    /* Undocumented on purpose, like --scalar-coverage: parsed only so an old
-     * command line is told what happened rather than "unrecognized option". */
-    else if (strcmp(argv[i], "--include-pna") == 0)
-      tdie("--include-pna is gone: featurize no longer emits background "
-           "patterns, so there is nothing to include", NULL);
     else if (strcmp(argv[i], "--framework") == 0 && i+1 < argc) framework = argv[++i];
     else if (strcmp(argv[i], "--max-depth") == 0 && i+1 < argc)
       max_depth = parse_nonneg_int(argv[++i], "--max-depth expects a non-negative integer");
@@ -783,10 +735,10 @@ int main_train(int argc, char *argv[]) {
          "(verified identical to transcribe-then-score, 0 of 1,201 cells)",
          framework);
   int fw_xgb = strcmp(framework, "xgboost") == 0;
-  int fw_lin = (strcmp(framework, "threshold") == 0) || (strcmp(framework, "logistic") == 0);
+  int fw_lin = (strcmp(framework, "logistic") == 0);
   int fw_vio = strcmp(framework, "violation") == 0;
   if (!fw_xgb && !fw_lin && !fw_vio)
-    tdie("unknown --framework (xgboost|violation|threshold|logistic)", framework);
+    tdie("unknown --framework (xgboost|violation|logistic)", framework);
 
   /* ---- violation framework: transcribe, do not train ----
    * The MRMP artifact already states each class's expected methylation at every
@@ -838,11 +790,7 @@ int main_train(int argc, char *argv[]) {
   if (!out_path || argc - i != want_pos) return train_usage(stderr);
   if (!data_path && !labels_path) return train_usage(stderr);
   if (fw_lin && !ms_path_is_bundle_ext(out_path))
-    tdie("threshold/logistic frameworks require a .clfx output (bundled with the MRMP)", out_path);
-  if (scalar_cov && !data_path)
-    tdie("--scalar-coverage needs --data (the artifact carries the covered-CpG total)", NULL);
-  if (scalar_cov && fw_lin)
-    tdie("--scalar-coverage is xgboost-only", framework);
+    tdie("the logistic framework requires a .clfx output (bundled with the MRMP)", out_path);
   const char *query_cg = data_path ? NULL : argv[i];
   char *tmp_mrmp = NULL;
   /* Keep the ARTIFACT path as given. ms_mrmp_resolve() materialises a runtime
@@ -888,7 +836,7 @@ int main_train(int argc, char *argv[]) {
   if (!feat_idx) tdie("out of memory", NULL);
   int n_feat = 0;
   for (int c = 0; c < m->n_patterns; ++c)
-    if (include_pna || !ms_is_pna_name(m->pattern_names[c]))
+    if (!ms_is_pna_name(m->pattern_names[c]))
       feat_idx[n_feat++] = c;
   /* -p N keeps the first N of that selection, so it can no longer truncate a
    * satellite by landing mid-set the way a positional cut did. */
@@ -931,7 +879,7 @@ int main_train(int argc, char *argv[]) {
   if (K < 2) tdie("need at least two classes", NULL);
 
   if (fw_lin && K != 2)
-    tdie("threshold/logistic frameworks are binary (need exactly 2 classes)", NULL);
+    tdie("the logistic framework is binary (needs exactly 2 classes)", NULL);
 
   /* per-record class index (0..K-1) = position in the sorted unique set */
   int *yidx = malloc((size_t)m->n_cells * sizeof(int));
@@ -954,7 +902,7 @@ int main_train(int argc, char *argv[]) {
   int trimmed = 0;
 
   if (fw_lin) {
-    /* ---- linear framework (threshold / logistic): interpretable binary rule ---- */
+    /* ---- linear framework (logistic): interpretable binary rule ---- */
     linmodel_t *lm = ms_linmodel_fit(m, npattern, yidx, uniq[0], uniq[1], framework);
     char tmpl[4096];
     const char *td = getenv("TMPDIR");
@@ -976,19 +924,14 @@ int main_train(int argc, char *argv[]) {
     float *ylab = malloc((size_t)m->n_cells * sizeof(float));
     if (!ylab) tdie("out of memory", NULL);
     for (int r = 0; r < m->n_cells; ++r) ylab[r] = (float)yidx[r];
-    /* One extra column when --scalar-coverage: log1p(covered CpGs), appended
-     * after the patterns. Trees are scale-invariant, so unlike UPDEC2 this
-     * needs no mean/scale standardization -- but `classify` must build the
-     * column the same way, which is what the booster attribute below records. */
     bst_ulong nrow = (bst_ulong)m->n_cells;
-    bst_ulong ncol = (bst_ulong)npattern + (scalar_cov ? 1 : 0);
+    bst_ulong ncol = (bst_ulong)npattern;
     float *data = malloc((size_t)nrow * ncol * sizeof(float));
     if (!data) tdie("out of memory", NULL);
     for (int r = 0; r < m->n_cells; ++r) {
       const double *src = m->M + (size_t)r * m->n_patterns;
       float        *dst = data + (size_t)r * ncol;
       for (int c = 0; c < npattern; ++c) dst[c] = (float)src[c];
-      if (scalar_cov) dst[npattern] = (float)log1p((double)levels[r]);
     }
     const int nrounds_auto = (nrounds <= 0);
     if (nrounds <= 0) nrounds = (int)(sqrt((double)m->n_cells) + 0.5);
@@ -1103,7 +1046,6 @@ int main_train(int argc, char *argv[]) {
       ms_booster_set_features(booster, fn, npattern);
       free(fn);
     }
-    if (scalar_cov) ms_booster_set_scalar_cov(booster);
     if (hier_path) {                    /* travel with the model, not beside it */
       char *buf = slurp_file(hier_path, "cannot open --hierarchy");
       ms_booster_set_hier(booster, buf);

@@ -5,7 +5,7 @@
  * offset + size + a short description of its contents), and a breakdown of the
  * `model` section by framework:
  *   xgboost            -> num_feature + embedded labels
- *   threshold/logistic -> method, labels, bias, scale, per-feature weight/mean
+ *   logistic -> method, labels, bias, scale, per-feature weight/mean
  *   upscale (UPDEC1)   -> n_in / n_hidden / n_out from the decoder header
  */
 #include <stdio.h>

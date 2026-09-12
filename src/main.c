@@ -113,28 +113,9 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "upscale-featurize") == 0) return main_upscale_prepare(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-set-units") == 0) return main_upscale_set_units(argc - 1, argv + 1);
   if (strcmp(argv[1], "_upscale") == 0) return main_upscale_internal(argc - 1, argv + 1);
-  if (strcmp(argv[1], "upscale-factor-train") == 0 ||
-      strcmp(argv[1], "upscale-residual-train") == 0) {
-    fprintf(stderr, "[methscope] '%s' is retired; use the unified 'upscale-train'\n", argv[1]);
-    return 1;
-  }
-  if (strcmp(argv[1], "upscale-prepare") == 0) {
-    fprintf(stderr, "[methscope] 'upscale-prepare' was renamed to 'upscale-featurize'\n");
-    return 1;
-  }
-  if (strcmp(argv[1], "upscale-residual-index") == 0) {
-    fprintf(stderr, "[methscope] 'upscale-residual-index' was renamed to 'upscale-set-units'\n");
-    return 1;
-  }
-  if (strcmp(argv[1], "upscale-hybrid-eval") == 0) {
-    fprintf(stderr, "[methscope] 'upscale-hybrid-eval' was removed (deprecated hybrid model)\n");
-    return 1;
-  }
   if (strcmp(argv[1], "mrmp-build")   == 0) return main_mrmp_build(argc - 1, argv + 1);
-  if (strcmp(argv[1], "mrmp-tree")    == 0) return main_mrmp_build(argc - 1, argv + 1);  /* old name */
   if (strcmp(argv[1], "mrmp-export")  == 0) return main_mrmp_export(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-pool")    == 0) return main_mrmp_pool(argc - 1, argv + 1);
-  if (strcmp(argv[1], "classify-train-tree") == 0) return main_train_tree(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-train")      == 0) return main_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "inspect")    == 0) return main_inspect(argc - 1, argv + 1);
   if (strcmp(argv[1], "bundle")     == 0) return main_bundle(argc - 1, argv + 1);

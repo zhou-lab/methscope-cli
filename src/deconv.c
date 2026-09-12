@@ -1730,7 +1730,7 @@ int main_deconv(int argc, char *argv[]) {
       rescue_lo = v; rescue_hi = strtod(end + 1, NULL);
     }
     else if (!strcmp(a, "--global-ref")) global_ref = 1;
-    else if ((!strcmp(a, "--nthreads") || !strcmp(a, "--threads")) && i + 1 < argc)
+    else if (!strcmp(a, "--threads") && i + 1 < argc)
       nthreads = atoi(argv[++i]);
     else if (!strcmp(a, "--max-round") && i + 1 < argc)
       max_round = (uint32_t)strtoul(argv[++i], NULL, 10);
@@ -1740,7 +1740,7 @@ int main_deconv(int argc, char *argv[]) {
     else if (!strcmp(a, "--force-scope") && i + 1 < argc) force_scope = argv[++i];
     else if (!strcmp(a, "--eval-x") && i + 1 < argc) eval_x = argv[++i];
     else if (!strcmp(a, "--design-out") && i + 1 < argc) design_out = argv[++i];
-    else if (!strcmp(a, "-v") || !strcmp(a, "--verbose")) verbose = 1;
+    else if (!strcmp(a, "-v")) verbose = 1;
     else if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       ms_help(stdout,
 "Usage:\n"
@@ -1782,7 +1782,7 @@ int main_deconv(int argc, char *argv[]) {
 "                          Display only: it never changes what is fitted. 0\n"
 "                          shows every non-zero class.\n"
 "  --threads N             Deconvolve N records in parallel. Default: 1.\n"
-"                          --nthreads is an alias. The reference is shared, so\n"
+"                          The reference is shared, so\n"
 "                          memory grows by the per-thread workspace (~16 MB),\n"
 "                          not linearly. Needs a <query.cg>.idx to seek by; -v\n"
 "                          and the dump options force a single thread.\n"
@@ -1791,7 +1791,6 @@ int main_deconv(int argc, char *argv[]) {
 "  --max-round N           Cap on rebuild rounds. Default: 8. Rounds stop early\n"
 "                          once the class set stops changing.\n"
 "  -v                      Report per-record panel size and measured-row count.\n"
-"                          --verbose is an alias.\n"
 "  -h                      Show this help message.\n"
 "\n"
 "Tuning:\n"

@@ -14,7 +14,7 @@
 #include "methscope.h"
 #include "msfm.h"
 #include "mrmp.h"
-#include "methscope.h"    /* ms_annotate_booster (for bundle -l) */
+#include "methscope.h"
 #include "index.h"        /* get_fname_index -- the resolve temp has a sibling .idx */
 
 #define NAMELEN 16
@@ -281,11 +281,9 @@ static int bundle_usage(FILE *out) {
     "\n"
     "Options:\n"
     "  -m <ref.mrmp>   the MRMP definition (a YAME .cm) to bundle (required).\n"
-    "  -k <kind>       framework mark to record (xgboost/violation/threshold/logistic);\n"
+    "  -k <kind>       framework mark to record (xgboost/violation/logistic);\n"
     "                  required for a classifier .clfx that `classify` will run (it\n"
     "                  rejects an unmarked bundle). Also re-stamps an existing model.\n"
-    "  -l <meta.tsv>   embed class labels (a 'labels<TAB>l1,l2,...' line) into the\n"
-    "                  booster before bundling — for a raw (e.g. R-exported) .ubj.\n"
     "  -O <outcpg.cm>  output-CpG locations (upscale only): a YAME mask marking the\n"
     "                  CpGs the model imputes. With it, `upscale` writes a full-genome\n"
     "                  .cg; without it, a dense block .cg.\n"
@@ -428,14 +426,13 @@ int ms_path_is_bundle_ext(const char *path) {
 }
 
 int main_bundle(int argc, char *argv[]) {
-  const char *mrmp = NULL, *out = NULL, *outcpg = NULL, *kind = NULL, *meta = NULL;
+  const char *mrmp = NULL, *out = NULL, *outcpg = NULL, *kind = NULL;
   int tree = 0, n_inner = 0;
   char **inner_list = NULL;
   int i = 1;
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-m") == 0 && i+1 < argc) mrmp   = argv[++i];
     else if (strcmp(argv[i], "-k") == 0 && i+1 < argc) kind   = argv[++i];
-    else if (strcmp(argv[i], "-l") == 0 && i+1 < argc) meta   = argv[++i];
     else if (strcmp(argv[i], "-O") == 0 && i+1 < argc) outcpg = argv[++i];
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out    = argv[++i];
     else if (strcmp(argv[i], "--tree") == 0) tree = 1;
@@ -453,21 +450,9 @@ int main_bundle(int argc, char *argv[]) {
 
   /* -l: embed labels into the (raw) booster first, then bundle the annotated copy. */
   const char *inner = model;
-  if (tree && (meta || outcpg || kind))
+  if (tree && (outcpg || kind))
     bdie("--tree takes only -m and -o; the kind mark is 'tree' and per-node "
          "labels already travel inside each booster", out);
-  char *tmp_ubj = NULL;
-  if (meta) {
-    char tmpl[4096];
-    const char *td = getenv("TMPDIR");
-    snprintf(tmpl, sizeof tmpl, "%s/methscope_ann_XXXXXX.ubj",
-             td && *td ? td : "/tmp");
-    int fd = mkstemps(tmpl, 4);          /* keep the .ubj suffix for XGBoost */
-    if (fd < 0) bdie("cannot create temp booster file", NULL);
-    close(fd);
-    ms_annotate_booster(model, meta, tmpl);
-    tmp_ubj = strdup(tmpl); inner = tmp_ubj;
-  }
 
   if (tree) {
     /* Match each per-node .clfx to a chain block BY NAME rather than by
@@ -507,7 +492,6 @@ int main_bundle(int argc, char *argv[]) {
     return 0;
   }
   ms_bundle_pack(out, kind, inner, mrmp, outcpg);   /* kind mark (NULL = omit) */
-  if (tmp_ubj) { unlink(tmp_ubj); free(tmp_ubj); }
   if (outcpg)
     fprintf(stderr, "[methscope] bundled %s + %s + %s -> %s\n", model, mrmp, outcpg, out);
   else

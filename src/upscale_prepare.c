@@ -310,9 +310,6 @@ static int usage(FILE *out) {
     "                   A=1 is plain log-uniform\n"
     "  --binarize       one read per observed CpG: replace each sampled beta with a\n"
     "                   Bernoulli(beta) draw, as `yame dsample -b` does\n"
-    "  --in-memory      accepted and ignored. The truth store is always inflated\n"
-    "                   once and reused for every replicate; there is no longer\n"
-    "                   a streaming path for it to select.\n"
     "  --threads N      inflate and scan N samples at once (default 1). Needs a\n"
     "                   <store>.idx, since each worker opens its own handle and\n"
     "                   seeks to its sample. Output is byte-identical at any N.\n"
@@ -345,7 +342,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
   uint32_t levels[MSUR_MAX_LEVELS] = {29000}, n_levels = 1, max_sample = 29000;
   uint32_t log_min = 0, log_max = 0;   /* --sample-logrange */
   double log_skew = 0.5;               /* <1 leans dense; 1 = plain log-uniform */
-  int in_memory = 0, binarize = 0;
+  int binarize = 0;
   int embed_truth = 1;   /* always embed truth -- upscale-train requires it */
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
@@ -389,7 +386,6 @@ int main_upscale_prepare(int argc, char *argv[]) {
     else if (!strcmp(argv[i], "--binarize")) binarize = 1;
     else if (!strcmp(argv[i], "--threads") && i + 1 < argc)
       nthreads = (uint32_t)parse_u64(argv[++i], "--threads");
-    else if (!strcmp(argv[i], "--in-memory")) in_memory = 1;
     else if (argv[i][0] == '-') { usage(stderr); pdie("unrecognized or incomplete option", argv[i]); }
     else if (npos < 3) pos[npos++] = argv[i];
     else pdie("too many arguments", argv[i]);
@@ -399,14 +395,9 @@ int main_upscale_prepare(int argc, char *argv[]) {
     pdie("need TRUTH.cg, IN.mrmp, and OUT.msur", NULL);
   }
   if (!reps || (!log_min && !n_levels)) return usage(stderr);
-  /* Inflating the truth store is no longer optional. rep_worker reads every
-   * cell out of the in-memory table, and the streaming path it used to fall
-   * back to is gone -- so leaving the table NULL segfaulted on the first
-   * cell. The guard that caught this only fired for --threads > 1, which is
-   * how the plain documented invocation still crashed. Rather than refuse
-   * the common case, always inflate; --in-memory stays accepted so existing
-   * scripts keep working, but it no longer selects anything. */
-  (void)in_memory;
+  /* The truth store is always inflated once and reused for every replicate;
+   * the streaming path (and the --in-memory switch that selected between
+   * them) is gone. */
   if ((uint64_t)reps * n_levels > UINT32_MAX) pdie("too many replicates", NULL);
 
   /* Per-replicate sample sizes.  Either the small fixed ladder (--sample, reps

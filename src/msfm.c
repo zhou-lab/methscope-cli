@@ -699,8 +699,6 @@ static int usage(FILE *out) {
     "                 with the same value the model was trained with.\n"
     "  --threads T    Worker threads (default 1). Cells are partitioned across\n"
     "                 workers, each seeking its own records via the .cg index.\n"
-    "  --legacy-summarize  Use the old genome-scan featurizer (single-threaded, no\n"
-    "                 --sample). Kept for A/B checks; output is bit-identical.\n"
     "  --counts <N>   Require N measured CpGs behind a pattern's beta; below that\n"
     "                 the beta is recorded MISSING rather than kept. A beta from a\n"
     "                 single CpG can only be 0 or 1, so after the 0.5 call it is\n"
@@ -834,7 +832,7 @@ int main_classify_featurize(int argc, char *argv[]) {
   uint32_t reps = 1, patterns = 0;
   uint64_t seed = 1;
   unsigned threads = 1;
-  int binarize = 0, legacy = 0;
+  int binarize = 0;
   /* 1 = cut at 0.5 (default), 2 = per-pattern midpoints, 0 = leave continuous */
   int binarize_feat = 1;
   int contrast = 0;                 /* 0 off, 1 alongside, 2 replacing */
@@ -871,7 +869,6 @@ int main_classify_featurize(int argc, char *argv[]) {
       else if (!strcmp(v, "replace")) contrast = 2;
       else fdie("--satellite-contrast wants off|add|replace", v);
     }
-    else if (!strcmp(argv[i], "--legacy-summarize")) legacy = 1;
     else if (!strcmp(argv[i], "--merge")) merge = 1;
     else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { return usage(stdout); }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-")) fdie("unrecognized option", argv[i]);
@@ -897,18 +894,18 @@ int main_classify_featurize(int argc, char *argv[]) {
    * amortize an inflate across replicates or use more than one core. It needs
    * the .cg index to seek per record, so a query without one falls back --
    * loudly, because silently taking a 20x slower path is how the fast path ends
-   * up never running. --legacy-summarize forces the old path for A/B checks. */
+   * up never running. */
   char *fidx = get_fname_index((char *)query);
   int have_idx = fidx && access(fidx, R_OK) == 0;
   free(fidx);
   if (sample_spec && !have_idx)
     fdie("--sample needs a .cg.idx to seek per record; run `yame index` first", query);
-  if (!legacy && !have_idx)
+  if (!have_idx)
     fprintf(stderr, "[methscope] classify-featurize: no .cg.idx for %s -- falling "
             "back to the single-threaded scan (run `yame index` to enable the "
             "fast path)\n", query);
 
-  if (!legacy && have_idx) {
+  if (have_idx) {
     uint32_t n_reps = 1;
     uint32_t *rep_sample;
     if (sample_spec) {

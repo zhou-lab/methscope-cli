@@ -1528,15 +1528,12 @@ Options:
                    Default: every non-'Pna' state.
   --framework &lt;f&gt;  Model framework (default: xgboost):
                      xgboost    gradient-boosted trees (multiclass).
-                     threshold  interpretable binary linear rule; per-feature
-                                weight = class-mean difference, decision at the
-                                midpoint of the two class score-centroids.
                      logistic   binary L2-regularized logistic regression.
                      violation  multiclass, UNFITTED. Calls the class the query
                                 contradicts least, straight from the MRMP's own
                                 binstrings. Takes ONE positional, &lt;ref.mrmp&gt;:
                                 no training data, no -l, nothing to overfit.
-                   threshold/logistic are binary-only; all three need a .clfx out.
+                   logistic is binary-only; both need a .clfx out.
   --call-threshold &lt;t&gt;    violation only: beta cutoff for calling a pattern
                    methylated (default 0.5).
   --pattern-weight &lt;w&gt;    violation only: sqrt|log1p|linear|flat weighting of each
@@ -1574,12 +1571,6 @@ Options:
                    node made the call. An external cohort labelled only
                    coarsely can then be scored at the level both sides
                    resolve.
-  --balance-classes  Weight each row nrow/(K*n_c), so every class contributes
-                   the same total weight however many rows it has. Measured
-                   NEUTRAL (2026-08-14: one of six arms, none beat the plain
-                   400-cells/class baseline) and no shipped model uses it, so
-                   expect nothing from it -- it is here to be re-measured,
-                   not because it helped.
   -h               Show this help message.</code></pre>
   </details>
   <details class="ref" id="ref-classify-featurize">
@@ -1672,8 +1663,6 @@ Options:
                  with the same value the model was trained with.
   --threads T    Worker threads (default 1). Cells are partitioned across
                  workers, each seeking its own records via the .cg index.
-  --legacy-summarize  Use the old genome-scan featurizer (single-threaded, no
-                 --sample). Kept for A/B checks; output is bit-identical.
   --counts &lt;N&gt;   Require N measured CpGs behind a pattern's beta; below that
                  the beta is recorded MISSING rather than kept. A beta from a
                  single CpG can only be 0 or 1, so after the 0.5 call it is
@@ -1769,7 +1758,7 @@ Options:
                           Display only: it never changes what is fitted. 0
                           shows every non-zero class.
   --threads N             Deconvolve N records in parallel. Default: 1.
-                          --nthreads is an alias. The reference is shared, so
+                          The reference is shared, so
                           memory grows by the per-thread workspace (~16 MB),
                           not linearly. Needs a &lt;query.cg&gt;.idx to seek by; -v
                           and the dump options force a single thread.
@@ -1778,7 +1767,6 @@ Options:
   --max-round N           Cap on rebuild rounds. Default: 8. Rounds stop early
                           once the class set stops changing.
   -v                      Report per-record panel size and measured-row count.
-                          --verbose is an alias.
   -h                      Show this help message.
 
 Tuning:
@@ -1917,9 +1905,6 @@ Options:
                    A=1 is plain log-uniform
   --binarize       one read per observed CpG: replace each sampled beta with a
                    Bernoulli(beta) draw, as `yame dsample -b` does
-  --in-memory      accepted and ignored. The truth store is always inflated
-                   once and reused for every replicate; there is no longer
-                   a streaming path for it to select.
   --threads N      inflate and scan N samples at once (default 1). Needs a
                    &lt;store&gt;.idx, since each worker opens its own handle and
                    seeks to its sample. Output is byte-identical at any N.
@@ -1956,14 +1941,13 @@ right for a classifier and fatal here: those CpGs are 54% of the genome
 and they still need reconstructing. Reading the store keeps them, so
 every CpG has a real membership and coverage is 100% by construction.
 
-  REF.cg                reference store (`--store REF.cg` also accepted)
+  REF.cg                reference store
   OUT.msui              output MSUIDX1 index
 
   --mincov N            min per-class coverage (default 1)
   --beta-threshold B    call a class methylated above B (default 0.5).
                         Must match mrmp-build's.
   --unit-cpgs N         target CpGs per unit (default 16384)
-  --bin-cpgs N          deprecated alias for --unit-cpgs
   -h, --help            show this help</code></pre>
   </details>
   <details class="ref" id="ref-upscale-train">
@@ -2042,11 +2026,9 @@ Purpose:
 
 Options:
   -m &lt;ref.mrmp&gt;   the MRMP definition (a YAME .cm) to bundle (required).
-  -k &lt;kind&gt;       framework mark to record (xgboost/violation/threshold/logistic);
+  -k &lt;kind&gt;       framework mark to record (xgboost/violation/logistic);
                   required for a classifier .clfx that `classify` will run (it
                   rejects an unmarked bundle). Also re-stamps an existing model.
-  -l &lt;meta.tsv&gt;   embed class labels (a 'labels&lt;TAB&gt;l1,l2,...' line) into the
-                  booster before bundling — for a raw (e.g. R-exported) .ubj.
   -O &lt;outcpg.cm&gt;  output-CpG locations (upscale only): a YAME mask marking the
                   CpGs the model imputes. With it, `upscale` writes a full-genome
                   .cg; without it, a dense block .cg.

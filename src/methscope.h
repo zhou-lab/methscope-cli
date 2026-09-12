@@ -170,7 +170,6 @@ int main_train_tree(int argc, char *argv[]);
 int main_deconv_build_ref(int argc, char *argv[]);
 int main_deconv(int argc, char *argv[]);
 /* Embed labels from a meta.tsv into a raw booster (used by `bundle -l`). */
-void ms_annotate_booster(const char *in_ubj, const char *meta_tsv, const char *out_ubj);
 int main_upscale(int argc, char *argv[]);
 int main_upscale_train(int argc, char *argv[]);
 int main_upscale_internal(int argc, char *argv[]);

@@ -4,9 +4,6 @@
  * alternative to the XGBoost booster. Two fit methods share ONE spec + inference
  * (only the weights/bias/scale differ), and the model's `kind` mark records which:
  *
- *   "threshold" — mean-difference direction (w_i = mean1_i - mean0_i) with the
- *                 decision boundary at the MIDPOINT of the two class score
- *                 centroids (robust when the classes are well separated, e.g. sex).
  *   "logistic"  — L2-regularized logistic regression (gradient descent).
  *
  * Inference: s = bias + sum_i w_i * (beta_i or mean_i if NaN);
@@ -16,7 +13,7 @@
  *
  * On-disk spec (the bundle's `model` section):
  *   methscope-linear <TAB> 1
- *   method  <TAB> threshold|logistic
+ *   method  <TAB> logistic
  *   labels  <TAB> <class0> <TAB> <class1>
  *   bias    <TAB> <b>
  *   scale   <TAB> <s>
@@ -64,38 +61,6 @@ static void feature_means(const ms_matrix_t *m, int n_feat, double *mean) {
     }
     mean[j] = cnt ? sum / cnt : 0.0;
   }
-}
-
-/* --------------------------- threshold fit --------------------------- */
-static void fit_threshold(const ms_matrix_t *m, int n_feat, const int *y01,
-                          linmodel_t *lm) {
-  /* class means per feature (NaN-ignored) -> weights = mean1 - mean0 */
-  for (int j = 0; j < n_feat; ++j) {
-    double s0 = 0, s1 = 0; int c0 = 0, c1 = 0;
-    for (int r = 0; r < m->n_cells; ++r) {
-      double v = m->M[(size_t)r * m->n_patterns + j];
-      if (isnan(v)) continue;
-      if (y01[r]) { s1 += v; c1++; } else { s0 += v; c0++; }
-    }
-    double mu0 = c0 ? s0 / c0 : lm->mean[j];
-    double mu1 = c1 ? s1 / c1 : lm->mean[j];
-    lm->w[j] = mu1 - mu0;
-  }
-  /* project training records -> score centroids (impute NaN with mean) */
-  double C0 = 0, C1 = 0; int n0 = 0, n1 = 0;
-  for (int r = 0; r < m->n_cells; ++r) {
-    double s = 0;
-    for (int j = 0; j < n_feat; ++j) {
-      double v = m->M[(size_t)r * m->n_patterns + j];
-      s += lm->w[j] * (isnan(v) ? lm->mean[j] : v);
-    }
-    if (y01[r]) { C1 += s; n1++; } else { C0 += s; n0++; }
-  }
-  C0 = n0 ? C0 / n0 : 0; C1 = n1 ? C1 / n1 : 0;   /* C1 >= C0 by construction */
-  double cutoff = 0.5 * (C0 + C1);
-  double half   = 0.5 * (C1 - C0);
-  lm->bias  = -cutoff;
-  lm->scale = (half > 1e-9) ? half : 1.0;         /* logit=1 at a centroid */
 }
 
 /* --------------------------- logistic fit ---------------------------- */
@@ -167,8 +132,7 @@ linmodel_t *ms_linmodel_fit(const ms_matrix_t *m, int n_feat, const int *y01,
   lm->label1 = strdup(label1);
   for (int j = 0; j < n_feat; ++j) lm->names[j] = strdup(m->pattern_names[j]);
   feature_means(m, n_feat, lm->mean);
-  if      (strcmp(method, "threshold") == 0) fit_threshold(m, n_feat, y01, lm);
-  else if (strcmp(method, "logistic")  == 0) fit_logistic(m, n_feat, y01, lm);
+  if (strcmp(method, "logistic") == 0) fit_logistic(m, n_feat, y01, lm);
   else ldie("unknown linear method", method);
   return lm;
 }

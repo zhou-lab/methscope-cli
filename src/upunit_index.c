@@ -224,13 +224,12 @@ static int usage(FILE *out) {
     "right for a classifier and fatal here: those CpGs are 54% of the genome\n"
     "and they still need reconstructing. Reading the store keeps them, so\n"
     "every CpG has a real membership and coverage is 100% by construction.\n\n"
-    "  REF.cg                reference store (`--store REF.cg` also accepted)\n"
+    "  REF.cg                reference store\n"
     "  OUT.msui              output MSUIDX1 index\n\n"
     "  --mincov N            min per-class coverage (default 1)\n"
     "  --beta-threshold B    call a class methylated above B (default 0.5).\n"
     "                        Must match mrmp-build's.\n"
     "  --unit-cpgs N         target CpGs per unit (default 16384)\n"
-    "  --bin-cpgs N          deprecated alias for --unit-cpgs\n"
     "  -h, --help            show this help\n");
   return out == stdout ? 0 : 1;
 }
@@ -244,8 +243,6 @@ int main_upscale_set_units(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
       return usage(stdout);
-    } else if (!strcmp(argv[i], "--store") && i + 1 < argc) {
-      store_path = argv[++i];
     } else if (!strcmp(argv[i], "--mincov") && i + 1 < argc) {
       const char *e; uint64_t x = parse_u64(argv[++i], &e, "--mincov");
       if (*e || !x || x > UINT32_MAX) fail("invalid --mincov");
@@ -253,13 +250,10 @@ int main_upscale_set_units(int argc, char **argv) {
     } else if (!strcmp(argv[i], "--beta-threshold") && i + 1 < argc) {
       beta_thr = (float)atof(argv[++i]);
       if (!(beta_thr > 0.0f && beta_thr < 1.0f)) fail("--beta-threshold must be in (0,1)");
-    } else if ((!strcmp(argv[i], "--unit-cpgs") || !strcmp(argv[i], "--bin-cpgs"))
-               && i + 1 < argc) {
+    } else if (!strcmp(argv[i], "--unit-cpgs") && i + 1 < argc) {
       const char *e; uint64_t x = parse_u64(argv[++i], &e, "--unit-cpgs");
       if (*e || !x || x > UINT32_MAX) fail("invalid --unit-cpgs");
       target = (uint32_t)x;
-    } else if (!strcmp(argv[i], "--top-patterns") && i + 1 < argc) {
-      ++i; /* accepted temporarily so old scripts fail only on changed output semantics */
     } else if (argv[i][0] == '-') {
       usage(stderr);
       fprintf(stderr, "[methscope] upscale-set-units: bad option: %s\n", argv[i]);
@@ -270,12 +264,7 @@ int main_upscale_set_units(int argc, char **argv) {
       fail_path("too many arguments", argv[i]);
     }
   }
-  /* REF.cg may be given positionally or as --store, the spelling the recipes
-   * in the lab journal already use. Either way it is the only input. */
-  if (store_path) {
-    if (npos != 1) { usage(stderr); fail("--store takes only OUT.msui"); }
-    out_path = pos[0];
-  } else {
+  {
     if (npos != 2) { usage(stderr); fail("need REF.cg and OUT.msui"); }
     /* Recipes predating 2026-08-22 passed a built .mrmp here. That mode is
      * gone -- see the header comment -- and the generic "no .idx" error it

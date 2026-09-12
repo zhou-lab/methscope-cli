@@ -16,15 +16,8 @@
 
 #define MS_ATTR_LABELS "methscope_labels"   /* comma-separated, class-index order */
 
-/* Set when the model carries ONE extra feature after the pattern columns:
- * log1p(covered CpGs) for the record. `classify` has to append the same column
- * or every prediction silently shifts by a feature, so this lives in the model
- * rather than relying on the caller to remember. Value is the transform name. */
-#define MS_ATTR_SCALARCOV "methscope_scalar_cov"
-
 /* The feature columns the booster was trained on, newline-separated, in model
- * column order (the --scalar-coverage column, if any, is NOT listed -- it is
- * appended after these and marked by MS_ATTR_SCALARCOV).
+ * column order.
  *
  * Needed because a fused multi-set .msfm is laid out SET-MAJOR: each set's Pna
  * background sits immediately after that set's own patterns, so the background
@@ -74,10 +67,6 @@ char **ms_booster_get_features(BoosterHandle b, int *n_feat);
  * a malloc'd string or NULL when the attribute is absent. */
 void  ms_booster_set_binarize(BoosterHandle b, const char *how);
 char *ms_booster_get_binarize(BoosterHandle b);
-
-/* Mark / test the scalar coverage feature (see MS_ATTR_SCALARCOV). */
-void ms_booster_set_scalar_cov(BoosterHandle b);
-int  ms_booster_has_scalar_cov(BoosterHandle b);
 
 /* Marks a booster trained over the POOLED columns of EVERY set in its chain
  * (classify-train --pool-nodes): one model, no routing -- the tree's nodes
