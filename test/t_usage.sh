@@ -44,10 +44,11 @@ for c in inspect; do
   fi
 done
 
-## the retired name still explains itself rather than reading as unknown
-out=$("$MS" fetch 2>&1 || true)
+## `fetch` is live again (its own catalogue, t_fetch.sh); piped, the bare
+## form dumps that catalogue as TSV and must never point users at yame
+out=$("$MS" fetch 2>&1 </dev/null || true)
 case "$out" in
-  *retired*|*yame\ fetch*) ;;
-  *) echo "methscope fetch no longer explains where fetching went: $out"; exit 1;;
+  *retired*|*"yame fetch"*) echo "methscope fetch still reads as retired: $out"; exit 1;;
 esac
+printf '%s\n' "$out" | grep -q "hg38/models" || { echo "bare fetch (piped) did not list the catalogue"; exit 1; }
 echo "ok: $n subcommands answer -h; bad invocations refuse"

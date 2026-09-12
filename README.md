@@ -15,17 +15,16 @@ It builds [YAME](https://github.com/zhou-lab/YAME) as a static library
 
 Pretrained models are hosted on HuggingFace
 ([zhou-lab/methscope](https://huggingface.co/zhou-lab/methscope)) — too large for
-git. They are fetched with **`yame fetch`**, which serves the shared store every
-tool in the suite reads; the
+git. They are fetched with **`methscope fetch`**; the
 [methscope_data](https://github.com/zhou-lab/methscope_data) repo holds the query
 `.cg` test fixtures (`test/`) and the reproducibility archive.
 
 ```sh
-yame fetch                                     # browse the catalogue
-yame fetch hg38/models/hg38_celltype.clfx      # one file
-yame fetch hg38/models                         # every human model
-yame fetch hg38/data                           # every example .cg fixture
-# -> $YAME_DATA_HOME, else ${XDG_DATA_HOME:-~/.local/share}/yame (-d DIR overrides)
+methscope fetch                                     # browse the catalogue
+methscope fetch hg38/models/hg38_celltype.clfx      # one file
+methscope fetch hg38/models                         # every human model
+methscope fetch hg38/data                           # every example .cg fixture
+# -> $METHSCOPE_DATA_HOME, else $YAME_DATA_HOME, else ~/.local/share/yame (-d DIR overrides)
 ```
 
 `-c` puts the files in the current directory instead, which is what the
@@ -33,17 +32,23 @@ yame fetch hg38/data                           # every example .cg fixture
 
 ```sh
 mkdir -p ~/tmp/methscope && cd ~/tmp/methscope
-yame fetch -c hg38/models/hg38_celltype.clfx hg38/data/human_hg38_celltypes.cg
+methscope fetch -c hg38/models/hg38_celltype.clfx hg38/data/human_hg38_celltypes.cg
 methscope classify hg38_celltype.clfx human_hg38_celltypes.cg
 ```
 
-Fetching is idempotent, every entry carries a pinned SHA-256, and a `.cg`'s
-`.cg.idx` sibling rides along without being a second name to remember. See
-`yame fetch -h` for the browser keys, `-g` filtering, and the store rules.
+The catalogue and the model tag are compiled into the binary — `methscope
+--version` prints `(yame v1.43, models v9)` — so a release fetches exactly the
+models it documents, and nothing else needs to be installed. Every entry carries
+a pinned SHA-256, fetching is idempotent, and a `.cg`'s `.cg.idx` sibling rides
+along without being a second name to remember. See `methscope fetch -h` for the
+browser keys, `-g` filtering, and the store rules.
 
-`methscope fetch` no longer exists — it was retired once YAME's registry grew to
-cover methscope's own assets, so there is one store and one catalogue rather than
-two that drift apart. The binary still recognises the name and says where to go.
+The store is shared with the other zhou-lab tools (`yame`, `kycg`) by
+convention, not by dependency: each tool pins its own tag and verifies against
+its own catalogue, and a directory's `SHA256SUMS` records which tag filled it. A
+newer tool upgrades such a directory in place; an older one refuses to overwrite
+it and says so. `methscope fetch -l` reports any directory that is behind this
+binary's tag.
 
 ## Build
 

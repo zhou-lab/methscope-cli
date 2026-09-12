@@ -13,8 +13,27 @@
 #include "methscope.h"
 #include "mrmp.h"
 #include "msfm.h"
-#include "assets.h"       /* yame_assets_root -- the shared store methscope reads */
+#include "assets.h"       /* yame_fetch_main, yame_assets_root -- the shared store */
+#include "registry.h"     /* GENERATED: what `methscope fetch` pins, at the submodule's tag */
 #include "yame_version.h" /* YAME version this binary was built against */
+
+/* methscope and yame are two standalone tools. Each bundles its own YAME code,
+ * pins its own model tag, verifies against its own compiled registry, and has
+ * its own store variable; a shared store is a convenience that works because
+ * the directory's manifest says which tag filled it, not because either tool
+ * knows about the other. This cfg is the whole of methscope's side of that:
+ * registry.h is projected from the submodule's catalog, so the models the
+ * docs name are, by construction, the ones this binary fetches. */
+static const yame_fetch_cfg_t ms_cfg = {
+  YAME_ASSETS, YAME_ASSETS_N, "methscope", "METHSCOPE_DATA_HOME"
+};
+
+/* The tag the model directories are pinned at, for --version and the banner. */
+static const char *ms_models_tag(void) {
+  for (size_t i = 0; i < YAME_ASSETS_N; ++i)
+    if (strcmp(YAME_ASSETS[i].target, "hg38/models") == 0) return YAME_ASSETS[i].tag;
+  return "?";
+}
 
 /* Grouped, ANSI-styled overview. Colors are emitted only when stderr is a TTY,
  * so redirected/piped output stays plain (cf. the ls-alias foot-gun). */
@@ -26,17 +45,20 @@ static int usage(FILE *out) {
   const char *R = tty ? "\033[0m"    : "";
 #define CMD(n, d) fprintf(out, "  %s%-17s%s %s\n", A, n, R, d)
   char store[4096];
-  yame_assets_root(NULL, NULL, store, sizeof(store));
-  const char *dh = getenv("YAME_DATA_HOME");
+  yame_assets_root(NULL, ms_cfg.tool_env, store, sizeof(store));
+  const char *mh = getenv(ms_cfg.tool_env), *yh = getenv("YAME_DATA_HOME");
   fprintf(out, "\n%smethscope%s %sv%s%s\n", A, R, D, METHSCOPE_VERSION, R);
   fprintf(out, "%sDNA methylome analysis via MRMP encoding%s\n", D, R);
-  fprintf(out, "%sbuilt against YAME %s%s\n", D, YAME_VERSION, R);
-  fprintf(out, "%sYAME_DATA_HOME%s  %s %s%s%s\n", B, R, store, D,
-          dh && *dh ? "(from $YAME_DATA_HOME)" : "(unset; -d overrides)", R);
+  fprintf(out, "%sbuilt against YAME %s; models pinned at %s%s\n", D, YAME_VERSION,
+          ms_models_tag(), R);
+  fprintf(out, "%sstore%s  %s %s%s%s\n", B, R, store, D,
+          mh && *mh ? "(from $METHSCOPE_DATA_HOME)"
+        : yh && *yh ? "(from $YAME_DATA_HOME)"
+        :             "(default; $METHSCOPE_DATA_HOME or -d overrides)", R);
   fprintf(out, "\n%sUsage%s  methscope <command> [options] [args]\n\n", D, R);
 
-  fprintf(out, "%sModels & data%s %s— fetched with 'yame fetch methscope/...'%s\n",
-          B, R, D, R);
+  fprintf(out, "%sModels & data%s\n", B, R);
+  CMD("fetch",        "Download models and example data into the store (or -c: here)");
 
   fprintf(out, "\n%sMRMP construction%s %s— the feature foundation%s\n", B, R, D, R);
   CMD("mrmp-build",   "Build the MRMP routing tree (--flat for one flat set)");
@@ -76,9 +98,12 @@ int main(int argc, char *argv[]) {
     return usage(stdout);
   }
   if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0) {
-    printf("methscope %s (yame %s)\n", METHSCOPE_VERSION, YAME_VERSION);
+    printf("methscope %s (yame %s, models %s)\n", METHSCOPE_VERSION, YAME_VERSION,
+           ms_models_tag());
     return 0;
   }
+  yame_set_default_fetch_cfg(&ms_cfg);   /* library code that browses asks for this */
+  if (strcmp(argv[1], "fetch") == 0) return yame_fetch_main(&ms_cfg, argc - 1, argv + 1);
   if (strcmp(argv[1], "classify")    == 0) return main_predict(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-featurize") == 0) return main_classify_featurize(argc - 1, argv + 1);
   if (strcmp(argv[1], "deconv-build-ref") == 0) return main_deconv_build_ref(argc - 1, argv + 1);
@@ -103,16 +128,6 @@ int main(int argc, char *argv[]) {
   }
   if (strcmp(argv[1], "upscale-hybrid-eval") == 0) {
     fprintf(stderr, "[methscope] 'upscale-hybrid-eval' was removed (deprecated hybrid model)\n");
-    return 1;
-  }
-  if (strcmp(argv[1], "fetch") == 0) {   /* retired: YAME's registry now covers methscope data */
-    /* Spell the names the way the registry, the README and the docs page do:
-       `hg38/models`, not the legacy `methscope/hg38/models`. Both resolve, but
-       two spellings in three places is how a reviewer ends up with
-       inconsistent instructions. */
-    fprintf(stderr, "[methscope] 'methscope fetch' was retired; use YAME's shared store:\n"
-                    "  yame fetch hg38/models                     # or hg38/data, mm10/models\n"
-                    "  yame fetch -c hg38/models/hg38_celltype.clfx   # -c: into the current dir\n");
     return 1;
   }
   if (strcmp(argv[1], "mrmp-build")   == 0) return main_mrmp_build(argc - 1, argv + 1);
