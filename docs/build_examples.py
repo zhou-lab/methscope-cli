@@ -51,7 +51,8 @@ def markup(text):
             code, cm = m.group(1), '<span class="cm">%s</span>' % m.group(2)
         else:
             code, cm = line, ""
-        code = re.sub(r"\bmethscope (?=[a-z])([a-z0-9_-]+)", r'methscope <span class="sub">\1</span>', code)
+        # the subcommand links to its entry on the Reference tab (docs/build_help.py)
+        code = re.sub(r"\bmethscope (?=[a-z])([a-z0-9_-]+)", r'methscope <a class="sub" href="#ref-\1">\1</a>', code)
         code = re.sub(r"(?<![\w/.-])([\w.-]+\.(%s))\b" % "|".join(TIP_EXT),
                       lambda mm: '<span class="tip" data-tip="%s" tabindex="0">%s</span>' % (mm.group(2), mm.group(1)), code)
         out.append(code + cm)
@@ -72,7 +73,7 @@ def strays(page):
     not inside a marker pair and carries neither data-norun nor a result class."""
     stripped = PAIR.sub("", page)
     return [m.group(0)[:60] for m in re.finditer(r"<pre([^>]*)><code>", stripped)
-            if "data-norun" not in m.group(1) and 'class="res' not in m.group(1)]
+            if "data-norun" not in m.group(1) and 'class="' not in m.group(1)]   # res / help blocks carry a class
 
 def main():
     page = open(PAGE, encoding="utf-8").read()

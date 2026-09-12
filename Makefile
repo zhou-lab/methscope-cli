@@ -75,7 +75,12 @@ test: $(PROG) yame-lib
 	MS=./$(PROG) YAME=$(YAME_DIR)/yame XGB_PREFIX=$(XGB_PREFIX) bash test/run.sh
 	$(PYTHON) docs/build_models.py --check
 	$(PYTHON) docs/build_examples.py --check
+	$(PYTHON) docs/build_help.py --check
 
+## docs/index.html is prose around three generated parts: the example blocks
+## (docs/examples/*.sh, build_examples.py), the model table (YAME's
+## assets.tsv, build_models.py) and the Reference tab (every subcommand's -h
+## from THIS binary, build_help.py). `make test` checks all three.
 ## The model table on the docs Models tab, generated from the submodule's
 ## YAME/data/assets.tsv (one row per model, compiled into every tool) plus the
 ## registry for tag and size. A model is described once, there; the page is a
@@ -84,6 +89,7 @@ test: $(PROG) yame-lib
 docs: $(PROG)
 	$(PYTHON) docs/build_models.py
 	$(PYTHON) docs/build_examples.py
+	$(PYTHON) docs/build_help.py
 
 ## The documented-workflow gate: runs every runnable docs/examples/*.sh on this
 ## checkout's binary, as a reader would. Needs the network ONCE (the sandbox

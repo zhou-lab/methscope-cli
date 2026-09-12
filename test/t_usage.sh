@@ -11,11 +11,13 @@ d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 ## day it is added rather than the day someone remembers to edit this file
 ## The banner groups commands under headings and pads the name column, so a
 ## command line is two leading spaces, the name, then two-or-more spaces and a
-## capitalised description. Headings have no leading spaces, so they do not match.
+## capitalised description (ONE or more spaces: three names are longer than the
+## 17-column pad and were invisible to the old "two or more"). Headings have no
+## leading spaces, so they do not match.
 ## `|| true`: the bare banner is a USAGE message and exits non-zero, which
 ## set -e plus pipefail would otherwise treat as the script failing -- silently,
 ## before the next line, which is how this test first appeared to do nothing.
-cmds=$("$MS" 2>&1 | awk '/^  [a-z][a-z0-9-]+  +[A-Z]/ {print $1}' | sort -u || true)
+cmds=$("$MS" 2>&1 | awk '/^  [a-z][a-z0-9-]+ +[A-Z]/ {print $1}' | sort -u || true)
 [ -n "$cmds" ] || { echo "could not read the subcommand list from the banner"; exit 1; }
 
 n=0
