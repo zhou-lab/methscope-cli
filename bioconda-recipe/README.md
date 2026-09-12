@@ -30,8 +30,7 @@ byte-reproducible so the `sha256:` can be independently verified.
 filed at 0.1.0 and sat unreviewed for two months, so it was bumped rather than
 reviewed against a stale version. Bumping again means: take the release asset the
 tag's CI already published (the release job prints the sha256), then update
-`version` + `sha256` both here and on the PR branch. See
-[`../RELEASE.md`](../RELEASE.md) step 8.
+`version` + `sha256` both here and on the PR branch. See the release checklist in the lab journal, step 8.
 
 ## Name
 

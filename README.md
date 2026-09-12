@@ -66,8 +66,10 @@ make                             # or: make XGB_PREFIX=/path/to/env
 The binary records an rpath to `$XGB_PREFIX/lib`, so at runtime the conda env
 that provided `libxgboost` must be on the library path (activating it is enough).
 
-Maintainers cutting a version: [`RELEASE.md`](RELEASE.md) is the checklist
-(YAME submodule pin, version bump, clean rebuild, tag, conda, lab binary).
+Releases are cut from a checklist kept in the lab journal rather than here:
+it covers the YAME submodule pin, the version bump, the tag, conda and the
+shared lab binary, and it names internal paths that would mean nothing outside
+the lab.
 
 ## Runnable examples
 

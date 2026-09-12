@@ -58,7 +58,7 @@ The Makefile compiles with `-MMD -MP`, so `src/*.o` track their headers and a
 bump to `src/methscope.h` (or to the YAME submodule) rebuilds what it should.
 That was added right after v0.7; before it, a bump silently relinked a binary
 still reporting the old version — check `methscope --version` either way. The
-full checklist is [`../RELEASE.md`](../RELEASE.md).
+full release checklist is kept in the lab journal, not in this repo.
 
 ## Notes
 
