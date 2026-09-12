@@ -387,7 +387,7 @@ int main_train_tree(int argc, char *argv[]) {
         "              contributes the same total weight. Measured NEUTRAL on\n"
         "              2026-08-14 (one of six arms, none beat the plain\n"
         "              400-cells/class baseline), and no shipped model uses it\n\n"
-        "  Score the result with: methscope classify query.cg TREE.clfx\n");
+        "  Score the result with: methscope classify TREE.clfx query.cg\n");
       return 0;
     }
     else if (a[0] == '-') tdie("unrecognized or incomplete option", a);
@@ -598,7 +598,7 @@ int main_train_tree(int argc, char *argv[]) {
       free(nm1); }
     fprintf(stderr, "\n  %-12s 1 pooled booster + the chain -> %s\n",
             "wrote", out);
-    fprintf(stderr, "  %-12s methscope classify query.cg %s\n", "score with",
+    fprintf(stderr, "  %-12s methscope classify %s query.cg\n", "score with",
             out);
     free(blob); free(X); free(row); free(y); free(keep);
     ms_mrmp_top_free(t); free(hier_buf); free(nodeof);
@@ -679,7 +679,7 @@ int main_train_tree(int argc, char *argv[]) {
   free(hier_buf);
   ms_bundle_pack_tree(out, chain, n, nm, bl, bn);
   fprintf(stderr, "\n  %-12s %u node(s) + the chain -> %s\n", "wrote", n, out);
-  fprintf(stderr, "  %-12s methscope classify query.cg %s\n", "score with", out);
+  fprintf(stderr, "  %-12s methscope classify %s query.cg\n", "score with", out);
   for (uint32_t k = 0; k < n; ++k) { free(nm[k]); free(bl[k]); }
   free(nm); free(bl); free(bn); free(nodeof);
   ms_msfm_layout_free(lay); ms_mrmpset_free(ch);
@@ -779,7 +779,7 @@ int main_train(int argc, char *argv[]) {
   if (!strcmp(framework, "violation"))
     tdie("the violation rule is UNFITTED -- it transcribes a .mrmp and consumes "
          "no training data, so it is a scoring mode now: "
-         "`classify --framework violation query.cg ref.mrmp` "
+         "`classify --framework violation ref.mrmp query.cg` "
          "(verified identical to transcribe-then-score, 0 of 1,201 cells)",
          framework);
   int fw_xgb = strcmp(framework, "xgboost") == 0;

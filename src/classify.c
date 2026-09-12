@@ -59,7 +59,7 @@ static int predict_usage(FILE *out) {
     "Options:\n"
     "  -o <out.tsv>             Write output to a file instead of stdout.\n"
     "  --framework violation   Score directly from a .mrmp with the violation\n"
-    "                          rule. Give <query.cg> <ref.mrmp>. The rule is an\n"
+    "                          rule. Give <ref.mrmp> <query.cg>. The rule is an\n"
     "                          unfitted function of the artifact and the three\n"
     "                          options below.\n"
     "  --call-threshold T      Violation beta cutoff. Default: 0.5.\n"

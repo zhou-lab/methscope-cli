@@ -295,7 +295,7 @@ static int bundle_usage(FILE *out) {
     "                  any order. Each is matched to a chain set BY NAME, and\n"
     "                  only its booster is taken -- node->classes comes from\n"
     "                  the chain, so nothing is duplicated. Scored with\n"
-    "                  `classify query.cg tree.clfx`.\n"
+    "                  `classify tree.clfx query.cg`.\n"
     "  -h              Show this help message.\n"
     "\n");
   return out == stdout ? 0 : 1;
