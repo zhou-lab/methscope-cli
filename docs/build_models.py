@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the model table on the Models tab of docs/index.html.
+"""Regenerate the published-models entries on the Models tab of docs/index.html.
 
 A model is described ONCE, in YAME's data/assets.tsv (key = the filename
 before the first dot), compiled into every tool as assetinfo.h. This reads the
@@ -68,26 +68,47 @@ def accuracy(row):
         if m: return m.group(1)
     return "—"
 
+ROLE_TITLE = {0: ("Classifiers", "<code class=\"inl\">.clfx</code> — run with <code class=\"inl\">classify</code>"),
+              1: ("Deconvolution references", "<code class=\"inl\">.msdref</code> — run with <code class=\"inl\">deconv</code>"),
+              2: ("Upscale decoders", "<code class=\"inl\">.updecx</code> — run with <code class=\"inl\">upscale</code>")}
+
+def para(label, text):
+    return "    <p><b>%s.</b> %s</p>" % (label, html.escape(text, quote=False)) if text and text != "?" else ""
+
+def entry(d, f, tag, size, r):
+    """One folded entry per file; prose, not code. A link to #model-<key> opens it."""
+    key = f.split(".", 1)[0]
+    title = r.get("title") or "—"
+    acc = accuracy(r)
+    body = [para("What it is", r.get("biology", "")),
+            "    <p><b>Accuracy.</b> %s</p>" % html.escape(acc, quote=False) if acc != "—" else "",
+            para("How it was built", r.get("processing", "")),
+            para("Source", r.get("source", "")), para("Citation", r.get("citation", "")),
+            "    <p class=\"m\">%s · tag %s · %s</p>" % (html.escape(d), html.escape(tag), human(size))]
+    return ('  <details class="model" id="model-%s">\n    <summary><code class="inl">%s</code> '
+            '<span class="m">— %s · %s</span></summary>\n%s\n  </details>'
+            % (key, html.escape(f), html.escape(title, quote=False), human(size), "\n".join(b for b in body if b)))
+
 def build():
     tsv = read_tsv(TSV)
     items = []
     for d, f, tag, size in registry_models():
         key, ext = f.split(".", 1)[0], "." + f.rsplit(".", 1)[1]
-        r = tsv.get(key, {})
-        items.append((ROLE.get(ext, (9, ext))[0], d, f, tag, size, r))
+        items.append((ROLE.get(ext, (9, ext))[0], d, f, tag, size, tsv.get(key, {})))
     items.sort(key=lambda x: (x[0], x[1], x[2]))
-    e = html.escape
-    out = [BEGIN, "  <table>",
-           "    <tr><th>file</th><th>what it is</th><th>notes</th><th>accuracy</th><th>size</th></tr>"]
-    for _, d, f, tag, size, r in items:
-        title = r.get("title") or "—"
-        out.append("    <tr><td><code>%s</code><br><span class=\"m\">%s · %s</span></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
-                   % (e(f), e(d), e(tag), e(title), e(r.get("biology", "—")), e(accuracy(r)), human(size)))
-    out += ["  </table>",
-            "  <p class=\"m\">Generated from YAME's <code class=\"inl\">data/assets.tsv</code> at the "
-            "submodule's tag by <code class=\"inl\">docs/build_models.py</code>; the same rows describe "
-            "each file in <code class=\"inl\">methscope fetch</code>. Edit the TSV, not this table.</p>",
-            END]
+    out, role = [BEGIN], None
+    for r0, d, f, tag, size, r in items:
+        if r0 != role:
+            if role is not None: out.append("</section>")
+            t, m = ROLE_TITLE.get(r0, (r0, ""))
+            out.append('<section class="card">\n  <h2>%s <span class="m">— %s</span></h2>' % (t, m))
+            role = r0
+        out.append(entry(d, f, tag, size, r))
+    out.append("</section>")
+    out.append('<section class="card">\n  <p class="m">Generated from YAME\'s <code class="inl">data/assets.tsv</code> at the '
+               'submodule\'s tag by <code class="inl">docs/build_models.py</code>; the same rows describe '
+               'each file in <code class="inl">methscope fetch</code>. Edit the TSV, not this page.</p>\n</section>')
+    out.append(END)
     return "\n".join(out)
 
 def main():

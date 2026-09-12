@@ -21,7 +21,7 @@ git. They are fetched with **`methscope fetch`**; the
 
 ```sh
 methscope fetch                                     # browse the catalogue
-methscope fetch hg38/models/hg38_celltype.clfx      # one file
+methscope fetch hg38/models/hg38_celltype_lite.clfx # one file
 methscope fetch hg38/models                         # every human model
 methscope fetch hg38/data                           # every example .cg fixture
 # -> $METHSCOPE_DATA_HOME, else $YAME_DATA_HOME, else ~/.local/share/yame (-d DIR overrides)
@@ -32,8 +32,8 @@ methscope fetch hg38/data                           # every example .cg fixture
 
 ```sh
 mkdir -p ~/tmp/methscope && cd ~/tmp/methscope
-methscope fetch -c hg38/models/hg38_celltype.clfx hg38/data/human_hg38_celltypes.cg
-methscope classify hg38_celltype.clfx human_hg38_celltypes.cg
+methscope fetch -c hg38/models/hg38_celltype_lite.clfx hg38/data/human_hg38_celltypes.cg
+methscope classify hg38_celltype_lite.clfx human_hg38_celltypes.cg
 ```
 
 The catalogue and the model tag are compiled into the binary — `methscope
