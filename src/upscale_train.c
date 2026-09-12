@@ -60,7 +60,7 @@ static int usage(FILE *out) {
     "       --mrmp TOP1000.mrmp -o MODEL.updecx --work-dir DIR [options]\n\n"
     "Train whole-genome UPDEC2 processing units on CUDA. Each MRMP contributes\n"
     "beta plus log1p(observed-CpG count); count zero represents missingness.\n"
-    "An optional frozen learned trunk is shared by every processing unit.\n\n"
+    "\n"
     "Required:\n"
     "  -i, --data PATH          embedded-truth MSURAW2/3 training msur\n"
     "  --units PATH             whole-genome MSUIDX1 processing-unit index\n"
@@ -77,7 +77,6 @@ static int usage(FILE *out) {
     "                           already stores, so one msur trains every mode and\n"
     "                           width -- retrain to vary them rather than paying\n"
     "                           for another upscale-featurize\n"
-    "  --trunk PATH             optional frozen UPFAC3 shared trunk\n"
     "  --pure-bottleneck N      one-membership unit dimension (default 16)\n"
     "  --mixed-bottleneck N     mixed/PNA unit dimension (default 32)\n"
     "  --mixed-mode MODE        factor or direct (default factor)\n"
@@ -148,7 +147,6 @@ int main_upscale_train(int argc, char **argv) {
       else if (!strcmp(x, "scalar")) c.feature_mode = MS_UPFEATURE_SCALAR;
       else terr("--features must be beta, count, missing, or scalar", x);
     }
-    else if (!strcmp(a, "--trunk") && i + 1 < argc) c.trunk_path = argv[++i];
     else if (!strcmp(a, "--pure-bottleneck") && i + 1 < argc) c.pure_bottleneck = u32(argv[++i], a);
     else if (!strcmp(a, "--mixed-bottleneck") && i + 1 < argc) c.mixed_bottleneck = u32(argv[++i], a);
     else if (!strcmp(a, "--mixed-mode") && i + 1 < argc) {
@@ -252,8 +250,6 @@ int main_upscale_train(int argc, char **argv) {
   /* CUDA when it is built in and a device answers, else the portable backend.
    * --device cpu forces the fallback even on a GPU node. */
   int use_cpu = force_cpu || !ms_upunit_cuda_available();
-  if (use_cpu && c.trunk_path)
-    terr("--trunk needs the CUDA backend; rebuild with make CUDA=1", NULL);
   fprintf(stderr, "[methscope] upscale-train: backend=%s\n", use_cpu ? "cpu" : "cuda");
   int train_rc = use_cpu ? ms_upunit_train_cpu(&c) : ms_upunit_train_cuda(&c);
   if (train_rc) terr("CUDA training failed", NULL);

@@ -21,6 +21,28 @@ ms_ref () {
   "$YAME" index -s "$d/names.txt" "$d/ref.cg" 2>/dev/null
 }
 
+## ms_ref_bank <dir> -- a reference a BANK build can split and resolve:
+## classes A1..A3 vs B1..B3 differ on rows i%7<4 (the group split), and inside
+## a group each class carries its own code on two further blocks (i%11<3 and
+## i%13<2), so the annealed recursion finds a hierarchy and EVERY class pair
+## has CpGs for its resolver -- a bank-full wants one per pair. 6 x 400 CpGs.
+ms_ref_bank () {
+  local d=$1 c
+  for c in 1 2 3 4 5 6; do
+    awk -v c="$c" 'BEGIN { for (i = 0; i < 400; i++) {
+        g = (c <= 3); f = (c == 1 || c == 4); h = (c == 2 || c == 5)
+        if (i % 7 < 4)       m = (g ? 9 : 1)
+        else if (i % 11 < 3) m = (f ? 9 : 1)
+        else if (i % 13 < 2) m = (h ? 9 : 1)
+        else                 m = 5
+        print m "\t" (10 - m) } }' > "$d/bcell$c.txt"
+    "$YAME" pack -f m "$d/bcell$c.txt" > "$d/bcell$c.cg" 2>/dev/null
+  done
+  cat "$d"/bcell[1-6].cg > "$d/bankref.cg"
+  printf 'A1\nA2\nA3\nB1\nB2\nB3\n' > "$d/banknames.txt"
+  "$YAME" index -s "$d/banknames.txt" "$d/bankref.cg" 2>/dev/null
+}
+
 ## ms_labels <dir> -- two-class labels matching ms_ref, one per line in cell order
 ms_labels () { printf 'A\nA\nA\nB\nB\nB\n' > "$1/labels.txt"; }
 

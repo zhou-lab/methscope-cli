@@ -19,5 +19,5 @@ methscope classify-featurize --threads $T --satellite-contrast replace \
   --seed $SEED -b --sample $LADDER --reps 1 \
   -l $TRLAB -o $B/train.msfm $B/train.cg $B/bank.mrmp
 
-methscope classify-train --threads $T --pool-nodes --data $B/train.msfm \
+methscope classify-train --threads $T --data $B/train.msfm \
   -o $B/bank.clfx                            # constrained defaults: max-depth 4, colsample 0.4

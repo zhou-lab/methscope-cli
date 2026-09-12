@@ -531,16 +531,18 @@ methscope <a class="sub" href="#ref-classify-featurize">classify-featurize</a> -
   --seed $SEED -b --sample $LADDER --reps 1 \
   -l $TRLAB -o $B/train.msfm $B/train.cg $B/bank.mrmp
 
-methscope <a class="sub" href="#ref-classify-train">classify-train</a> --threads $T --pool-nodes --data $B/train.msfm \
+methscope <a class="sub" href="#ref-classify-train">classify-train</a> --threads $T --data $B/train.msfm \
   -o $B/bank.clfx                            <span class="cm"># constrained defaults: max-depth 4, colsample 0.4</span></code></pre>
 <!-- /example -->
-  <p class="note"><b>Why it is not runnable here.</b> It wants the 33-class donor-pooled
-    reference, not a chr20 fixture. <code class="inl">$LADDER</code> is a 24-rung coverage
-    ladder that draws a different depth per record, which is what stops the model reading
-    sequencing depth as cell identity; <code class="inl">--satellite-n 5</code> appends
-    two-class MRMPs for each class's five nearest neighbours. It trains on the 286
-    training pseudobulks only, not all 552 — folding the held-out set in would buy a
-    little data and cost the only generalisation estimate the model has.</p>
+  <p class="note"><b>Why it is not runnable here.</b> It wants the 63-class pooled reference
+    and the 84,601 labelled single cells behind it, not a chr20 fixture — and the cost is the
+    resolver calibration: every class pair gets its own leave-one-cell-out grid over the cell
+    store, about 23 CPU-hours for the 1,953 human pairs, which the driver spreads across
+    SLURM jobs through the shared cache. <code class="inl">$LADDER</code> draws each training
+    cell at five coverages, which is what stops the booster reading sequencing depth as cell
+    identity; the booster itself trains on a balanced 400-cells-per-class draw, and its
+    accuracy is the ten-fold CV reported on the Published models tab, not a number measured
+    on the cells it trained on.</p>
 </section>
 
 <section class="card">
@@ -1189,23 +1191,23 @@ Notes:
   <h2>MRMP construction <span class="m">— the feature foundation</span></h2>
   <details class="ref" id="ref-mrmp-build">
     <summary><code class="inl">methscope mrmp-build</code> <span class="m">— Build the MRMP routing tree (--flat for one flat set)</span></summary>
-    <pre class="help"><code>Usage: methscope mrmp-build [options] REF.cg OUT.mrmp
+    <pre class="help"><code>Usage: methscope mrmp-build --bank [options] REF.cg OUT.mrmp
+       methscope mrmp-build --flat [options] REF.cg OUT.mrmp
 
-Build a routing-tree MRMP from a labelled reference store. Each node
-uses its own class subset. Rebuilding a child can admit CpGs that its
-parent's wider class set excluded.
+Build an MRMP from a labelled reference store: one record per class,
+record name = class name. --bank is the classifier artifact (the
+release models); --flat is one set over every class, for upscale, the
+violation rule and export. One of the two is required.
 
 Workflow
-  methscope mrmp-build --dry-run REF.cg OUT.mrmp
-  methscope mrmp-build REF.cg OUT.mrmp
+  methscope mrmp-build --bank --anneal-min-seg 10000,3000,1000 \
+      --cell-store CELLS.cg --cell-labels CELLS.tsv REF.cg OUT.mrmp
+  methscope mrmp-build --flat REF.cg OUT.mrmp
 
-Tree
-  --min-segregating N   Split threshold in CpGs. Default: 20000. Classes
-                        with &lt;= N separating CpGs share a child. Keep
-                        this absolute threshold fixed across the tree.
+Split discovery (the hierarchy behind a bank's binstring blocks)
   --anneal-min-seg HI,LO[,STEP]
-                        Anneal the split threshold PER NODE instead of
-                        fixing it: try HI, and when nothing separates,
+                        Anneal the split threshold PER NODE:
+                        try HI, and when nothing separates,
                         drop exactly to the first disconnection of the
                         single-linkage graph (the largest threshold
                         that splits anything -- the slowest possible
@@ -1219,35 +1221,14 @@ Tree
                         cascade of near-duplicate levels, and the
                         recorded thresholds are round numbers. Every
                         node records the threshold it used in its
-                        header (inspect --tree shows it). Overrides
-                        --min-segregating.
-  --flat                Build one MRMP over all classes, without a tree.
-  --max-depth N         Maximum tree depth. Default: 16.
-  --dry-run             Report root pair counts and candidate splits.
-                        Write nothing. Does not require a threshold.
+                        header (inspect --tree shows it). Required by
+                        --bank; a fixed threshold is HI,HI.
+  --max-depth N         Maximum split depth. Default: 16.
 
-Satellites
-  --relax-below N       A 2-class pair node whose admitted pool is
-                        under N CpGs gets one soft satellite over the
-                        same pair, selected by shrunk-beta GAP order
-                        (--relax-gap, default 0.40) instead of the
-                        positional band -- coverage over purity, in
-                        soft columns the booster can weigh. Measured:
-                        the band cost Tnaive CD4/CD8 ~8x its evidence
-                        (733 admitted vs 5,972 at gap 0.40), and the
-                        gap-selected sign alone scored 87%% held-out.
-                        Looser than ~0.35 re-couples selection to the
-                        reference (train-test gap -29 at 0.30).
-                        Default: 0 (off).
-  --relax-gap G         The thin-pair satellite gap. Default: 0.40.
-  --satellite-n N       At each leaf with 3+ classes, append two-class
-                        MRMPs for every class's N nearest neighbours.
-                        They add leaf features but do not route.
-                        Default: 0 (off).
-
-Bank (the two-type flat artifact; the release models)
-  --bank [full|lite]    Emit a FLAT chain of exactly two feature
-                        types and no routing. Type 1: each split
+Modes
+  --flat                One set over every class, no hierarchy.
+  --bank                The classifier artifact: a FLAT chain of two
+                        feature types and no routing. Type 1: each split
                         node's binstrings, pruned to patterns with
                         &gt;= --pattern-floor CpGs (tree-named for
                         provenance only). Type 2: calibrated 2-class
@@ -1258,7 +1239,7 @@ Bank (the two-type flat artifact; the release models)
                         Needs --anneal-min-seg and the calibration
                         inputs. Featurize the result with
                         --satellite-contrast replace and train with
-                        classify-train --pool-nodes.
+                        classify-train --data.
   --pattern-floor N     Type-1 pattern floor. Default: 2000.
   --resolver-gate N     A pair gets a resolver unless a type-1
                         pattern with &gt;= N CpGs separates it at the
@@ -1289,8 +1270,7 @@ Bank (the two-type flat artifact; the release models)
 Per-pair calibration
   --cell-store F.cg     Per-cell fmt3 store (with F.cg.idx) holding
                         the training cells. With --cell-labels, every
-                        2-class set -- pair nodes, satellites, thin-
-                        pair satellites -- gets its own
+                        2-class resolver gets its own
                         (shrink-pseudocnt, gap) by leave-one-cell-out:
                         selection pools drop the held-out cell (no
                         leak, and the inner pool depth matches the
@@ -1312,13 +1292,6 @@ Per-pair calibration
 Feature selection
   --qfilter LO,HI       Keep CpGs where every 0-class &lt;= LO and every
                         1-class &gt;= HI.
-  --min-sbeta-gap G     Replace the band with a minimum SHRUNK-beta gap:
-                        lowest 1-class minus highest 0-class &gt;= G. The
-                        band's absolute anchors made sense for
-                        0.5-binarized features; rank contrasts are
-                        shift-invariant, so only the gap matters.
-                        Same statistic deconv rescue tests as
-                        --rescue-gap.
   --delta-mean-top N    Keep at most N CpGs per binstring, ranked by
                         mean class gap. Default: 20000; 0 keeps all.
   --shrink-pseudocnt A  Shrink the per-class beta to (M+A)/(M+U+2A)
@@ -1350,10 +1323,9 @@ Feature selection
 
 Output
   --name NAME           Root name. Default: root.
-  --node-dir DIR        Also write each node as DIR/&lt;node&gt;.mrmp.
   --force               Overwrite OUT.mrmp.
 
-Inspect the completed tree with: inspect --tree OUT.mrmp</code></pre>
+Inspect the result with: inspect --tree OUT.mrmp</code></pre>
   </details>
   <details class="ref" id="ref-mrmp-export">
     <summary><code class="inl">methscope mrmp-export</code> <span class="m">— Emit the runtime .cm mask (and pattern / count tables)</span></summary>
@@ -1469,11 +1441,6 @@ Options:
   --probs                 Append one predicted-probability column per class.
                           This is unavailable for routing trees because each
                           node scores a different class subset.
-  --levels                Append the predicted label's full taxonomy path:
-                          compartment, lineage, group, and subtype.
-  --level NAME            Append one taxonomy level: compartment, lineage,
-                          group, or subtype. Taxonomy options require a model
-                          trained with `classify-train --hierarchy`.
   --no-header             Suppress the output header.
   --threads T             Featurize with T workers. Default: 1. Workers seek
                           indexed query records; streams use the serial path.
@@ -1565,12 +1532,6 @@ Options:
                    positional, and labels come from the artifact unless -l is
                    given. Featurization is single-threaded, so this is how to
                    train repeatedly on the same cells without repeating it.
-  --hierarchy TSV  Embed a label taxonomy (label, compartment, lineage,
-                   group, subtype) in EVERY node of the tree, so `classify
-                   --levels` / `--level NAME` can read it back from whichever
-                   node made the call. An external cohort labelled only
-                   coarsely can then be scored at the level both sides
-                   resolve.
   -h               Show this help message.</code></pre>
   </details>
   <details class="ref" id="ref-classify-featurize">
@@ -1579,15 +1540,14 @@ Options:
 Usage:
   methscope classify-featurize [options] -o &lt;out.msfm&gt; &lt;query.cg&gt; &lt;ref.mrmp&gt;
   methscope classify-featurize [options] -o &lt;out.msfm&gt; &lt;query.cg&gt; &lt;ref.cm&gt; [ref2.cm ...]
-  methscope classify-featurize --merge  -o &lt;out.msfm&gt; &lt;in1.msfm&gt; [in2.msfm ...]
 
 Purpose:
   Summarize each query record against the MRMP once and store the result,
   so training and scoring never repeat the featurization. `classify-train`
   and `classify` both accept the artifact with --data.
 
-  Featurization is single-threaded, so the way to go faster is to split the
-  query by record, featurize the chunks in parallel, and --merge them.
+  --threads T partitions the records across workers, each seeking its own
+  through the .cg index.
 
 Arguments:
   &lt;query.cg&gt;   Query methylome(s), one record per sample or cell.
@@ -1624,19 +1584,6 @@ Options:
                  mrmp-tree can be scored straight out of the tree it
                  lives in -- a block inside a chain is byte-identical to
                  the standalone .mrmp, so nothing need be kept beside it.
-  --rank-features off|add|replace   (default off)
-                 One column per class PAIR of a set: the mean over the
-                 patterns calling a 1 and b 0, against the mean over those
-                 calling a 0 and b 1. Asks "is this cell more a than b"
-                 -- relative,
-                 so a global shift enters both means and cancels. This is
-                 --satellite-contrast generalised past k=2, and it needs a
-                 .mrmp: a .cm carries no binstrings to read the sides from.
-                 A class the set never contrasts gets no column, and a cell
-                 observing nothing on either side gets NA -- a real
-                 abstention, since the THINNER side sets the floor.
-                 replace: k rank columns instead of the set's patterns;
-                 add: both.
   --satellite-contrast off|add|replace   (default off)
                  A 2-class satellite's two patterns have opposite polarity,
                  so "is P1 above P2" asks the pair's question RELATIVELY --
@@ -1670,7 +1617,6 @@ Options:
                  carries the same weight as one backed by hundreds of CpGs.
                  In mouse single cells 46.5% of observed pattern-betas rest
                  on one or two CpGs. Default 1 (keep every observed pattern).
-  --merge        Concatenate .msfm chunks (pattern sets must match).
   -h, --help     Show this help message.
 
 Notes:
@@ -1957,7 +1903,6 @@ every CpG has a real membership and coverage is 100% by construction.
 
 Train whole-genome UPDEC2 processing units on CUDA. Each MRMP contributes
 beta plus log1p(observed-CpG count); count zero represents missingness.
-An optional frozen learned trunk is shared by every processing unit.
 
 Required:
   -i, --data PATH          embedded-truth MSURAW2/3 training msur
@@ -1976,7 +1921,6 @@ Architecture:
                            already stores, so one msur trains every mode and
                            width -- retrain to vary them rather than paying
                            for another upscale-featurize
-  --trunk PATH             optional frozen UPFAC3 shared trunk
   --pure-bottleneck N      one-membership unit dimension (default 16)
   --mixed-bottleneck N     mixed/PNA unit dimension (default 32)
   --mixed-mode MODE        factor or direct (default factor)
@@ -2033,12 +1977,6 @@ Options:
                   CpGs the model imputes. With it, `upscale` writes a full-genome
                   .cg; without it, a dense block .cg.
   -o &lt;out&gt;        output bundle path (required).
-  --tree          bundle a routing TREE: -m is the mrmp CHAIN and the
-                  positional arguments are the per-node .clfx files, in
-                  any order. Each is matched to a chain set BY NAME, and
-                  only its booster is taken -- node-&gt;classes comes from
-                  the chain, so nothing is duplicated. Scored with
-                  `classify tree.clfx query.cg`.
   -h              Show this help message.</code></pre>
   </details>
   <details class="ref" id="ref-relabel">

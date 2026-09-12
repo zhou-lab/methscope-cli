@@ -500,113 +500,6 @@ static void write_msfm_raw(const char *out, const uint16_t *beta,
   free(cid); free(uniq); free(pn);
 }
 
-/* ---- merge ------------------------------------------------------------- */
-
-/* Chunks cannot be byte-concatenated -- the header carries absolute offsets --
- * so merging re-lays the sections out, exactly as `yame index -s` has to run
- * after `cat`. Pattern vocabularies must match; class tables are unioned and
- * ids remapped, so chunks that happen to miss a rare class still merge. */
-static int merge_msfm(const char *out, char **in, int n_in) {
-  ms_msfm_t *f = xmal((size_t)n_in * sizeof(*f), "inputs");
-  memset(f, 0, (size_t)n_in * sizeof(*f));
-  char err[256];
-  uint64_t nr_tot = 0;
-  for (int i = 0; i < n_in; ++i)
-    if (!ms_msfm_open(&f[i], in[i], err, sizeof(err))) fdie(err, in[i]);
-  /* Validate only once every input is open, so chunk 0 is unambiguously the
-   * reference. Mismatched pattern vocabularies mean different MRMPs, which
-   * would silently merge into a matrix whose columns do not line up. */
-  for (int i = 0; i < n_in; ++i) {
-    if (f[i].header->n_patterns != f[0].header->n_patterns)
-      fdie("chunks disagree on pattern count", in[i]);
-    for (uint32_t c = 0; c < f[0].header->n_patterns; ++c)
-      if (strcmp(f[i].pattern_names[c], f[0].pattern_names[c]))
-        fdie("chunks disagree on pattern names (different MRMP?)", in[i]);
-    nr_tot += f[i].header->n_records;
-  }
-  if (nr_tot > UINT32_MAX) fdie("too many records", NULL);
-
-  uint32_t np = f[0].header->n_patterns;
-
-  /* union the class tables */
-  uint32_t cap = 0;
-  for (int i = 0; i < n_in; ++i) cap += f[i].header->n_classes;
-  char **all = xmal((size_t)(cap ? cap : 1) * sizeof(*all), "class union");
-  uint32_t na = 0;
-  for (int i = 0; i < n_in; ++i)
-    for (uint32_t k = 0; k < f[i].header->n_classes; ++k) all[na++] = f[i].class_names[k];
-  qsort(all, na, sizeof(*all), cmp_str);
-  uint32_t nk = 0;
-  for (uint32_t k = 0; k < na; ++k)
-    if (!k || strcmp(all[k], all[nk-1])) all[nk++] = all[k];
-
-  uint64_t names_b = 0, rows_b = 0, class_b = 0;
-  for (uint32_t c = 0; c < np; ++c) names_b += strlen(f[0].pattern_names[c]) + 1;
-  for (int i = 0; i < n_in; ++i)
-    for (uint32_t r = 0; r < f[i].header->n_records; ++r)
-      rows_b += strlen(f[i].record_names[r]) + 1;
-  for (uint32_t k = 0; k < nk; ++k) class_b += strlen(all[k]) + 1;
-
-  msfm_header_t h;
-  memset(&h, 0, sizeof(h));
-  memcpy(h.magic, MSFM_MAGIC, 7);
-  h.version = 1; h.n_records = (uint32_t)nr_tot; h.n_patterns = np; h.n_classes = nk;
-  /* Chunks of one featurization share one coding and one K; refuse a mix
-   * rather than stamp the merge with whichever input came first. */
-  for (int i = 1; i < n_in; ++i)
-    if (f[i].header->flags != f[0].header->flags)
-      fdie("input flags disagree (chunks from different codings)", in[i]);
-  h.flags = f[0].header->flags;
-  h.names_offset  = sizeof(h);
-  h.rows_offset   = h.names_offset + names_b;
-  h.labels_offset = h.rows_offset + rows_b;
-  h.levels_offset = h.labels_offset + nr_tot * 2 + class_b;
-  h.beta_offset   = h.levels_offset + nr_tot * 4;
-  h.mrmp_offset   = 0;                  /* --merge does not carry one; see below */
-  h.file_bytes    = h.beta_offset + nr_tot * np * 2;
-
-  FILE *o = fopen(out, "wb");
-  if (!o) fdie("cannot create output", out);
-  wr(o, &h, sizeof(h), out);
-  for (uint32_t c = 0; c < np; ++c)
-    wr(o, f[0].pattern_names[c], strlen(f[0].pattern_names[c]) + 1, out);
-  for (int i = 0; i < n_in; ++i)
-    for (uint32_t r = 0; r < f[i].header->n_records; ++r)
-      wr(o, f[i].record_names[r], strlen(f[i].record_names[r]) + 1, out);
-  for (int i = 0; i < n_in; ++i) {
-    uint32_t n = f[i].header->n_records;
-    uint16_t *cid = xmal((size_t)n * 2, "remapped ids");
-    for (uint32_t r = 0; r < n; ++r) {
-      const char *name = f[i].header->n_classes
-                           ? f[i].class_names[f[i].class_id[r]] : NULL;
-      uint32_t at = 0;
-      if (name) {
-        int lo = 0, hi = (int)nk - 1;
-        while (lo <= hi) {
-          int mid = (lo + hi) / 2, c = strcmp(name, all[mid]);
-          if (!c) { at = (uint32_t)mid; break; } else if (c < 0) hi = mid - 1; else lo = mid + 1;
-        }
-      }
-      cid[r] = (uint16_t)at;
-    }
-    wr(o, cid, (size_t)n * 2, out);
-    free(cid);
-  }
-  for (uint32_t k = 0; k < nk; ++k) wr(o, all[k], strlen(all[k]) + 1, out);
-  for (int i = 0; i < n_in; ++i)
-    wr(o, f[i].levels, (size_t)f[i].header->n_records * 4, out);
-  for (int i = 0; i < n_in; ++i)
-    wr(o, f[i].beta, (size_t)f[i].header->n_records * np * 2, out);
-  if (fclose(o)) fdie("cannot finalize output", out);
-
-  fprintf(stderr, "[methscope] classify-featurize --merge: %d chunks -> "
-          "%u records x %u patterns, %u classes -> %s (%.1f MB)\n",
-          n_in, h.n_records, np, nk, out, (double)h.file_bytes / 1048576.0);
-  for (int i = 0; i < n_in; ++i) ms_msfm_close(&f[i]);
-  free(all); free(f);
-  return 0;
-}
-
 /* ---- CLI --------------------------------------------------------------- */
 
 static int usage(FILE *out) {
@@ -615,15 +508,14 @@ static int usage(FILE *out) {
     "Usage:\n"
     "  methscope classify-featurize [options] -o <out.msfm> <query.cg> <ref.mrmp>\n"
     "  methscope classify-featurize [options] -o <out.msfm> <query.cg> <ref.cm> [ref2.cm ...]\n"
-    "  methscope classify-featurize --merge  -o <out.msfm> <in1.msfm> [in2.msfm ...]\n"
     "\n"
     "Purpose:\n"
     "  Summarize each query record against the MRMP once and store the result,\n"
     "  so training and scoring never repeat the featurization. `classify-train`\n"
     "  and `classify` both accept the artifact with --data.\n"
     "\n"
-    "  Featurization is single-threaded, so the way to go faster is to split the\n"
-    "  query by record, featurize the chunks in parallel, and --merge them.\n"
+    "  --threads T partitions the records across workers, each seeking its own\n"
+    "  through the .cg index.\n"
     "\n"
     "Arguments:\n"
     "  <query.cg>   Query methylome(s), one record per sample or cell.\n"
@@ -660,19 +552,6 @@ static int usage(FILE *out) {
     "                 mrmp-tree can be scored straight out of the tree it\n"
     "                 lives in -- a block inside a chain is byte-identical to\n"
     "                 the standalone .mrmp, so nothing need be kept beside it.\n"
-    "  --rank-features off|add|replace   (default off)\n"
-    "                 One column per class PAIR of a set: the mean over the\n"
-    "                 patterns calling a 1 and b 0, against the mean over those\n"
-    "                 calling a 0 and b 1. Asks \"is this cell more a than b\"\n"
-    "                 -- relative,\n"
-    "                 so a global shift enters both means and cancels. This is\n"
-    "                 --satellite-contrast generalised past k=2, and it needs a\n"
-    "                 .mrmp: a .cm carries no binstrings to read the sides from.\n"
-    "                 A class the set never contrasts gets no column, and a cell\n"
-    "                 observing nothing on either side gets NA -- a real\n"
-    "                 abstention, since the THINNER side sets the floor.\n"
-    "                 replace: k rank columns instead of the set's patterns;\n"
-    "                 add: both.\n"
     "  --satellite-contrast off|add|replace   (default off)\n"
     "                 A 2-class satellite's two patterns have opposite polarity,\n"
     "                 so \"is P1 above P2\" asks the pair's question RELATIVELY --\n"
@@ -706,7 +585,6 @@ static int usage(FILE *out) {
     "                 carries the same weight as one backed by hundreds of CpGs.\n"
     "                 In mouse single cells 46.5% of observed pattern-betas rest\n"
     "                 on one or two CpGs. Default 1 (keep every observed pattern).\n"
-    "  --merge        Concatenate .msfm chunks (pattern sets must match).\n"
     "  -h, --help     Show this help message.\n"
     "\n"
     "Notes:\n"
@@ -836,8 +714,8 @@ int main_classify_featurize(int argc, char *argv[]) {
   /* 1 = cut at 0.5 (default), 2 = per-pattern midpoints, 0 = leave continuous */
   int binarize_feat = 1;
   int contrast = 0;                 /* 0 off, 1 alongside, 2 replacing */
-  int rank = 0;                     /* same three modes, generalised to any k */
-  int merge = 0, i = 1;
+  int rank = 0;                     /* per-class rank columns: retired option, plumbing kept off */
+  int i = 1;
   uint32_t min_cpgs = 0;   /* --counts N: below N measured CpGs -> NA */
   for (; i < argc; ++i) {
     if      (!strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
@@ -855,13 +733,6 @@ int main_classify_featurize(int argc, char *argv[]) {
     else if (!strcmp(argv[i], "--continuous-features")) binarize_feat = 0;
     else if (!strcmp(argv[i], "--thresh-pattern")) binarize_feat = 2;
     else if (!strcmp(argv[i], "--set") && i + 1 < argc) g_only_set = argv[++i];
-    else if (!strcmp(argv[i], "--rank-features") && i + 1 < argc) {
-      const char *v = argv[++i];
-      if      (!strcmp(v, "off"))     rank = 0;
-      else if (!strcmp(v, "add"))     rank = 1;
-      else if (!strcmp(v, "replace")) rank = 2;
-      else fdie("--rank-features wants off|add|replace", v);
-    }
     else if (!strcmp(argv[i], "--satellite-contrast") && i + 1 < argc) {
       const char *v = argv[++i];
       if      (!strcmp(v, "off"))     contrast = 0;
@@ -869,17 +740,11 @@ int main_classify_featurize(int argc, char *argv[]) {
       else if (!strcmp(v, "replace")) contrast = 2;
       else fdie("--satellite-contrast wants off|add|replace", v);
     }
-    else if (!strcmp(argv[i], "--merge")) merge = 1;
     else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { return usage(stdout); }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-")) fdie("unrecognized option", argv[i]);
     else break;
   }
   if (!out) return usage(stderr);
-
-  if (merge) {
-    if (argc - i < 1) return usage(stderr);
-    return merge_msfm(out, argv + i, argc - i);
-  }
 
   if (argc - i < 2) return usage(stderr);
   const char *query = argv[i];

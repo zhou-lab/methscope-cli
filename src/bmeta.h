@@ -39,23 +39,6 @@
  * rather than guessing. */
 #define MS_ATTR_BINARIZE "methscope_binarize"
 
-/* The label hierarchy, so a prediction is self-describing: one row per class,
- * "label\tcompartment\tlineage\tgroup\tsubtype", rows newline-separated.
- * Lets `classify --levels` report the taxonomy path without a side table, and
- * lets an external cohort be scored at whatever granularity BOTH sides resolve
- * -- a coarse "T cell" truth meets a "Blood.T.Mem.CD4" prediction at `group`.
- * "NA" at a level means the source does not resolve that far. */
-#define MS_ATTR_HIERARCHY "methscope_hierarchy"
-
-/* Embed the class labels (class-index order) into the booster's attributes.
- * labels[] has num_class entries. Exits on XGBoost error. */
-void ms_booster_set_meta(BoosterHandle b, char *const *labels, int num_class);
-
-/* Embed / read the label hierarchy (see MS_ATTR_HIERARCHY). ms_booster_get_hier
- * returns the raw TSV block or NULL; caller frees. */
-void  ms_booster_set_hier(BoosterHandle b, const char *tsv);
-char *ms_booster_get_hier(BoosterHandle b);
-
 /* Embed / read the feature column names (see MS_ATTR_FEATURES). The getter
  * returns a malloc'd array of malloc'd strings and sets *n_feat, or NULL when
  * the attribute is absent -- which is how a pre-2026-08 model is recognised.
@@ -67,6 +50,10 @@ char **ms_booster_get_features(BoosterHandle b, int *n_feat);
  * a malloc'd string or NULL when the attribute is absent. */
 void  ms_booster_set_binarize(BoosterHandle b, const char *how);
 char *ms_booster_get_binarize(BoosterHandle b);
+
+/* Embed the class labels (class-index order) into the booster's attributes.
+ * labels[] has num_class entries. Exits on XGBoost error. */
+void ms_booster_set_meta(BoosterHandle b, char *const *labels, int num_class);
 
 /* Marks a booster trained over the POOLED columns of EVERY set in its chain
  * (classify-train --pool-nodes): one model, no routing -- the tree's nodes

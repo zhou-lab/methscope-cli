@@ -23,10 +23,26 @@ pat=$(sed -n 's/^ *patterns *\([0-9]*\).*/\1/p' "$d/flat.txt" | head -1)
 [ -n "$pat" ] && [ "$pat" -ge 2 ] ||
   { echo "a separable 2-group reference yielded $pat patterns"; cat "$d/flat.txt"; exit 1; }
 
-## ---- 3. a tree build is a different shape from a flat one ----------------
-"$MS" mrmp-build "$d/ref.cg" "$d/tree.mrmp" >/dev/null 2>&1
-"$MS" inspect "$d/tree.mrmp" > "$d/tree.txt" 2>&1
-grep -q "MRMPIDX1" "$d/tree.txt" || { echo "tree build is not an MRMPIDX1 artifact"; exit 1; }
+## ---- 3. a bank build: the annealed split finds the two-level hierarchy of
+## ms_ref_bank and emits its binstring blocks plus one resolver per class
+## pair (C(6,2) = 15); --resolver-gate at the floor keeps only the pairs no
+## binstring separates. A build with neither mode refuses: the routing tree
+## is retired. ---------------------------------------------------------------
+ms_ref_bank "$d"
+"$MS" mrmp-build --bank --anneal-min-seg 100,5 --pattern-floor 1 --force \
+  "$d/bankref.cg" "$d/bank.mrmp" > "$d/bank.log" 2>&1 ||
+  { echo "bank build failed:"; cat "$d/bank.log"; exit 1; }
+"$MS" inspect "$d/bank.mrmp" > "$d/bank.txt" 2>&1
+grep -q "MRMPIDX1" "$d/bank.txt" || { echo "bank build is not an MRMPIDX1 artifact"; exit 1; }
+nset=$(sed -n 's/.*chain of \([0-9]*\) sets.*/\1/p' "$d/bank.txt" | head -1)
+[ "$nset" = "18" ] || { echo "bank-full on 6 classes should be 3 blocks + 15 resolvers = 18 sets, got '$nset'"; cat "$d/bank.txt"; exit 1; }
+"$MS" mrmp-build --bank --anneal-min-seg 100,5 --pattern-floor 1 --resolver-gate 1 --force \
+  "$d/bankref.cg" "$d/lite.mrmp" >/dev/null 2>&1
+nlite=$("$MS" inspect "$d/lite.mrmp" 2>&1 | sed -n 's/.*chain of \([0-9]*\) sets.*/\1/p' | head -1)
+[ -n "$nlite" ] && [ "$nlite" -lt "$nset" ] || { echo "bank-lite ($nlite sets) is not smaller than bank-full ($nset)"; exit 1; }
+if "$MS" mrmp-build "$d/bankref.cg" "$d/none.mrmp" >/dev/null 2>&1; then
+  echo "mrmp-build without --bank or --flat exited 0"; exit 1
+fi
 
 ## ---- 4. mrmp-export emits a runtime mask over the same row space ---------
 "$MS" mrmp-export "$d/flat.mrmp" "$d/flat.cm" >/dev/null 2>&1

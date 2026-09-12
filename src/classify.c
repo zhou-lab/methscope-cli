@@ -70,11 +70,6 @@ static int predict_usage(FILE *out) {
     "  --probs                 Append one predicted-probability column per class.\n"
     "                          This is unavailable for routing trees because each\n"
     "                          node scores a different class subset.\n"
-    "  --levels                Append the predicted label's full taxonomy path:\n"
-    "                          compartment, lineage, group, and subtype.\n"
-    "  --level NAME            Append one taxonomy level: compartment, lineage,\n"
-    "                          group, or subtype. Taxonomy options require a model\n"
-    "                          trained with `classify-train --hierarchy`.\n"
     "  --no-header             Suppress the output header.\n"
     "  --threads T             Featurize with T workers. Default: 1. Workers seek\n"
     "                          indexed query records; streams use the serial path.\n"
@@ -280,59 +275,6 @@ static void tree_score(tnode_t *nd, const uint16_t *beta, uint32_t ncol_all,
   free(data);
 }
 
-/* The four taxonomy levels, in the order --hierarchy's TSV lists them. */
-static const char *LEVEL_NAME[4] = {"compartment","lineage","group","subtype"};
-
-/* label -> its four levels, parsed from a booster's embedded --hierarchy TSV.
- * Keyed by label rather than class index, because a routed cell's call comes
- * from whichever node decided it and class ids are per node. A label the table
- * omits reports NA rather than an empty column. */
-typedef struct { char **lab; char **lvl; uint32_t n; } taxo_t;
-
-static void taxo_parse(taxo_t *tx, char *raw) {
-  memset(tx, 0, sizeof *tx);
-  uint32_t cap = 64;
-  tx->lab = calloc(cap, sizeof(char *));
-  tx->lvl = calloc((size_t)cap * 4, sizeof(char *));
-  if (!tx->lab || !tx->lvl) pdie("out of memory (hierarchy)", NULL);
-  char *save = NULL;
-  for (char *line = strtok_r(raw, "\n", &save); line;
-       line = strtok_r(NULL, "\n", &save)) {
-    char *f[5] = {0}; int nf = 0;
-    for (char *p2 = line; nf < 5; ) {
-      f[nf++] = p2;
-      char *t = strchr(p2, '\t');
-      if (!t) break;
-      *t = 0; p2 = t + 1;
-    }
-    if (nf < 5) continue;                 /* header or short row */
-    if (tx->n == cap) {
-      cap <<= 1;
-      tx->lab = realloc(tx->lab, cap * sizeof(char *));
-      tx->lvl = realloc(tx->lvl, (size_t)cap * 4 * sizeof(char *));
-      if (!tx->lab || !tx->lvl) pdie("out of memory (hierarchy)", NULL);
-    }
-    tx->lab[tx->n] = strdup(f[0]);
-    for (int j = 0; j < 4; ++j) tx->lvl[(size_t)tx->n * 4 + j] = strdup(f[j + 1]);
-    ++tx->n;
-  }
-}
-
-static const char *taxo_get(const taxo_t *tx, const char *label, int lvl) {
-  if (!label) return "NA";
-  for (uint32_t i = 0; i < tx->n; ++i)
-    if (!strcmp(tx->lab[i], label)) return tx->lvl[(size_t)i * 4 + lvl];
-  return "NA";
-}
-
-static void taxo_free(taxo_t *tx) {
-  for (uint32_t i = 0; i < tx->n; ++i) {
-    free(tx->lab[i]);
-    for (int j = 0; j < 4; ++j) free(tx->lvl[(size_t)i * 4 + j]);
-  }
-  free(tx->lab); free(tx->lvl);
-}
-
 /* The feature CODING, unlike the layout above, IS recorded: classify-train
  * writes it onto every node (bmeta.h, MS_ATTR_BINARIZE). Read it rather than
  * assume, because binarising does not change a node's column count, so
@@ -376,8 +318,7 @@ static int tree_binarize(const tnode_t *nd, uint32_t n, const char *bundle) {
 
 static int predict_tree(const char *query_cg, const char *bundle,
                         const char *data_path, unsigned threads,
-                        const char *out_path, int no_header,
-                        int with_levels, int lvl_col) {
+                        const char *out_path, int no_header) {
   ms_mrmpset_t *ch = ms_mrmpset_open(bundle);
   /* Satellites are feature providers, not nodes: they have no booster, no
    * children and no place in routing. Their columns reach a node through its
@@ -564,36 +505,17 @@ static int predict_tree(const char *query_cg, const char *bundle,
     if (!moved) break;
   }
 
-  /* Every node carries the same taxonomy (classify-train --hierarchy writes it
-   * to all of them), so the first one that has it answers for the tree. */
-  taxo_t tx; memset(&tx, 0, sizeof tx);
-  if (with_levels || lvl_col >= 0) {
-    char *raw = NULL;
-    for (uint32_t k = 0; k < n && !raw; ++k) raw = ms_booster_get_hier(nd[k].bst);
-    if (!raw)
-      pdie("model carries no hierarchy; retrain with "
-           "`classify-train --hierarchy`", bundle);
-    taxo_parse(&tx, raw);
-    free(raw);
-  }
 
   FILE *fo = out_path ? fopen(out_path, "w") : stdout;
   if (!fo) pdie("cannot open output", out_path);
   if (!no_header) {
-    fputs("cell\tprediction_label\tconfidence\tcertainty", fo);
-    if (with_levels)      for (int c = 0; c < 4; ++c) fprintf(fo, "\t%s", LEVEL_NAME[c]);
-    else if (lvl_col >= 0) fprintf(fo, "\t%s", LEVEL_NAME[lvl_col]);
-    fputc('\n', fo);
+    fputs("cell\tprediction_label\tconfidence\tcertainty\n", fo);
   }
   for (uint32_t r = 0; r < ncells; ++r) {
     fprintf(fo, "%s\t%s\t%.6f\t%.6f", cellname[r], lab[r] ? lab[r] : "NA",
             conf[r], cert[r]);
-    if (with_levels)
-      for (int c = 0; c < 4; ++c) fprintf(fo, "\t%s", taxo_get(&tx, lab[r], c));
-    else if (lvl_col >= 0) fprintf(fo, "\t%s", taxo_get(&tx, lab[r], lvl_col));
     fputc('\n', fo);
   }
-  taxo_free(&tx);
   if (fo != stdout) fclose(fo);
 
   for (uint32_t k = 0; k < n; ++k) { XGBoosterFree(nd[k].bst);
@@ -684,7 +606,6 @@ int main_predict(int argc, char *argv[]) {
   /* violation scored straight off a .mrmp: it is UNFITTED, a pure function of
    * the artifact and these three numbers, so transcribing it to a bundle first
    * stored nothing and made changing a parameter a rebuild. */
-  int with_levels = 0, lvl_col = -1;
   int fw_violation = 0, vio_min_patterns = 20;
   double vio_threshold = 0.5;
   const char *vio_weight = "sqrt";
@@ -710,14 +631,6 @@ int main_predict(int argc, char *argv[]) {
     else if (strcmp(argv[i], "--top") == 0 && i + 1 < argc)
       vio_top = (uint32_t)strtoul(argv[++i], NULL, 10);
     else if (strcmp(argv[i], "--probs") == 0) with_probs = 1;
-    else if (strcmp(argv[i], "--levels") == 0) with_levels = 1;
-    else if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) {
-      const char *want = argv[++i];
-      for (int c = 0; c < 4; ++c)
-        if (!strcmp(want, LEVEL_NAME[c])) lvl_col = c;
-      if (lvl_col < 0)
-        pdie("--level must be compartment, lineage, group or subtype", want);
-    }
     else if (strcmp(argv[i], "--no-header") == 0) no_header = 1;
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       return predict_usage(stdout);
@@ -808,7 +721,7 @@ int main_predict(int argc, char *argv[]) {
              "scores a different class subset, so there is no one distribution "
              "to report", model_name);
       int rc = predict_tree(query_cg, model_name, data_path, threads,
-                            out_path, no_header, with_levels, lvl_col);
+                            out_path, no_header);
       free(kind);
       return rc;
     }

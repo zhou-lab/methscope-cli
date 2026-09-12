@@ -3046,13 +3046,13 @@ int main_mrmp_build(int argc, char *argv[]) {
   g_cmd = "mrmp-build";
   if (argc == 1) { char *h[2]; h[0] = argv[0]; h[1] = (char *)"-h";
                    (void)main_mrmp_build(2, h); return 1; }
-  const char *pos[2] = {NULL, NULL}, *nodedir = NULL, *setname = "root";
+  const char *pos[2] = {NULL, NULL}, *setname = "root";
   const char *cal_labels = NULL;
-  int npos = 0, force = 0, dry = 0, have_fixed = 1, flat = 0;
-  uint32_t sat_n = 0;                /* --satellite-n; 0 = no satellites */
-  uint64_t relax_below = 0;          /* --relax-below; 0 = no thin-pair sats */
-  float relax_gap = 0.40f;           /* --relax-gap; the universal satellite
-                                      * selection gap (see tree_thin_pair) */
+  int npos = 0, force = 0, flat = 0;
+  const int dry = 0;                 /* the --dry-run mode is retired */
+  /* Satellites are retired with the routing trees: the bank's resolvers
+   * replaced them. The recursion still carries the parameters, pinned off. */
+  const uint32_t sat_n = 0; const uint64_t relax_below = 0; const float relax_gap = 0.40f;
   uint64_t min_seg = 20000; uint32_t max_depth = 16;
   ms_select_opt_t sel; ms_select_defaults(&sel);
   sel.quiet = 1;                     /* one line per node, not per selection */
@@ -3063,20 +3063,20 @@ int main_mrmp_build(int argc, char *argv[]) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       ms_help(stdout,
-        "Usage: methscope mrmp-build [options] REF.cg OUT.mrmp\n\n"
-        "Build a routing-tree MRMP from a labelled reference store. Each node\n"
-        "uses its own class subset. Rebuilding a child can admit CpGs that its\n"
-        "parent's wider class set excluded.\n\n"
+        "Usage: methscope mrmp-build --bank [options] REF.cg OUT.mrmp\n"
+        "       methscope mrmp-build --flat [options] REF.cg OUT.mrmp\n\n"
+        "Build an MRMP from a labelled reference store: one record per class,\n"
+        "record name = class name. --bank is the classifier artifact (the\n"
+        "release models); --flat is one set over every class, for upscale, the\n"
+        "violation rule and export. One of the two is required.\n\n"
         "Workflow\n"
-        "  methscope mrmp-build --dry-run REF.cg OUT.mrmp\n"
-        "  methscope mrmp-build REF.cg OUT.mrmp\n\n"
-        "Tree\n"
-        "  --min-segregating N   Split threshold in CpGs. Default: 20000. Classes\n"
-        "                        with <= N separating CpGs share a child. Keep\n"
-        "                        this absolute threshold fixed across the tree.\n"
+        "  methscope mrmp-build --bank --anneal-min-seg 10000,3000,1000 \\\n"
+        "      --cell-store CELLS.cg --cell-labels CELLS.tsv REF.cg OUT.mrmp\n"
+        "  methscope mrmp-build --flat REF.cg OUT.mrmp\n\n"
+        "Split discovery (the hierarchy behind a bank's binstring blocks)\n"
         "  --anneal-min-seg HI,LO[,STEP]\n"
-        "                        Anneal the split threshold PER NODE instead of\n"
-        "                        fixing it: try HI, and when nothing separates,\n"
+        "                        Anneal the split threshold PER NODE:\n"
+        "                        try HI, and when nothing separates,\n"
         "                        drop exactly to the first disconnection of the\n"
         "                        single-linkage graph (the largest threshold\n"
         "                        that splits anything -- the slowest possible\n"
@@ -3090,33 +3090,14 @@ int main_mrmp_build(int argc, char *argv[]) {
         "                        cascade of near-duplicate levels, and the\n"
         "                        recorded thresholds are round numbers. Every\n"
         "                        node records the threshold it used in its\n"
-        "                        header (inspect --tree shows it). Overrides\n"
-        "                        --min-segregating.\n"
-        "  --flat                Build one MRMP over all classes, without a tree.\n"
-        "  --max-depth N         Maximum tree depth. Default: 16.\n"
-        "  --dry-run             Report root pair counts and candidate splits.\n"
-        "                        Write nothing. Does not require a threshold.\n\n"
-        "Satellites\n"
-        "  --relax-below N       A 2-class pair node whose admitted pool is\n"
-        "                        under N CpGs gets one soft satellite over the\n"
-        "                        same pair, selected by shrunk-beta GAP order\n"
-        "                        (--relax-gap, default 0.40) instead of the\n"
-        "                        positional band -- coverage over purity, in\n"
-        "                        soft columns the booster can weigh. Measured:\n"
-        "                        the band cost Tnaive CD4/CD8 ~8x its evidence\n"
-        "                        (733 admitted vs 5,972 at gap 0.40), and the\n"
-        "                        gap-selected sign alone scored 87%% held-out.\n"
-        "                        Looser than ~0.35 re-couples selection to the\n"
-        "                        reference (train-test gap -29 at 0.30).\n"
-        "                        Default: 0 (off).\n"
-        "  --relax-gap G         The thin-pair satellite gap. Default: 0.40.\n"
-        "  --satellite-n N       At each leaf with 3+ classes, append two-class\n"
-        "                        MRMPs for every class's N nearest neighbours.\n"
-        "                        They add leaf features but do not route.\n"
-        "                        Default: 0 (off).\n\n"
-        "Bank (the two-type flat artifact; the release models)\n"
-        "  --bank [full|lite]    Emit a FLAT chain of exactly two feature\n"
-        "                        types and no routing. Type 1: each split\n"
+        "                        header (inspect --tree shows it). Required by\n"
+        "                        --bank; a fixed threshold is HI,HI.\n"
+        "  --max-depth N         Maximum split depth. Default: 16.\n"
+        "\n"
+        "Modes\n"
+        "  --flat                One set over every class, no hierarchy.\n"
+        "  --bank                The classifier artifact: a FLAT chain of two\n"
+        "                        feature types and no routing. Type 1: each split\n"
         "                        node's binstrings, pruned to patterns with\n"
         "                        >= --pattern-floor CpGs (tree-named for\n"
         "                        provenance only). Type 2: calibrated 2-class\n"
@@ -3127,7 +3108,7 @@ int main_mrmp_build(int argc, char *argv[]) {
         "                        Needs --anneal-min-seg and the calibration\n"
         "                        inputs. Featurize the result with\n"
         "                        --satellite-contrast replace and train with\n"
-        "                        classify-train --pool-nodes.\n"
+        "                        classify-train --data.\n"
         "  --pattern-floor N     Type-1 pattern floor. Default: 2000.\n"
         "  --resolver-gate N     A pair gets a resolver unless a type-1\n"
         "                        pattern with >= N CpGs separates it at the\n"
@@ -3157,8 +3138,7 @@ int main_mrmp_build(int argc, char *argv[]) {
         "Per-pair calibration\n"
         "  --cell-store F.cg     Per-cell fmt3 store (with F.cg.idx) holding\n"
         "                        the training cells. With --cell-labels, every\n"
-        "                        2-class set -- pair nodes, satellites, thin-\n"
-        "                        pair satellites -- gets its own\n"
+        "                        2-class resolver gets its own\n"
         "                        (shrink-pseudocnt, gap) by leave-one-cell-out:\n"
         "                        selection pools drop the held-out cell (no\n"
         "                        leak, and the inner pool depth matches the\n"
@@ -3179,13 +3159,6 @@ int main_mrmp_build(int argc, char *argv[]) {
         "Feature selection\n"
         "  --qfilter LO,HI       Keep CpGs where every 0-class <= LO and every\n"
         "                        1-class >= HI.\n"
-        "  --min-sbeta-gap G     Replace the band with a minimum SHRUNK-beta gap:\n"
-        "                        lowest 1-class minus highest 0-class >= G. The\n"
-        "                        band's absolute anchors made sense for\n"
-        "                        0.5-binarized features; rank contrasts are\n"
-        "                        shift-invariant, so only the gap matters.\n"
-        "                        Same statistic deconv rescue tests as\n"
-        "                        --rescue-gap.\n"
         "  --delta-mean-top N    Keep at most N CpGs per binstring, ranked by\n"
         "                        mean class gap. Default: 20000; 0 keeps all.\n"
         "  --shrink-pseudocnt A  Shrink the per-class beta to (M+A)/(M+U+2A)\n"
@@ -3216,13 +3189,9 @@ int main_mrmp_build(int argc, char *argv[]) {
         "  --include-all-1       Keep all-methylated patterns.\n\n"
         "Output\n"
         "  --name NAME           Root name. Default: root.\n"
-        "  --node-dir DIR        Also write each node as DIR/<node>.mrmp.\n"
         "  --force               Overwrite OUT.mrmp.\n\n"
-        "Inspect the completed tree with: inspect --tree OUT.mrmp\n");
+        "Inspect the result with: inspect --tree OUT.mrmp\n");
       return 0;
-    }
-    else if (!strcmp(a, "--min-segregating") && i + 1 < argc) {
-      min_seg = parse_u64(argv[++i], a); have_fixed = 1;
     }
     else if (!strcmp(a, "--bank")) {
       g_bank = 1;
@@ -3238,12 +3207,6 @@ int main_mrmp_build(int argc, char *argv[]) {
       g_pattern_floor = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--resolver-gate") && i + 1 < argc)
       g_resolver_gate = strtoll(argv[++i], NULL, 10);
-    else if (!strcmp(a, "--resolver-quantile") && i + 1 < argc) {
-      /* retired: the gate subsumes it; accept and ignore with a note so
-       * older scripts keep working */
-      fprintf(stderr, "[methscope] mrmp-build: --resolver-quantile is "
-              "retired; use --resolver-gate (ignoring %s)\n", argv[++i]);
-    }
     else if (!strcmp(a, "--resolver-cache") && i + 1 < argc)
       g_resolver_cache = argv[++i];
     else if (!strcmp(a, "--resolver-stride") && i + 1 < argc) {
@@ -3262,19 +3225,11 @@ int main_mrmp_build(int argc, char *argv[]) {
       if (end && *end == ',') g_anneal_step = strtoull(end + 1, NULL, 10);
       if (!g_anneal_hi || g_anneal_lo > g_anneal_hi)
         die("--anneal-min-seg needs HI >= LO and HI > 0", v);
-      have_fixed = 1;
     }
-    else if (!strcmp(a, "--dry-run")) dry = 1;
     /* One MRMP over every class, no routing. What mrmp-build meant before it
      * became the tree builder, kept because a flat global is still the right
      * artifact for deconvolution and for a reference too shallow to split. */
     else if (!strcmp(a, "--flat")) flat = 1;
-    else if (!strcmp(a, "--relax-below") && i + 1 < argc)
-      relax_below = parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--relax-gap") && i + 1 < argc)
-      relax_gap = (float)atof(argv[++i]);
-    else if (!strcmp(a, "--satellite-n") && i + 1 < argc)
-      sat_n = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--cell-store") && i + 1 < argc)
       g_cal_store = argv[++i];
     else if (!strcmp(a, "--cell-labels") && i + 1 < argc)
@@ -3298,8 +3253,6 @@ int main_mrmp_build(int argc, char *argv[]) {
       sel.max_frac_na = (float)atof(argv[++i]);
     else if (!strcmp(a, "--min-cg-depth") && i + 1 < argc)
       sel.min_cg_depth = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--min-sbeta-gap") && i + 1 < argc)
-      sel.min_sbeta_gap = (float)atof(argv[++i]);
     else if (!strcmp(a, "--shrink-pseudocnt") && i + 1 < argc)
       sel.shrink_pseudocnt = (float)atof(argv[++i]);
     else if (!strcmp(a, "--include-all-0")) sel.inc_all0 = 1;
@@ -3308,7 +3261,6 @@ int main_mrmp_build(int argc, char *argv[]) {
       max_depth = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--mincov") && i + 1 < argc)
       gh.mincov = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--node-dir") && i + 1 < argc) nodedir = argv[++i];
     else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc) {
       sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a);
     }
@@ -3340,9 +3292,6 @@ int main_mrmp_build(int argc, char *argv[]) {
               "--cell-store: resolver pairs keep the DEFAULT selection "
               "(shrunk 0.30/0.70 band), uncalibrated -- the bulk-reference "
               "mode. Give per-cell data when you have it.\n");
-    if (sat_n || relax_below)
-      die("--bank replaces satellites; drop --satellite-n/--relax-below",
-          NULL);
     if (g_resolver_gate == 0) g_resolver_gate = (int64_t)g_pattern_floor;
     if (g_stride_n && !g_resolver_cache)
       die("--resolver-stride only populates a cache; give --resolver-cache",
@@ -3358,9 +3307,9 @@ int main_mrmp_build(int argc, char *argv[]) {
      * Only the EMITTED type-1 block is pruned -- tree_build rebuilds a
      * confirmed split node with the floor active just for its image. */
   }
-  /* 20,000 is the current default; --dry-run uses zero only to report the
-   * root distribution without committing to a split threshold. */
-  if (dry && !have_fixed) min_seg = 0;
+  if (!g_bank && !flat)
+    die("mrmp-build builds a --bank (classifiers) or a --flat set (upscale, "
+        "the violation rule, export); the routing tree is retired", NULL);
   if (flat && g_anneal_hi)
     die("--flat and --anneal-min-seg contradict each other", NULL);
   if (flat) min_seg = UINT64_MAX;   /* nothing can split */
@@ -3504,40 +3453,6 @@ int main_mrmp_build(int argc, char *argv[]) {
   /* Also one file per node. A block is a byte-identical standalone MRMPIDX1, so
    * this needs no re-encode -- and it is what lets classify-featurize /
    * classify-train drive the tree per node with no new subcommand. */
-  if (nodedir) for (uint32_t k = 0; k < t.n; ++k) {
-    char pth[PATH_MAX];
-    if (snprintf(pth, sizeof pth, "%s/%s.mrmp", nodedir, t.name[k]) >= (int)sizeof pth)
-      die("node path too long", t.name[k]);
-    FILE *nf = fopen(pth, "wb");
-    if (!nf) die("cannot write node artifact", pth);
-    if (fwrite(t.img[k], 1, (size_t)t.len[k], nf) != t.len[k])
-      die("short write on node artifact", pth);
-    fclose(nf);
-  }
-  /* The manifest is what a driver reads: which classes a node covers, and hence
-   * which child a parent's call routes to. Parent is the name minus the last
-   * dotted component, so the tree reconstructs from this file alone. */
-  if (nodedir) {
-    char pth[PATH_MAX];
-    if (snprintf(pth, sizeof pth, "%s/nodes.tsv", nodedir) >= (int)sizeof pth)
-      die("node directory path too long", nodedir);
-    FILE *nf = fopen(pth, "w");
-    if (!nf) die("cannot write node manifest", pth);
-    fprintf(nf, "node\tparent\tn_class\tn_pattern\tclasses\n");
-    for (uint32_t k = 0; k < t.n; ++k) {
-      const mrmp_header_t *h = (const mrmp_header_t *)t.img[k];
-      const char *dot = strrchr(t.name[k], '.');
-      fprintf(nf, "%s\t%.*s\t%u\t%" PRIu64 "\t", t.name[k],
-              dot ? (int)(dot - t.name[k]) : 2, dot ? t.name[k] : "NA",
-              h->n_samples, h->n_candidates);
-      const char *nm = (const char *)t.img[k] + h->names_offset;
-      for (uint32_t j = 0; j < h->n_samples; ++j) {
-        fprintf(nf, "%s%s", j ? "," : "", nm); nm += strlen(nm) + 1;
-      }
-      fputc('\n', nf);
-    }
-    fclose(nf);
-  }
   { char b1[32]; uint64_t tot = 0;
     for (uint32_t k = 0; k < t.n; ++k) tot += t.len[k];
     fprintf(stderr, "  %u node(s), %s bytes -> %s\n", t.n,

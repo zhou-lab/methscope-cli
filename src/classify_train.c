@@ -206,12 +206,6 @@ static int train_usage(FILE *out) {
     "                   positional, and labels come from the artifact unless -l is\n"
     "                   given. Featurization is single-threaded, so this is how to\n"
     "                   train repeatedly on the same cells without repeating it.\n"
-    "  --hierarchy TSV  Embed a label taxonomy (label, compartment, lineage,\n"
-    "                   group, subtype) in EVERY node of the tree, so `classify\n"
-    "                   --levels` / `--level NAME` can read it back from whichever\n"
-    "                   node made the call. An external cohort labelled only\n"
-    "                   coarsely can then be scored at the level both sides\n"
-    "                   resolve.\n"
     "  -h               Show this help message.\n"
     "\n");
   return out == stdout ? 0 : 1;
@@ -271,34 +265,16 @@ static BoosterHandle train_one(const float *X, const float *y, uint32_t nrow,
   return b;
 }
 
-/* Read a whole file into a NUL-terminated buffer (small metadata only). */
-static char *slurp_file(const char *path, const char *what) {
-  FILE *f = fopen(path, "r");
-  if (!f) tdie(what, path);
-  size_t cap = 1 << 16, n = 0;
-  char *buf = malloc(cap);
-  if (!buf) tdie("out of memory", NULL);
-  size_t got;
-  while ((got = fread(buf + n, 1, cap - n - 1, f)) > 0) {
-    n += got;
-    if (n + 1 >= cap) { cap <<= 1; buf = realloc(buf, cap);
-                        if (!buf) tdie("out of memory", NULL); }
-  }
-  buf[n] = 0; fclose(f);
-  return buf;
-}
 
 int main_train_tree(int argc, char *argv[]) {
-  const char *data_path = NULL, *out = NULL, *hier_path = NULL;
+  const char *data_path = NULL, *out = NULL;
   const char *keep_path = NULL;
-  int nrounds = 0, nthread = 0, pool_nodes = 0;
+  int nrounds = 0, nthread = 0;
   tune_t tn = {0, 0, 0.0};
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "--data") && i + 1 < argc) data_path = argv[++i];
-    else if (!strcmp(a, "--pool-nodes")) pool_nodes = 1;
     else if (!strcmp(a, "--keep-columns") && i + 1 < argc) keep_path = argv[++i];
-    else if (!strcmp(a, "--hierarchy") && i + 1 < argc) hier_path = argv[++i];
     else if (!strcmp(a, "--max-depth") && i + 1 < argc) tn.max_depth = atoi(argv[++i]);
     else if (!strcmp(a, "--min-child-weight") && i + 1 < argc) tn.min_child = atoi(argv[++i]);
     else if (!strcmp(a, "--colsample") && i + 1 < argc) tn.colsample = atof(argv[++i]);
@@ -307,7 +283,7 @@ int main_train_tree(int argc, char *argv[]) {
              && i + 1 < argc) ++i;
     else if (!strcmp(a, "--framework") && i + 1 < argc) {
       if (strcmp(argv[++i], "xgboost"))
-        tdie("only --framework xgboost trains per node; the others take a .mrmp "
+        tdie("only --framework xgboost trains from a .msfm; the others take a .mrmp "
              "and are unfitted, so they stay on the flat path", argv[i]);
     }
     else if (!strcmp(a, "-o") && i + 1 < argc) out = argv[++i];
@@ -315,37 +291,17 @@ int main_train_tree(int argc, char *argv[]) {
     else if (!strcmp(a, "--threads") && i + 1 < argc) nthread = atoi(argv[++i]);
     else if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       ms_help(stderr,
-        "Usage: methscope classify-train-tree --data TRAIN.msfm -o TREE.clfx\n\n"
-        "  Trains one model per node of a routing tree and writes them, with the\n"
-        "  chain, as a single scorable bundle.\n\n"
-        "  The chain comes from the .msfm, which carries the MRMP it was\n"
-        "  featurized against -- so there is no second argument to mismatch. A\n"
-        "  node is its\n"
-        "  rows (samples labelled with one of its classes) by its columns (from\n"
-        "  the chain's layout), so nothing is subset on disk and every node sees\n"
-        "  the same coverage draw.\n\n"
-        "  -n N        boosting rounds per node (default round(sqrt(rows)))\n"
-        "  --pool-nodes  SOFT ROUTING: train ONE booster over the pooled\n"
-        "              columns of EVERY set in the chain instead of one model\n"
-        "              per node. The tree is then a feature generator -- each\n"
-        "              node's subset rebuild and each calibrated pair still\n"
-        "              contribute their columns -- but no cell is ever\n"
-        "              committed at an internal node, so there are no\n"
-        "              compounding early routing mistakes. Class list and\n"
-        "              order come from the root set. `classify` detects the\n"
-        "              pooled bundle by its booster attribute and feeds the\n"
-        "              full layout width, no routing. Pooled training\n"
-        "              defaults to a constrained booster (--max-depth 4,\n"
-        "              --colsample 0.4): bank columns are selected on the\n"
-        "              training pools, and an unconstrained booster\n"
-        "              memorizes their optimism (give the flags explicitly\n"
-        "              to override).\n"
+        "Usage: methscope classify-train --data TRAIN.msfm -o MODEL.clfx\n\n"
+        "  Trains ONE pooled booster over every column of the bank chain the\n"
+        "  .msfm was featurized against, and writes it with the chain as a\n"
+        "  single scorable bundle. Class list and order come from the root set.\n"
+        "  Defaults to a constrained booster (--max-depth 4, --colsample 0.4):\n"
+        "  bank columns are selected on the training pools, and an unconstrained\n"
+        "  booster memorizes their optimism (give the flags to override).\n\n"
+        "  -n N        boosting rounds (default round(sqrt(rows)))\n"
         "  --threads T thread pool\n"
-        "  --hierarchy TSV  embed a label taxonomy (label, compartment, lineage,\n"
-        "              group, subtype) in EVERY node, so `classify --levels`\n"
-        "              can read it back from whichever node made the call\n"
         "\n"
-        "  Score the result with: methscope classify TREE.clfx query.cg\n");
+        "  Score the result with: methscope classify MODEL.clfx query.cg\n");
       return 0;
     }
     else if (a[0] == '-') tdie("unrecognized or incomplete option", a);
@@ -362,10 +318,8 @@ int main_train_tree(int argc, char *argv[]) {
    * to spread trust across redundant contrasts; measured fold-0 this lifts
    * every human rung (native 0.9338 -> 0.9592) and is neutral on the mouse
    * 41-class. Explicit --max-depth / --colsample still override. */
-  if (pool_nodes) {
-    if (tn.max_depth == 0) tn.max_depth = 4;
-    if (tn.colsample == 0.0) tn.colsample = 0.4;
-  }
+  if (tn.max_depth == 0) tn.max_depth = 4;
+  if (tn.colsample == 0.0) tn.colsample = 0.4;
   /* The matrix carries the chain it was featurized against, so there is no
    * second argument to get wrong: a mismatched pairing is not expressible. */
   char *chain = ms_msfm_chain(data_path);
@@ -421,14 +375,12 @@ int main_train_tree(int argc, char *argv[]) {
    * this on, and `classify` reads it back from whichever node made the call,
    * so the taxonomy has to travel with all of them -- the same reason the
    * class-label list is set per node. */
-  char *hier_buf = hier_path ? slurp_file(hier_path, "cannot open --hierarchy")
-                             : NULL;
 
   fprintf(stderr, "\n[methscope] classify-train\n\n");
   fprintf(stderr, "  %-12s %d records x %d columns, %u node(s)", "data",
           m->n_cells, m->n_patterns, n);
   if (nsat) fprintf(stderr, " + %u satellite(s)", nsat);
-  if (pool_nodes) fprintf(stderr, ", POOLED into one booster");
+  fprintf(stderr, ", one pooled booster");
   fputc('\n', stderr);
   { /* column provenance: how much of the feature space each origin
      * contributes. Sparse-coverage behaviour tracks the per-column CpG
@@ -451,7 +403,7 @@ int main_train_tree(int argc, char *argv[]) {
             "%u satellite\n", "columns", c_node, c_pair, c_sat);
   }
 
-  if (pool_nodes) {
+  {
     /* SOFT ROUTING: one booster over the full layout width. The class list
      * and its order come from the ROOT (the hard set without a parent),
      * which covers every class by construction; rows are every labelled
@@ -461,7 +413,7 @@ int main_train_tree(int argc, char *argv[]) {
     for (uint32_t i = 0; i < n; ++i)
       if (!strchr(ch->name[nodeof[i]], '.')) {
         if (rk != UINT32_MAX)
-          tdie("two root-level sets; --pool-nodes needs exactly one root",
+          tdie("two root-level sets; a bank chain has exactly one root",
                ch->name[nodeof[i]]);
         rk = nodeof[i];
       }
@@ -521,7 +473,6 @@ int main_train_tree(int argc, char *argv[]) {
     BoosterHandle b = train_one(X, y, nr, ncol, (int)t->n_samples, nrd,
                                 nthread, &tn, ch->name[rk]);
     ms_booster_set_meta(b, t->labels, (int)t->n_samples);
-    if (hier_buf) ms_booster_set_hier(b, hier_buf);
     if (flags & MSFM_FLAG_BIN_FLAT)     ms_booster_set_binarize(b, "0.5");
     else if (flags & MSFM_FLAG_BIN_PAT) ms_booster_set_binarize(b, "pattern");
     if (keep) {
@@ -559,87 +510,13 @@ int main_train_tree(int argc, char *argv[]) {
     fprintf(stderr, "  %-12s methscope classify %s query.cg\n", "score with",
             out);
     free(blob); free(X); free(row); free(y); free(keep);
-    ms_mrmp_top_free(t); free(hier_buf); free(nodeof);
+    ms_mrmp_top_free(t); free(nodeof);
     ms_msfm_layout_free(lay); ms_mrmpset_free(ch);
     unlink(chain); free(chain);
     return 0;
   }
 
-  void **bl = calloc(n, sizeof(void *));
-  uint64_t *bn = calloc(n, sizeof(uint64_t));
-  char **nm = calloc(n, sizeof(char *));
-  if (!bl || !bn || !nm) tdie("out of memory", NULL);
-
-  for (uint32_t i = 0; i < n; ++i) {
-    const uint32_t k = nodeof[i];
-    mrmp_top_t *t = ms_mrmp_top_read_at(chain, ch->block_off[k], 1);
-    nm[i] = strdup(ch->name[k]);
-    /* rows: samples whose label is one of THIS node's classes. The class order
-     * is the block's, so the booster's class ids line up with the chain. */
-    uint32_t *row = malloc((size_t)m->n_cells * sizeof(uint32_t));
-    float *y = malloc((size_t)m->n_cells * sizeof(float));
-    if (!row || !y) tdie("out of memory", NULL);
-    uint32_t nr = 0;
-    for (int r = 0; r < m->n_cells; ++r)
-      for (uint32_t c = 0; c < t->n_samples; ++c)
-        if (!strcmp(row_lab[r], t->labels[c])) { row[nr] = (uint32_t)r; y[nr++] = (float)c; break; }
-    if (!nr) tdie("no training rows for a node's classes", nm[i]);
-    /* the node's own slice plus each satellite's -- NOT contiguous */
-    ms_colspan_t *cs = ms_msfm_colspan(lay, nm[i]);
-    if (!cs) tdie("no layout for this node", nm[i]);
-    uint32_t ncol = cs->total;
-    float *X = malloc((size_t)nr * ncol * sizeof(float));
-    if (!X) tdie("out of memory", NULL);
-    for (uint32_t r = 0; r < nr; ++r) {
-      uint32_t c = 0;
-      for (uint32_t g = 0; g < cs->n_seg; ++g)
-        for (uint32_t j = 0; j < cs->ncol[g]; ++j, ++c)
-          X[(size_t)r * ncol + c] =
-            (float)m->M[(size_t)row[r] * m->n_patterns + cs->col0[g] + j];
-    }
-    int nrd = nrounds > 0 ? nrounds : (int)(sqrt((double)nr) + 0.5);
-    if (nrd < 1) nrd = 1;
-    BoosterHandle b = train_one(X, y, nr, ncol, (int)t->n_samples, nrd,
-                                nthread, &tn, nm[i]);
-    ms_booster_set_meta(b, t->labels, (int)t->n_samples);
-    if (hier_buf) ms_booster_set_hier(b, hier_buf);
-    if (flags & MSFM_FLAG_BIN_FLAT)     ms_booster_set_binarize(b, "0.5");
-    else if (flags & MSFM_FLAG_BIN_PAT) ms_booster_set_binarize(b, "pattern");
-    {  /* the exact columns, by name -- classify selects by LAYOUT, but the
-        * names keep a node's model self-describing if it is pulled out */
-      char **fn = malloc((size_t)ncol * sizeof(char *));
-      uint32_t c = 0;
-      for (uint32_t g = 0; g < cs->n_seg; ++g)
-        for (uint32_t j = 0; j < cs->ncol[g]; ++j)
-          fn[c++] = m->pattern_names[cs->col0[g] + j];
-      ms_booster_set_features(b, fn, (int)ncol);
-      free(fn);
-    }
-    { char tmp[4096];
-      const char *td = getenv("TMPDIR");
-      snprintf(tmp, sizeof tmp, "%s/methscope_tree_XXXXXX.ubj",
-               td && *td ? td : "/tmp");
-      int fd = mkstemps(tmp, 4);
-      if (fd < 0) tdie("cannot create temporary model", tmp);
-      close(fd);
-      XGCHK(XGBoosterSaveModel(b, tmp));
-      FILE *f = fopen(tmp, "rb");
-      if (!f) tdie("cannot read temporary model", tmp);
-      fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
-      bl[i] = malloc((size_t)sz); bn[i] = (uint64_t)sz;
-      if (!bl[i] || fread(bl[i], 1, (size_t)sz, f) != (size_t)sz)
-        tdie("short read on temporary model", tmp);
-      fclose(f); unlink(tmp); }
-    XGBoosterFree(b);
-    free(X); free(row); free(y); ms_colspan_free(cs);
-    ms_mrmp_top_free(t);
-  }
-  free(hier_buf);
-  ms_bundle_pack_tree(out, chain, n, nm, bl, bn);
-  fprintf(stderr, "\n  %-12s %u node(s) + the chain -> %s\n", "wrote", n, out);
-  fprintf(stderr, "  %-12s methscope classify %s query.cg\n", "score with", out);
-  for (uint32_t k = 0; k < n; ++k) { free(nm[k]); free(bl[k]); }
-  free(nm); free(bl); free(bn); free(nodeof);
+  free(nodeof);
   ms_msfm_layout_free(lay); ms_mrmpset_free(ch);
   unlink(chain); free(chain);
   return 0;
@@ -673,7 +550,7 @@ int main_train(int argc, char *argv[]) {
   }
 
   const char *labels_path = NULL, *out_path = NULL, *framework = "xgboost";
-  const char *data_path = NULL, *hier_path = NULL;
+  const char *data_path = NULL;
   int npattern = 0, nrounds = 0;
   int nthread = 0;                    /* 0 = derive; see ms_train_threads() */
   int eval_every = -1;                /* -1 = auto (nrounds/20); 0 = off */
@@ -701,7 +578,6 @@ int main_train(int argc, char *argv[]) {
      * path went away -- without --data it dies below, and with --data every
      * xgboost run goes to the tree, which never parses it. Kept so the error
      * names the flag instead of "unrecognized option". */
-    else if (strcmp(argv[i], "--hierarchy") == 0 && i+1 < argc) hier_path = argv[++i];
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out_path    = argv[++i];
     else if (strcmp(argv[i], "-p") == 0 && i+1 < argc)
       npattern = parse_nonneg_int(argv[++i], "-p expects a non-negative integer");
@@ -1045,11 +921,6 @@ int main_train(int argc, char *argv[]) {
       for (int c = 0; c < npattern; ++c) fn[c] = m->pattern_names[c];
       ms_booster_set_features(booster, fn, npattern);
       free(fn);
-    }
-    if (hier_path) {                    /* travel with the model, not beside it */
-      char *buf = slurp_file(hier_path, "cannot open --hierarchy");
-      ms_booster_set_hier(booster, buf);
-      free(buf);
     }
     if (bundled) {
       char tmpl[4096];

@@ -288,12 +288,6 @@ static int bundle_usage(FILE *out) {
     "                  CpGs the model imputes. With it, `upscale` writes a full-genome\n"
     "                  .cg; without it, a dense block .cg.\n"
     "  -o <out>        output bundle path (required).\n"
-    "  --tree          bundle a routing TREE: -m is the mrmp CHAIN and the\n"
-    "                  positional arguments are the per-node .clfx files, in\n"
-    "                  any order. Each is matched to a chain set BY NAME, and\n"
-    "                  only its booster is taken -- node->classes comes from\n"
-    "                  the chain, so nothing is duplicated. Scored with\n"
-    "                  `classify tree.clfx query.cg`.\n"
     "  -h              Show this help message.\n"
     "\n");
   return out == stdout ? 0 : 1;
@@ -427,15 +421,12 @@ int ms_path_is_bundle_ext(const char *path) {
 
 int main_bundle(int argc, char *argv[]) {
   const char *mrmp = NULL, *out = NULL, *outcpg = NULL, *kind = NULL;
-  int tree = 0, n_inner = 0;
-  char **inner_list = NULL;
   int i = 1;
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-m") == 0 && i+1 < argc) mrmp   = argv[++i];
     else if (strcmp(argv[i], "-k") == 0 && i+1 < argc) kind   = argv[++i];
     else if (strcmp(argv[i], "-O") == 0 && i+1 < argc) outcpg = argv[++i];
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out    = argv[++i];
-    else if (strcmp(argv[i], "--tree") == 0) tree = 1;
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       return bundle_usage(stdout);
     }
@@ -444,53 +435,10 @@ int main_bundle(int argc, char *argv[]) {
     else break;
   }
   if (!mrmp || !out) return bundle_usage(stderr);
-  if (tree) { inner_list = argv + i; n_inner = argc - i; }
-  if (!tree && argc - i != 1) return bundle_usage(stderr);
-  const char *model = tree ? NULL : argv[i];
-
-  /* -l: embed labels into the (raw) booster first, then bundle the annotated copy. */
+  if (argc - i != 1) return bundle_usage(stderr);
+  const char *model = argv[i];
   const char *inner = model;
-  if (tree && (outcpg || kind))
-    bdie("--tree takes only -m and -o; the kind mark is 'tree' and per-node "
-         "labels already travel inside each booster", out);
 
-  if (tree) {
-    /* Match each per-node .clfx to a chain block BY NAME rather than by
-     * position: a mismatched order would otherwise pair a node's booster with
-     * another node's columns and score confidently on the wrong features. */
-    ms_mrmpset_t *ch = ms_mrmpset_open(mrmp);
-    /* Satellites carry no booster -- they widen a node's evidence, they do not
-     * decide anything -- so they are skipped here rather than demanded. */
-    uint32_t n = 0;
-    for (uint32_t s2 = 0; s2 < ch->n_sets; ++s2)
-      if (!ms_set_is_satellite(ch->name[s2])) ++n;
-    char **nm = calloc(n, sizeof(char *));
-    void **bl = calloc(n, sizeof(void *));
-    uint64_t *bn = calloc(n, sizeof(uint64_t));
-    if (!nm || !bl || !bn) bdie("out of memory", "tree bundle");
-    for (uint32_t s3 = 0, s2 = 0; s3 < ch->n_sets; ++s3) {
-      if (ms_set_is_satellite(ch->name[s3])) continue;
-      nm[s2] = strdup(ch->name[s3]);
-      for (int a = 0; a < n_inner; ++a) {
-        ms_mrmpset_t *one = ms_mrmpset_open(inner_list[a]);
-        int hit = one->n_sets == 1 && !strcmp(one->name[0], nm[s2]);
-        ms_mrmpset_free(one);
-        if (!hit) continue;
-        size_t bl2;
-        bl[s2] = ms_bundle_section(inner_list[a], "model", &bl2);
-        bn[s2] = bl2;
-        break;
-      }
-      if (!bl[s2]) bdie("no per-node model supplied for chain set", nm[s2]);
-      ++s2;
-    }
-    ms_bundle_pack_tree(out, mrmp, n, nm, bl, bn);
-    fprintf(stderr, "[methscope] bundle: tree of %u node(s) -> %s\n", n, out);
-    for (uint32_t s2 = 0; s2 < n; ++s2) { free(nm[s2]); free(bl[s2]); }
-    free(nm); free(bl); free(bn);
-    ms_mrmpset_free(ch);
-    return 0;
-  }
   ms_bundle_pack(out, kind, inner, mrmp, outcpg);   /* kind mark (NULL = omit) */
   if (outcpg)
     fprintf(stderr, "[methscope] bundled %s + %s + %s -> %s\n", model, mrmp, outcpg, out);
