@@ -60,7 +60,7 @@ OBJ += $(CUDA_OBJ)
 DEPFLAGS = -MMD -MP
 DEP = $(SRC:.c=.d)
 
-.PHONY: all clean clean-all dist yame-lib check-xgb check-updec2 test force-link
+.PHONY: all clean clean-all dist yame-lib check-xgb check-updec2 test test-docs force-link registry docs
 
 all: $(PROG)
 
@@ -73,6 +73,32 @@ check-updec2: $(PROG)
 ## YAME_DATA_HOME is unset.
 test: $(PROG) yame-lib
 	MS=./$(PROG) YAME=$(YAME_DIR)/yame XGB_PREFIX=$(XGB_PREFIX) bash test/run.sh
+	$(PYTHON) docs/build_models.py --check
+	$(PYTHON) docs/build_examples.py --check
+
+## The model table on the docs Models tab, generated from the submodule's
+## YAME/data/assets.tsv (one row per model, compiled into every tool) plus the
+## registry for tag and size. A model is described once, there; the page is a
+## projection of it. `docs/build_models.py --check` says whether the committed
+## page is behind the TSV, and `make test` runs that check.
+docs: $(PROG)
+	$(PYTHON) docs/build_models.py
+	$(PYTHON) docs/build_examples.py
+
+## The documented-workflow gate: runs every runnable docs/examples/*.sh on this
+## checkout's binary, as a reader would. Needs the network ONCE (the sandbox
+## persists and later runs only re-verify digests) and ~1.6 GB of memory, so
+## it is deliberately not part of `make test` and never runs in CI or a conda
+## build. On the HPC run it under sbatch (release SOP step 4).
+test-docs: $(PROG) yame-lib
+	$(PYTHON) test/docs_gate.py
+
+## The compiled catalogue behind `methscope fetch`. Projected from the
+## submodule's tools/registry/ at the pinned tag, so it is regenerated -- and
+## committed -- with every submodule bump; a bumped submodule with a stale
+## registry.h silently pins the previous model tag. `--version` prints the tag.
+registry:
+	$(YAME_DIR)/tools/make_registry.sh --tool=methscope -o src/registry.h
 
 # Always (incrementally) rebuild libyame.a from the pinned submodule so the
 # static lib can never go stale relative to the checked-out YAME source.

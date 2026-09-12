@@ -119,6 +119,11 @@
   .card:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));transform:translateY(-2px)}
   .card h2{font-size:.97rem;margin:0 0 6px;letter-spacing:-.01em}
   .card h2 .m{color:var(--muted);font-weight:400;font-size:.79rem}
+  /* reference tables on the Models tab */
+  .card table{border-collapse:collapse;width:100%;font-size:.84rem;margin:6px 0 10px}
+  .card th,.card td{text-align:left;vertical-align:top;padding:4px 8px 4px 0;border-bottom:1px solid var(--line)}
+  .card th{color:var(--muted);font-weight:600}
+  .card td code,.card th code{font-size:.8rem}
   .card h3{font-size:.8rem;margin:13px 0 6px;color:var(--fg);font-weight:700}
   .card p{margin:0 0 9px;color:var(--muted);font-size:.83rem;line-height:1.5}
   .card p b,.card p i{color:var(--fg)}
@@ -250,6 +255,8 @@
     aria-controls="panel-deconv" aria-selected="false">Deconvolve</button>
   <button class="tab" type="button" role="tab" id="tab-upscale" tabindex="-1"
     aria-controls="panel-upscale" aria-selected="false">Upscale</button>
+  <button class="tab" type="button" role="tab" id="tab-models" tabindex="-1"
+    aria-controls="panel-models" aria-selected="false">Models</button>
 </nav>
 
 <div class="panel" id="panel-setup" role="tabpanel" aria-labelledby="tab-setup">
@@ -260,7 +267,8 @@
   <p>Every model is one self-contained bundle carrying its own MRMP feature definition (and
     labels), so a query <code class="inl">.cg</code> runs directly — no separate annotation
     files.</p>
-  <pre data-norun="installs packages, run it yourself"><code><span class="cm"># conda — installs the `methscope` binary</span>
+  <!-- example:10_install -->
+<pre data-norun="installs packages, run it yourself"><code><span class="cm"># conda — installs the `methscope` binary</span>
 conda install -c zhou-lab -c conda-forge methscope
 
 <span class="cm"># optional, linux-64 only: adds a `methscope-cuda` binary with the CUDA</span>
@@ -274,24 +282,24 @@ conda install -c zhou-lab -c conda-forge methscope-cuda
 conda create -n methscope -c conda-forge libxgboost
 conda activate methscope
 git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli
-cd methscope-cli &amp;&amp; make          <span class="cm"># add CUDA=1 for the training backend</span>
-
-<span class="cm"># install yame to fetch prebuilt model and test data</span>
-conda install -c zhou-lab -c conda-forge yame</code></pre>
+cd methscope-cli &amp;&amp; make          <span class="cm"># add CUDA=1 for the training backend</span></code></pre>
+<!-- /example -->
 </section>
 
 <section class="card">
   <h2>Fetching data &amp; models <span class="m">— digest-checked, container-safe</span></h2>
-  <p>Data and models are fetched with <code class="inl">yame fetch</code>; each workflow below
+  <p>Data and models are fetched with <code class="inl">methscope fetch</code>; each workflow below
     opens by fetching just the file it needs into the working directory
-    (<code class="inl">yame fetch -c</code>, digest-checked). It never prompts, so it is safe
-    inside a container build.</p>
+    (<code class="inl">methscope fetch -c</code>, digest-checked). It never prompts, so it is safe
+    inside a container build. The catalogue and the model tag are compiled into this binary
+    (<code class="inl">methscope --version</code> prints both), so what a release documents is
+    exactly what it fetches; no other tool needs to be installed.</p>
   <p class="note"><b>Atomic downloads.</b> Downloads land on a <code class="inl">.part</code>
     sibling and are renamed only once the bytes verify, so an interrupted
-    <code class="inl">yame fetch</code> can never leave a short file that later reads as a valid
-    model. Fetching now lives in <code class="inl">yame</code>, so keep it on
-    <code class="inl">PATH</code> alongside the conda env that provided
-    <code class="inl">libxgboost</code>.</p>
+    <code class="inl">methscope fetch</code> can never leave a short file that later reads as a
+    valid model. Without <code class="inl">-c</code> files go to a shared store
+    (<code class="inl">$METHSCOPE_DATA_HOME</code>, else <code class="inl">$YAME_DATA_HOME</code>,
+    else <code class="inl">~/.local/share/yame</code>) that other zhou-lab tools read too.</p>
 </section>
 
 <section class="card">
@@ -326,12 +334,14 @@ conda install -c zhou-lab -c conda-forge yame</code></pre>
     <code class="inl">.cg</code> — no YAME + awk + sort pipeline, ~576&nbsp;MB peak, ~50&nbsp;s
     for a whole-genome reference. The fetchable example below is chr20 only, so it finishes in
     about a second.</p>
-  <pre><code><span class="cm"># a scratch dir for the outputs</span>
+  <!-- example:20_classify_mrmp_build -->
+<pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 <span class="cm"># a 40-cell-type chr20 reference (39.5 MB)</span>
-yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
+methscope <span class="sub">fetch</span> -c hg38/data/human_hg38_40_celltypes_chr20.cg
 methscope <span class="sub">mrmp-build</span> human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</code></pre>
+<!-- /example -->
   <pre class="res"><code>root  40 classes | 491 patterns | 7,218 CpGs
   split threshold: 20,000 CpGs -> 1 group(s)
   ! unsplittable (40 classes): GSM5652176_Adipocytes-Z000000T7 ... (34 more)
@@ -343,7 +353,9 @@ methscope <span class="sub">mrmp-build</span> human_hg38_40_celltypes_chr20.cg c
 <section class="card">
   <h2>Inspect the pattern set <span class="m">— dimensions &amp; ranked head</span></h2>
   <p>What it is: dimensions, the binstring parameters, the PNA share.</p>
-  <pre><code>methscope <span class="sub">inspect</span> chr20_40celltypes.mrmp</code></pre>
+  <!-- example:21_classify_mrmp_inspect -->
+<pre><code>methscope <span class="sub">inspect</span> chr20_40celltypes.mrmp</code></pre>
+<!-- /example -->
   <pre class="res"><code>MRMP  chr20_40celltypes.mrmp
   format         MRMPIDX1 v1, one set
   name           root
@@ -360,7 +372,9 @@ methscope <span class="sub">mrmp-build</span> human_hg38_40_celltypes_chr20.cg c
   checksum       8cf2026fa6de8d46  (over the per-CpG key stream)</code></pre>
   <p><code class="inl">--patterns</code> adds the ranked head; <code class="inl">--top</code> sets
     how many (default 20).</p>
-  <pre><code>methscope <span class="sub">inspect</span> chr20_40celltypes.mrmp --patterns --top 5</code></pre>
+  <!-- example:22_classify_mrmp_patterns -->
+<pre><code>methscope <span class="sub">inspect</span> chr20_40celltypes.mrmp --patterns --top 5</code></pre>
+<!-- /example -->
   <pre class="res"><code>#pattern                                  label  count   (top 5 of 491)
 1111111101111111111111111111111111111111  P1     698
 1111101111111111111111111111111111111111  P2     527
@@ -370,7 +384,9 @@ methscope <span class="sub">mrmp-build</span> human_hg38_40_celltypes_chr20.cg c
   <p>For a multi-set routing tree, <code class="inl">--tree</code> shows each MRMP
     node and the classes it decides. It works on the tree bundle written by
     <code class="inl">mrmp-build</code>.</p>
-  <pre><code>methscope <span class="sub">inspect</span> chr20_40celltypes.mrmp --tree</code></pre>
+  <!-- example:23_classify_mrmp_tree -->
+<pre><code>methscope <span class="sub">inspect</span> chr20_40celltypes.mrmp --tree</code></pre>
+<!-- /example -->
   <pre class="res"><code>TREE  chr20_40celltypes.mrmp
   1 node, 40 classes, 491 patterns over 7,218 CpGs
 
@@ -385,7 +401,9 @@ root                       40 classes      491 patterns      7,218 CpGs
   <p>The runtime <code class="inl">.cm</code> mask is inspection / interop only, not a pipeline
     step: <code class="inl">upscale-train</code> materializes it into the bundle from the
     <code class="inl">.mrmp</code> itself.</p>
-  <pre><code>methscope <span class="sub">mrmp-export</span> --top 1000 chr20_40celltypes.mrmp chr20_40celltypes.cm</code></pre>
+  <!-- example:24_classify_mrmp_export -->
+<pre><code>methscope <span class="sub">mrmp-export</span> --top 1000 chr20_40celltypes.mrmp chr20_40celltypes.cm</code></pre>
+<!-- /example -->
   <p>Ranking is deterministic (count desc, key asc), so a build is byte-reproducible from the
     reference alone. The artifact is the build pipeline's currency:
     <code class="inl">upscale-featurize</code>, <code class="inl">upscale-set-units</code>, and
@@ -396,15 +414,17 @@ root                       40 classes      491 patterns      7,218 CpGs
 <section class="card">
   <h2>Classify — shipped model <span class="m">— cell type, sex, any label</span></h2>
   <p>Classify a methylome against a bundled classifier. Each step fetches the file it needs with
-    <code class="inl">yame fetch -c</code> (digest-checked), so the block runs as-is on a clean
+    <code class="inl">methscope fetch -c</code> (digest-checked), so the block runs as-is on a clean
     machine.</p>
-  <pre><code><span class="cm"># a scratch dir for the outputs</span>
+  <!-- example:25_classify -->
+<pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 <span class="cm"># 4 Loyfer cells vs the shipped 33-type classifier</span>
-yame fetch -c hg38/data/human_hg38_celltypes.cg
-yame fetch -c hg38/models/hg38_celltype.clfx
+methscope <span class="sub">fetch</span> -c hg38/data/human_hg38_celltypes.cg
+methscope <span class="sub">fetch</span> -c hg38/models/hg38_celltype.clfx
 methscope <span class="sub">classify</span> hg38_celltype.clfx human_hg38_celltypes.cg</code></pre>
+<!-- /example -->
   <pre class="res"><code>cell             prediction_label       confidence  certainty
 Oligodendrocyte  Oligodendrocyte          0.999738   0.999186
 Pancreas-Beta    Pancreatic.Islet.Cell    0.999662   0.998899
@@ -417,8 +437,10 @@ Blood-Monocytes  Monocyte                 0.999126   0.993053</code></pre>
 
 <section class="card">
   <h2>Inspect a bundle <span class="m">— look inside without running it</span></h2>
-  <pre><code>yame fetch -c hg38/models/hg38_sex.clfx
+  <!-- example:26_classify_inspect_bundle -->
+<pre><code>methscope <span class="sub">fetch</span> -c hg38/models/hg38_sex.clfx
 methscope <span class="sub">inspect</span> hg38_sex.clfx</code></pre>
+<!-- /example -->
   <pre class="res"><code>container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 30,931 bytes
 
     #  section               offset         size  content
@@ -462,7 +484,8 @@ methscope <span class="sub">inspect</span> hg38_sex.clfx</code></pre>
     rather than simplified for the page — the flags are load-bearing and a reader who
     drops them gets a different model. The driver writes
     <code class="inl">hg38_celltype_tree.clfx</code>; it is renamed when staged.</p>
-  <pre data-norun="the recorded build of hg38_celltype.clfx; needs a labelled reference store"><code>methscope <span class="sub">mrmp-build</span> --qfilter 0.30,0.70 --delta-mean-top 20000 \
+  <!-- example:27_classify_train -->
+<pre data-norun="the recorded build of hg38_celltype.clfx; needs a labelled reference store"><code>methscope <span class="sub">mrmp-build</span> --qfilter 0.30,0.70 --delta-mean-top 20000 \
   --min-segregating 20000 --satellite-n 5 --force $M/ref.cg $W/chain.mrmp
 
 methscope <span class="sub">classify-featurize</span> --threads 16 --rank-features replace \
@@ -471,6 +494,7 @@ methscope <span class="sub">classify-featurize</span> --threads 16 --rank-featur
 
 methscope <span class="sub">classify-train</span> --threads 16 --data $W/train.msfm \
   -o $W/hg38_celltype_tree.clfx</code></pre>
+<!-- /example -->
   <p class="note"><b>Why it is not runnable here.</b> It wants the 33-class donor-pooled
     reference, not a chr20 fixture. <code class="inl">$LADDER</code> is a 24-rung coverage
     ladder that draws a different depth per record, which is what stops the model reading
@@ -489,9 +513,11 @@ methscope <span class="sub">classify-train</span> --threads 16 --data $W/train.m
     byte-identical to it. Flat and linear bundles round-trip this way; a
     <code class="inl">tree</code> bundle carries a booster chain rather than one
     <code class="inl">model</code> section, so <code class="inl">unbundle</code> does not take it.</p>
-  <pre><code>methscope <span class="sub">unbundle</span> hg38_sex.clfx
+  <!-- example:28_classify_unbundle -->
+<pre><code>methscope <span class="sub">unbundle</span> hg38_sex.clfx
 methscope <span class="sub">bundle</span> -m hg38_sex.mrmp -k logistic -o rewrapped.clfx hg38_sex.clf
 cmp hg38_sex.clfx rewrapped.clfx &amp;&amp; echo identical</code></pre>
+<!-- /example -->
   <pre class="res"><code>[methscope] wrote inner model -&gt; hg38_sex.clf
 [methscope] wrote bundled mrmp -&gt; hg38_sex.mrmp
 [methscope] bundled hg38_sex.clf + hg38_sex.mrmp -&gt; rewrapped.clfx
@@ -509,13 +535,15 @@ identical</code></pre>
   <p>Solve a mixture against a signature panel by non-negative least squares. The solver
     rebuilds its pattern set per query from the CpGs that query measured, so it is robust to
     extreme sparsity and works at cfDNA-scale coverage.</p>
-  <pre><code><span class="cm"># a scratch dir for the outputs</span>
+  <!-- example:30_deconv -->
+<pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 <span class="cm"># nine known mixtures vs the shipped 62-type reference (1.5 GB)</span>
-yame fetch -c hg38/data/human_hg38_immune_mixture.cg
-yame fetch -c hg38/models/hg38_62celltypes.msdref
+methscope <span class="sub">fetch</span> -c hg38/data/human_hg38_immune_mixture.cg
+methscope <span class="sub">fetch</span> -c hg38/models/hg38_62celltypes.msdref
 methscope <span class="sub">deconv</span> hg38_62celltypes.msdref human_hg38_immune_mixture.cg</code></pre>
+<!-- /example -->
   <pre class="res"><code>cell                  class       fraction
 mac70_mono30_2pow22   Macrophage  0.696336
 mac70_mono30_2pow22   Mono        0.303664
@@ -525,7 +553,9 @@ cd4_70_cd8_30_2pow22  Tmem_CD8    0.268361
   <p>Only the classes at or above <code class="inl">--min-frac</code> are listed, largest
     first. <code class="inl">--report</code> gives the same thing to read rather than to
     parse, and <code class="inl">--wide</code> the full 62-column matrix for a join.</p>
-  <pre><code>methscope <span class="sub">deconv</span> --report hg38_62celltypes.msdref human_hg38_immune_mixture.cg</code></pre>
+  <!-- example:31_deconv_report -->
+<pre><code>methscope <span class="sub">deconv</span> --report hg38_62celltypes.msdref human_hg38_immune_mixture.cg</code></pre>
+<!-- /example -->
   <pre class="res"><code>mac70_mono30_2pow22: Macrophage 69.6%; Mono 30.4%
 cd4_70_cd8_30_2pow22: Tmem_CD4 49.8%; Tmem_CD8 26.8%; Tnaive_CD4 20.7%; Tnaive_CD8 2.6%
 tnaive_cd4_70_cd8_30_2pow22: Tnaive_CD4 69.9%; Tnaive_CD8 30.1%</code></pre>
@@ -542,10 +572,12 @@ tnaive_cd4_70_cd8_30_2pow22: Tnaive_CD4 69.9%; Tnaive_CD8 30.1%</code></pre>
 <section class="card">
   <h2>Build your own .msdref <span class="m">— a per-cell panel</span></h2>
   <p>Per-cell panel, so each cell must deconvolve to itself.</p>
-  <pre><code>yame fetch -c hg38/data/human_hg38_celltypes.cg
-yame fetch -c hg38/models/hg38_celltype.clfx
+  <!-- example:32_deconv_build_ref -->
+<pre><code>methscope <span class="sub">fetch</span> -c hg38/data/human_hg38_celltypes.cg
+methscope <span class="sub">fetch</span> -c hg38/models/hg38_celltype.clfx
 methscope <span class="sub">deconv-build-ref</span> -o self.msdref human_hg38_celltypes.cg
 methscope <span class="sub">deconv</span> self.msdref human_hg38_celltypes.cg</code></pre>
+<!-- /example -->
   <pre class="res"><code>cell             class            fraction
 Oligodendrocyte  Oligodendrocyte  1.000000
 Pancreas-Beta    Pancreas-Beta    1.000000
@@ -567,23 +599,29 @@ Blood-Monocytes  Blood-Monocytes  1.000000</code></pre>
     <em>fraction</em> per CpG (format 4); <code class="inl">--binary</code> thresholds it at 0.5
     into 0/1 calls (format 6), and <code class="inl">--probs</code> writes the same values as
     a TSV.</p>
-  <pre><code><span class="cm"># a scratch dir for the outputs</span>
+  <!-- example:40_upscale_fetch -->
+<pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 <span class="cm"># what goes in: a sparse methylome</span>
-yame fetch -c hg38/data/human_hg38_test.cg
+methscope <span class="sub">fetch</span> -c hg38/data/human_hg38_test.cg
 yame summary human_hg38_test.cg</code></pre>
+<!-- /example -->
   <pre class="res"><code>QFile               Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap  Log2OddsRatio   Beta  Depth
 human_hg38_test.cg      1     NA  global   29000    23857   29000      23857             NA  0.823     NA</code></pre>
-  <pre><code><span class="cm"># impute the whole genome from it — fractions, the default</span>
-yame fetch -c hg38/models/hg38_10k1.updecx
-methscope <span class="sub">upscale</span> -o human_hg38_test_reconstructed.cg hg38_10k1.updecx human_hg38_test.cg
+  <!-- example:41_upscale -->
+<pre><code><span class="cm"># impute the whole genome from it — fractions, the default</span>
+methscope <span class="sub">fetch</span> -c hg38/models/hg38_10k1.updecx
+methscope <span class="sub">upscale</span> -o human_hg38_test_reconstructed.cg <span class="tip" data-tip="updecx" tabindex="0">hg38_10k1.updecx</span> human_hg38_test.cg
 yame summary human_hg38_test_reconstructed.cg</code></pre>
+<!-- /example -->
   <pre class="res"><code>QFile                             Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap  Log2OddsRatio   Beta  Depth
 human_hg38_test_reconstructed.cg      1     NA  global 29401795    10000       0      10000             NA  0.617     NA</code></pre>
-  <pre><code><span class="cm"># or 0/1 calls, for anything that wants a set rather than a level</span>
-methscope <span class="sub">upscale</span> --binary -o human_hg38_test_calls.cg hg38_10k1.updecx human_hg38_test.cg
+  <!-- example:42_upscale_binary -->
+<pre><code><span class="cm"># or 0/1 calls, for anything that wants a set rather than a level</span>
+methscope <span class="sub">upscale</span> --binary -o human_hg38_test_calls.cg <span class="tip" data-tip="updecx" tabindex="0">hg38_10k1.updecx</span> human_hg38_test.cg
 yame summary human_hg38_test_calls.cg</code></pre>
+<!-- /example -->
   <pre class="res"><code>QFile                      Query  MFile  Mask    N_univ  N_query  N_mask  N_overlap  Log2OddsRatio   Beta  Depth
 human_hg38_test_calls.cg       1     NA  global   10000     6239   10000       6239             NA  0.624     NA</code></pre>
   <p class="note">This decoder writes one 10,000-CpG block. The two rows describe the same
@@ -600,8 +638,10 @@ human_hg38_test_calls.cg       1     NA  global   10000     6239   10000       6
     <code class="inl">--binary</code> output, not the fractions. Against the fraction file every
     row differs and this prints <code class="inl">0/9794 (0.0%)</code>, which looks like a
     broken model rather than a mismatched format.</p>
-  <pre><code>yame fetch -c hg38/data/human_hg38_test.truth.cg
-paste &lt;(yame rowsub -I 1_10000 human_hg38_test_calls.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk &#x27;$2!=2{t++;if($1==$2)c++} END{printf &quot;%d/%d (%.1f%%)\n&quot;,c,t,100*c/t}&#x27;</code></pre>
+  <!-- example:43_upscale_score -->
+<pre><code>methscope <span class="sub">fetch</span> -c hg38/data/human_hg38_test.truth.cg
+paste &lt;(yame rowsub -I 1_10000 human_hg38_test_calls.cg | yame unpack -a - | cut -f4) &lt;(yame rowsub -I 1_10000 human_hg38_test.truth.cg | yame unpack -a - | cut -f4) | awk '$2!=2{t++;if($1==$2)c++} END{printf "%d/%d (%.1f%%)\n",c,t,100*c/t}'</code></pre>
+<!-- /example -->
   <pre class="res"><code>9211/9794 (94.0%)</code></pre>
 </section>
 
@@ -610,10 +650,12 @@ paste &lt;(yame rowsub -I 1_10000 human_hg38_test_calls.cg | yame unpack -a - | 
   <p>See the whole block first. The view is coordinate-aware — <code class="inl">hprint</code>
     resolves the hg38 coordinate track from the store (fetched below), window-averaging 10,000 CpGs
     into 60 columns; <code class="inl">-g</code> shows deciles.</p>
-  <pre><code>cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg
-yame index -s &lt;(printf &#x27;truth\ninput\nreconstructed\n&#x27;) three.cg
+  <!-- example:44_upscale_view_block -->
+<pre><code>cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg
+yame index -s &lt;(printf 'truth\ninput\nreconstructed\n') three.cg
 yame fetch hg38/cpg_nocontig.cr
 yame hprint -g -r chr1:921649-1151482 -w 60 three.cg</code></pre>
+<!-- /example -->
   <pre class="res term"><code>                      chr1:921649-1151482 (10000 CpGs, win=167)
                       |.........|.........|.........|.........|.........|.........
                       921649    958945    995856    1033422   1067326   1112421
@@ -632,7 +674,9 @@ reconstructed         <span class="g1">1</span><span class="g0">0</span><span cl
   <p>Zoom to single CpGs over the same block the score used — the same
     <code class="inl">rowsub -I</code> as above. <code class="inl">-c</code> turns colour off,
     which <code class="inl">cut</code> needs since it counts bytes, not columns.</p>
-  <pre><code>cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_calls.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1621-1680</code></pre>
+  <!-- example:45_upscale_view_cpg -->
+<pre><code>cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_calls.cg | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1621-1680</code></pre>
+<!-- /example -->
   <pre class="res term"><code>truth  <span class="hm">111111</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">000000</span><span class="hm">1</span><span class="hu">0000000000000000000000000</span>
 input  <span class="hn">22222222222222222</span><span class="hm">1</span><span class="hn">22222222222222222222222222</span><span class="hu">0</span><span class="hn">222222222222222</span>
 recon  <span class="hm">111111</span><span class="hu">0</span><span class="hm">1</span><span class="hu">0</span><span class="hm">11111111111111</span><span class="hu">0</span><span class="hm">1111</span><span class="hu">000000</span><span class="hm">1</span><span class="hu">0000000000000000000000000</span></code></pre>
@@ -645,30 +689,40 @@ recon  <span class="hm">111111</span><span class="hu">0</span><span class="hm">1
   <h2>Train — featurize &amp; set units <span class="m">— the three-step pipeline</span></h2>
   <p>Training the decoder is a separate, three-step pipeline, and every step reads the same
     <code class="inl">.mrmp</code>.</p>
-  <pre><code><span class="cm"># a scratch dir for the outputs</span>
+  <!-- example:50_upscale_train_mrmp -->
+<pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
-<span class="cm"># the whole pipeline from scratch, on the 40-cell-type chr20 reference
-# 1. define the features</span>
-yame fetch -c hg38/data/human_hg38_40_celltypes_chr20.cg
+<span class="cm"># the whole pipeline from scratch, on the 40-cell-type chr20 reference</span>
+<span class="cm"># 1. define the features</span>
+methscope <span class="sub">fetch</span> -c hg38/data/human_hg38_40_celltypes_chr20.cg
 methscope <span class="sub">mrmp-build</span> --flat --force human_hg38_40_celltypes_chr20.cg chr20.mrmp</code></pre>
+<!-- /example -->
   <pre class="res"><code>root  40 classes | 491 patterns | 7,218 CpGs
   1 node(s), 29,904 bytes -> chr20.mrmp</code></pre>
-  <pre><code><span class="cm"># 2. featurize the truth atlas -> sampling/truth msur</span>
+  <!-- example:51_upscale_train_featurize -->
+<pre><code><span class="cm"># 2. featurize the truth atlas -&gt; sampling/truth msur</span>
 methscope <span class="sub">upscale-featurize</span> --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></code></pre>
+<!-- /example -->
   <pre class="res"><code>[methscope] upscale-featurize: inflating 40 truth cells (1 worker, about 0.2 GB resident)
 [methscope] upscale-featurize: wrote chr20.msur and chr20.msur.tsv</code></pre>
-  <pre><code><span class="cm"># 3. group CpGs into processing units</span>
+  <!-- example:52_upscale_train_units -->
+<pre><code><span class="cm"># 3. group CpGs into processing units</span>
 methscope <span class="sub">upscale-set-units</span> --unit-cpgs 4096 human_hg38_40_celltypes_chr20.cg <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></code></pre>
+<!-- /example -->
   <pre class="res"><code>units=109 pure=13 mixed=67 PNA=29 oversized=7
 unit CpGs min=1380 mean=7096.1 max=261816</code></pre>
   <p><code class="inl">inspect</code> reads every build artifact, detected from its magic.</p>
-  <pre><code>methscope <span class="sub">inspect</span> <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></code></pre>
+  <!-- example:53_upscale_train_inspect_msui -->
+<pre><code>methscope <span class="sub">inspect</span> <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></code></pre>
+<!-- /example -->
   <pre class="res"><code>format            MSUIDX1 v1
 cpgs              773477  (657409 real + 116068 PNA)
 pattern_length    40
 units             109  (29 PNA)</code></pre>
-  <pre><code>methscope <span class="sub">inspect</span> <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></code></pre>
+  <!-- example:54_upscale_train_inspect_msur -->
+<pre><code>methscope <span class="sub">inspect</span> <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></code></pre>
+<!-- /example -->
   <pre class="res"><code>format            MSURAW2 v2
 cells             40
 replicates        20
@@ -718,7 +772,9 @@ embedded_truth    yes (trainable)</code></pre>
   <h2>Train — fit the decoder <span class="m">— CPU or CUDA</span></h2>
   <p>Training runs on CPU by default and threads over units, which are independent — that is what
     makes the run resumable. The 109 chr20 units take ~17&nbsp;s on 8 threads.</p>
-  <pre><code>methscope <span class="sub">upscale-train</span> -i <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span> --units <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span> --mrmp chr20.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">chr20.updecx</span> --work-dir work/ --threads 8</code></pre>
+  <!-- example:55_upscale_train -->
+<pre><code>methscope <span class="sub">upscale-train</span> -i <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span> --units <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span> --mrmp chr20.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">chr20.updecx</span> --work-dir work/ --threads 8</code></pre>
+<!-- /example -->
   <pre class="res"><code>P=491 features=beta+count input=982 trunk=none pure=16 mixed=factor/32
 backend=cpu
 units 109/109 (resumed=0) last_val_mae=0.193608
@@ -730,13 +786,178 @@ wrote bare UPDEC2 work//model.updec2 (95924368 bytes), resumed=0</code></pre>
     backend, which is picked automatically when a device answers; checkpoints are interchangeable,
     so you can start on CPU and finish on a GPU node. The chr20 demo is small; a whole-genome
     decoder is memory- and GPU-heavy, so submit it to a GPU node:</p>
-  <pre data-norun="the recorded command that built hg38_wg.updecx"><code>sbatch -q gpu --gres=gpu:1 --mem=64G -c 8 -t 8:00:00 --wrap '\
+  <!-- example:56_upscale_train_wg -->
+<pre data-norun="the recorded command that built hg38_wg.updecx"><code>sbatch -q gpu --gres=gpu:1 --mem=64G -c 8 -t 8:00:00 --wrap '\
   methscope <span class="sub">upscale-train</span> -i $W/loyfer_100r.msur --units $W/units_16k.msui \
     -o $W/hg38_wg.updecx --work-dir $W/work --split $SPLIT \
     --patterns 500 --features scalar'</code></pre>
+<!-- /example -->
   <p class="note"><code class="inl">--split</code> rows: <code class="inl">&lt;cell_index&gt;TAB&lt;train|val|test&gt;</code>,
     one per source cell; without it, cells are cut 70/15/15 by <code class="inl">--seed</code>.
     <code class="inl">--device cpu</code> forces the portable backend even on a GPU node.</p>
+</section>
+
+</div>
+</div>
+
+<div class="panel hidden" id="panel-models" role="tabpanel" aria-labelledby="tab-models">
+<div class="grid">
+
+<section class="card">
+  <h2>Published models <span class="m">— huggingface.co/zhou-lab/methscope, tag v9</span></h2>
+  <p>Every model is a single self-contained bundle carrying its own MRMP feature definition
+    (and labels or signature), so a query <code class="inl">.cg</code> runs directly. The file
+    extension names the role — <code class="inl">.clfx</code> classifier,
+    <code class="inl">.updecx</code> upscale decoder, <code class="inl">.msdref</code> deconvolution
+    reference; bundles are detected by magic, never by name.
+    <code class="inl">methscope fetch hg38/models</code> takes the human set,
+    <code class="inl">mm10/models</code> the mouse; <code class="inl">methscope inspect
+    &lt;model&gt;</code> prints the exact framework, label list and, for linear models, per-feature
+    weights. The models a given binary fetches are the ones it documents:
+    <code class="inl">methscope --version</code> prints the tag.</p>
+<!-- models:begin (generated by docs/build_models.py; edit YAME/data/assets.tsv) -->
+  <table>
+    <tr><th>file</th><th>what it is</th><th>notes</th><th>accuracy</th><th>size</th></tr>
+    <tr><td><code>hg38_celltype.clfx</code><br><span class="m">hg38/models · v9</span></td><td>Cell-type classifier (human, routing tree)</td><td>33 human cell types as a tree of xgboost boosters over one shared MRMP chain: a query is scored at the root, then handed to the child that owns the root&#x27;s call and scored again against that node&#x27;s smaller class set; 11 nodes plus 3 satellites. Kept published because earlier results were produced with it; hg38_celltype_full (63 classes, no routing) is the model for new work. This row replaces the description of the earlier violation-framework model that shipped under the same name.</td><td>accuracy 0.903</td><td>13 MB</td></tr>
+    <tr><td><code>hg38_celltype_full.clfx</code><br><span class="m">hg38/models · v9</span></td><td>Cell-type classifier (human, bank-full)</td><td>63 human cell types from one flat MRMP bank: hierarchical LCA binstrings plus a redrawn, LOO-calibrated resolver for EVERY class pair (1,981 sets, 1,953 resolvers), all scored by a single pooled xgboost booster with no routing. A routing tree can take a wrong turn high up that no lower node can undo; a bank has one node and no routing decision to get wrong, and it covers 63 classes against the tree&#x27;s 33. Supersedes hg38_celltype for new work; 154 MB. Use it when the accuracy number matters.</td><td>class-balanced 0.9544 / micro 0.9569</td><td>154 MB</td></tr>
+    <tr><td><code>hg38_celltype_lite.clfx</code><br><span class="m">hg38/models · v9</span></td><td>Cell-type classifier (human, bank-lite)</td><td>The same 63 classes and the same bank architecture as hg38_celltype_full, one flag apart: resolvers only for the class pairs no LCA binstring separates (233 sets, 208 resolvers), so the bundle is 51 MB against 154. The size saving is measured; the accuracy cost is not -- no held-out number exists, because the human bank used every labelled cell. Use it when size matters, and validate on your own data first.</td><td>—</td><td>51 MB</td></tr>
+    <tr><td><code>hg38_sex.clfx</code><br><span class="m">hg38/models · v9</span></td><td>Sex classifier</td><td>Female or male from two X-inactivation features, Xa_lo and Xa_hi, over a three-state MRMP; about 95.8% on an independent cohort. At 30 KB it is the smallest bundle here and the cheapest way to check an install end to end.</td><td>about 95.8% on an independent cohort</td><td>30 KB</td></tr>
+    <tr><td><code>mm10_brain_full.clfx</code><br><span class="m">mm10/models · v9</span></td><td>Cell-type classifier (mouse brain, bank-full)</td><td>41 mouse-brain cell types from one flat MRMP bank -- LCA binstrings plus a calibrated resolver for every class pair (837 sets, 820 resolvers), one pooled booster, no routing. Supersedes mm10_celltype_brain for new work; 68 MB. BRAIN ONLY: there is no non-brain class, so a hepatocyte handed to it is forced onto the nearest brain type with no signal that anything is wrong. Route by tissue first.</td><td>class-balanced 0.9746 / micro 0.9720</td><td>64 MB</td></tr>
+    <tr><td><code>mm10_brain_lite.clfx</code><br><span class="m">mm10/models · v9</span></td><td>Cell-type classifier (mouse brain, bank-lite)</td><td>The same 41 classes and architecture as mm10_brain_full with resolvers only where no binstring separates a pair (135 sets, 117 resolvers): 27 MB against 68. Brain only, like every mouse classifier here. On held-out cells it gives up 1.8 points micro to _full, almost all of it in the cortical IT layers (IT-L23 0.946 -&gt; 0.924, IT-L5 0.951 -&gt; 0.915); elsewhere the two are within noise.</td><td>micro 0.9482 / class-balanced 0.9595</td><td>27 MB</td></tr>
+    <tr><td><code>mm10_celltype_brain.clfx</code><br><span class="m">mm10/models · v9</span></td><td>Cell-type classifier (mouse brain, routing tree)</td><td>41 mouse-brain cell types as a tree of xgboost boosters over one shared MRMP chain: 4 routing nodes plus 134 satellites -- soft children that lend columns to a node&#x27;s booster but take no cells and have no model of their own. Brain only. Kept published because earlier results were produced with it; mm10_brain_full is the model for new work.</td><td>class-balanced 0.969 +/- 0.001, micro 0.963 +/- 0.001</td><td>101 MB</td></tr>
+    <tr><td><code>hg38_33celltypes.msdref</code><br><span class="m">hg38/models · v9</span></td><td>Deconvolution reference, bulk-pooled</td><td>33 human cell types pooled from donor-resolved normal bulk WGBS, over the 7.9M CpGs that could ever separate some class subset (26.9% of hg38). The earlier companion to hg38_62celltypes and still the right choice when the query is itself sorted bulk; on single-cell-derived queries prefer the 62-type reference, whose immune compartment matches that population. It replaced hg38_65celltypes.refx, which was withdrawn -- the current methscope can neither read nor produce that format.</td><td>—</td><td>528 MB</td></tr>
+    <tr><td><code>hg38_62celltypes.msdref</code><br><span class="m">hg38/models · v9</span></td><td>Deconvolution reference</td><td>62 cell types over the 11.8M CpGs that could ever separate some class subset (40.1% of hg38), packed as uint16 M/U. The backbone is the Zhou single-cell atlas -- 60 pseudobulk cell types, early-embryonic syncytio- and villous trophoblast excluded -- plus Loyfer hepatocytes and BLUEPRINT granulocytes for the two compartments single cells do not cover. The single-cell backbone is the point: against a bulk-pooled reference whose immune compartment is sorted BLUEPRINT bulk, single-cell-derived immune mixtures misread badly (a known 70/30 macrophage/monocyte mixture came back 0.14/0.56, with the missing mass on mast cells and stroma), because a tissue-resident macrophage is not the in-vitro monocyte-derived cell the reference calls Macrophage. Here the same mixtures land within a few points of truth, and T cells resolve to memory/naive x CD4/CD8. No pattern budget is baked in: the solver rebuilds its pattern set per query from the CpGs that query measured.</td><td>—</td><td>1.4 GB</td></tr>
+    <tr><td><code>hg38_10k1.updecx</code><br><span class="m">hg38/models · v9</span></td><td>Upscaling decoder (one block)</td><td>A demo decoder for a single 10,000-CpG block from 101 MRMP inputs. It carries an output-CpG mask, so upscale still emits a whole-genome .cg -- the cheap way to see what upscaling does before committing to the 2.8 GB whole-genome decoder.</td><td>—</td><td>28 MB</td></tr>
+    <tr><td><code>hg38_wg.updecx</code><br><span class="m">hg38/models · v9</span></td><td>Upscaling decoder (whole genome)</td><td>2.8 GB -- larger than everything else in the catalogue combined, so fetch it deliberately. 700 processing units covering all 29,401,795 hg38 CpGs from 500 MRMP betas plus one log1p(covered CpGs) coverage scalar, trained on the 207-sample Loyfer atlas across a 71-to-2.9M CpG coverage ladder, so accuracy holds from a handful of observed CpGs up to 10% of the genome. Inference is pure C, about 2 s per sample.</td><td>—</td><td>2.6 GB</td></tr>
+    <tr><td><code>mm10_wg.updecx</code><br><span class="m">mm10/models · v9</span></td><td>Upscaling decoder (whole genome, mouse)</td><td>2.1 GB -- fetch it deliberately. 472 processing units covering all 21,867,837 mm10 CpGs from 500 MRMP betas plus one log1p(covered CpGs) coverage scalar, trained on 200 mouse WGBS methylomes across a 71-to-2.2M CpG coverage ladder, so accuracy holds from a handful of observed CpGs up to 10% of the genome. Inference is pure C.</td><td>—</td><td>1.9 GB</td></tr>
+  </table>
+  <p class="m">Generated from YAME's <code class="inl">data/assets.tsv</code> at the submodule's tag by <code class="inl">docs/build_models.py</code>; the same rows describe each file in <code class="inl">methscope fetch</code>. Edit the TSV, not this table.</p>
+<!-- models:end -->
+  <p class="note">All three mouse classifiers are <b>brain only</b>: there is no non-brain class, so a
+    hepatocyte handed to them is forced onto the nearest brain type with no signal that anything
+    is wrong. Route by tissue first.</p>
+</section>
+
+<section class="card">
+  <h2>Bank classifiers <span class="m">— <code class="inl">_full</code>, <code class="inl">_lite</code>, and the trees they replace</span></h2>
+  <p>A <b>bank</b> classifier does not route: its MRMP is a flat set of hierarchical LCA
+    binstrings plus redrawn, LOO-calibrated <i>resolvers</i> for close class pairs, all scored by
+    one pooled booster. <code class="inl">_full</code> and <code class="inl">_lite</code> are the
+    same build one flag apart — how many pairs get a resolver.</p>
+  <table>
+    <tr><th></th><th>sets</th><th>resolvers</th><th>size</th></tr>
+    <tr><td><code>hg38_celltype_full.clfx</code></td><td>1,981</td><td>1,953 — every class pair</td><td>154 MB</td></tr>
+    <tr><td><code>hg38_celltype_lite.clfx</code></td><td>233</td><td>208 — only pairs no binstring separates</td><td>51 MB</td></tr>
+    <tr><td><code>mm10_brain_full.clfx</code></td><td>837</td><td>820 — every class pair</td><td>64 MB</td></tr>
+    <tr><td><code>mm10_brain_lite.clfx</code></td><td>135</td><td>117</td><td>27 MB</td></tr>
+  </table>
+  <p><b>Accuracy.</b> Ten-fold CV of the recipe: human <code class="inl">_full</code>
+    class-balanced 0.9544 / micro 0.9569 over 84,601 cells; mouse 0.9746 / 0.9720 over 54,447.
+    The shipped mouse bytes were also scored on 49,113 Liu 2021 cells that never entered the
+    model — the cells beyond the 2,000-per-class training cap, so 18 of the 41 classes, the
+    large cortical ones included:</p>
+  <table>
+    <tr><th></th><th>micro</th><th>class-balanced (18)</th></tr>
+    <tr><td><code>mm10_brain_full.clfx</code></td><td>0.9660</td><td>0.9707</td></tr>
+    <tr><td><code>mm10_brain_lite.clfx</code></td><td>0.9482</td><td>0.9595</td></tr>
+  </table>
+  <p>The lite model's cost sits in the cortical IT layers (IT-L23 0.946 → 0.924, IT-L5
+    0.951 → 0.915); elsewhere the two are within noise. Use <code class="inl">_full</code> when
+    the number matters, <code class="inl">_lite</code> when its size does, and validate on your
+    own data before relying on it.</p>
+  <p><b>How a bank differs from the tree</b> is structure, not just training data. The tree
+    <i>routes</i>: a query descends up to 11 nodes, each with its own booster over its own class
+    subset, so a wrong turn high up cannot be recovered lower down. A bank has one node and no
+    routing decision to get wrong, and covers 63 classes against the tree's 33. The trees stay
+    published — they are what earlier results were produced with, and nothing citing them needs
+    to move.</p>
+</section>
+
+<section class="card">
+  <h2>Routing-tree classifiers <span class="m">— boosters over one shared MRMP chain</span></h2>
+  <p><code class="inl">hg38_celltype.clfx</code> and <code class="inl">mm10_celltype_brain.clfx</code>
+    are each a <b>tree of boosters over one shared MRMP chain</b>. A query is scored at the root,
+    then handed to the child node that owns the root's call and scored again against that node's
+    smaller, sharper class set. A node splits off only where enough patterns segregate its classes
+    to justify one, so the shape is learned from the reference, not declared.</p>
+  <p>Alongside the hard children sit <b>satellites</b> — soft children written
+    <code class="inl">&lt;node&gt;@&lt;tag&gt;</code>. A satellite lends extra columns to its owner's
+    booster but takes no cells and has no model of its own, which lets a pair of classes that keep
+    colliding get features built specifically to separate them without carving out a routing
+    branch that a misroute could trap a cell in. Human uses 3; mouse brain needs 134. Both are
+    trained across a 24-rung coverage ladder with reads binarised, so one model spans sparse single
+    cells and deep pseudobulks. Records too sparse to score come back <code class="inl">NA</code>
+    rather than guessed.</p>
+  <p><b>Human, 33 types.</b> Held out <i>across cohorts</i> (each class's reference and its test
+    samples come from different studies), 113 donor-resolved pseudobulks: <b>accuracy 0.903</b>,
+    against 0.842 for the parameterless <code class="inl">violation</code> rule it replaced. Every
+    residual error is a within-lineage confusion (Macrophage → Monocyte six times, T.Cell.CD8 →
+    T.Cell.CD4 twice). On single-cell tumours, where the origin claim is tested, Bian 2018
+    colorectal cancer is split by site because a colorectal cell sitting in liver must still read
+    as colon:</p>
+  <table>
+    <tr><th>cohort</th><th>called <code>Enterocyte.(Colon)</code></th><th>n</th></tr>
+    <tr><td>Bian 2018 CRC, <b>liver metastases</b></td><td>99.6%</td><td>247</td></tr>
+    <tr><td>Bian 2018 CRC, <b>lymph metastases</b></td><td>82.6%</td><td>299</td></tr>
+    <tr><td>Bian 2018 CRC, right colon</td><td>92.1%</td><td>291</td></tr>
+    <tr><td>Bian 2018 CRC, left colon</td><td>91.1%</td><td>235</td></tr>
+    <tr><td>Bian 2018 CRC, rectum</td><td>97.1%</td><td>34</td></tr>
+    <tr><td>Bian 2018 adjacent normal (within-patient control)</td><td>95.4%</td><td>87</td></tr>
+    <tr><td><b>GI overall</b> (colon + small intestine)</td><td><b>99.9%</b></td><td>1,193</td></tr>
+  </table>
+  <p>Gaiti 2019 CLL reads <code class="inl">B.Cell</code> in 97.3% of cells above 100k covered
+    CpGs (84.9% across all 2,616, including the sparse tail). Chaligne 2021 glioma splits
+    Neuron 30.5% / Oligodendrocyte 28.2% — the honest answer for a cohort whose true origins, OPC
+    and astrocyte, are not classes in this atlas.</p>
+  <p><b>Mouse brain, 41 types.</b> Class-balanced accuracy 0.969 ± 0.001 at native coverage over
+    ten-fold CV (micro 0.963 ± 0.001), the same tree shape recovered in every fold. Macro leads
+    because the cohort is 23× imbalanced and micro cannot hear the eleven classes under 50 cells.</p>
+</section>
+
+<section class="card">
+  <h2>Deconvolution references <span class="m">— <code class="inl">.msdref</code>, not a bundle</span></h2>
+  <p>Deconvolution takes a standalone reference; the solver rebuilds its pattern set per query from
+    the CpGs that query actually measured, so no pattern budget is baked in.
+    <code class="inl">hg38_62celltypes.msdref</code> is the primary reference (v8); the
+    single-cell backbone is what lets it read single-cell-derived immune mixtures and resolve
+    T-cell subtypes (Tmem/Tnaive × CD4/CD8). <code class="inl">hg38_33celltypes.msdref</code> is
+    the earlier bulk-pooled one; it replaced <code class="inl">hg38_65celltypes.refx</code>, a
+    withdrawn format the current binary can neither read nor produce.</p>
+  <pre data-norun="a form, not a runnable example; the Deconvolve tab runs the real thing"><code>methscope deconv hg38_62celltypes.msdref mixture.cg -o props.tsv</code></pre>
+</section>
+
+<section class="card">
+  <h2><code class="inl">--framework violation</code> <span class="m">— classify with no trained model</span></h2>
+  <p>Not a model but an option on <code class="inl">classify</code>. Every MRMP already carries a
+    binstring — the methylation state each reference class takes at that pattern — so a reference
+    <i>is</i> a per-class prediction already. The rule asks which class the query contradicts
+    least, and there is nothing to fit:</p>
+  <pre data-norun="a form, not a runnable example"><code>methscope classify --framework violation ref.mrmp query.cg</code></pre>
+  <pre data-norun="notation, not a command"><code>E1 = patterns the class expects methylated;  E0 = expects unmethylated
+w_j = sqrt(n_cpg_j)
+
+v1 = Σ_{j∈E1, observed} w_j·[β_j ≤ 0.5] / Σ_{j∈E1, observed} w_j
+v0 = Σ_{j∈E0, observed} w_j·[β_j &gt;  0.5] / Σ_{j∈E0, observed} w_j
+
+predict argmin_class (v1 + v0), needing ≥20 observed patterns per side</code></pre>
+  <p>Tune with <code class="inl">--call-threshold</code>, <code class="inl">--pattern-weight</code>,
+    <code class="inl">--min-patterns</code> and <code class="inl">--top</code>; nothing is fitted, so
+    changing one is a rescore, not a retrain. <b>What it is for:</b> you have a reference and no
+    training data — build an MRMP over it and you have a classifier the same minute, over any label
+    set. It is also the honest baseline for a trained model on the same features: whatever a
+    booster gains over it is what the training data bought.</p>
+  <p><code class="inl">confidence</code> is the <b>margin</b> to the runner-up, not a
+    probability. It collapses toward zero when <i>no</i> class fits, which is how a query whose
+    true type is missing from the reference announces itself; records too sparse to clear
+    <code class="inl">--min-patterns</code> come back <code class="inl">NA</code>. Margins are not
+    comparable between references with different class counts.</p>
+  <p class="note"><b><code class="inl">ref.mrmp</code> must be a single flat set.</b> Do not point
+    it at a routing-tree chain such as <code class="inl">hg38_celltype.clfx</code>: the rule pools
+    every set it finds, and a tree's sets have different class memberships, so the binstrings are
+    not commensurable — it currently fails <i>silently</i>, with near-zero confidences and no
+    warning. Accuracy is coverage-dependent: on the 33-type reference it plateaued near 0.85
+    above ~130k covered CpGs against 0.163 below 8k. Do not use it below ~30k covered CpGs; for a
+    bulk tumour, deconvolve rather than classify.</p>
 </section>
 
 </div>
