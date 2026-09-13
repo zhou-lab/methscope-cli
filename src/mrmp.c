@@ -3089,6 +3089,8 @@ int main_mrmp_build(int argc, char *argv[]) {
   const char *pos[2] = {NULL, NULL}, *setname = "root";
   const char *cal_labels = NULL;
   int npos = 0, force = 0, flat = 0;
+  uint32_t top = 10000;              /* --flat only: keep the top N by CpG count */
+  int top_given = 0;
   const int dry = 0;                 /* the --dry-run mode is retired */
   /* Satellites are retired with the routing trees: the bank's resolvers
    * replaced them. The recursion still carries the parameters, pinned off. */
@@ -3115,7 +3117,7 @@ int main_mrmp_build(int argc, char *argv[]) {
         "Workflow\n"
         "  methscope mrmp-build --bank --anneal-min-seg 10000,3000,1000 \\\n"
         "      --cell-store CELLS.cg --cell-labels CELLS.tsv REF.cg OUT.mrmp\n"
-        "  methscope mrmp-build --flat REF.cg OUT.mrmp\n\n"
+        "  methscope mrmp-build --flat --top 500 REF.cg OUT.mrmp\n\n"
         "Split discovery (the hierarchy behind a bank's binstring blocks)\n"
         "  --anneal-min-seg HI,LO[,STEP]\n"
         "                        Anneal the split threshold PER NODE:\n"
@@ -3139,6 +3141,13 @@ int main_mrmp_build(int argc, char *argv[]) {
         "\n"
         "Modes\n"
         "  --flat                One set over every class, no hierarchy.\n"
+        "  --top N               --flat only: keep the N patterns with the most\n"
+        "                        CpGs, the rest folded into PNA. Default:\n"
+        "                        10000; 0 keeps every pattern. The build ranks\n"
+        "                        every candidate; this is the consumer's cut,\n"
+        "                        applied here because a flat set has one\n"
+        "                        consumer -- the same prune as mrmp-pool\n"
+        "                        --pooled-top, for chains that must compete.\n"
         "  --bank                The classifier artifact: a FLAT chain of two\n"
         "                        feature types and no routing. Type 1: each split\n"
         "                        node's binstrings, pruned to patterns with\n"
@@ -3324,6 +3333,9 @@ int main_mrmp_build(int argc, char *argv[]) {
      * became the tree builder, kept because a flat global is still the right
      * artifact for deconvolution and for a reference too shallow to split. */
     else if (!strcmp(a, "--flat")) flat = 1;
+    else if (!strcmp(a, "--top") && i + 1 < argc) {
+      top = (uint32_t)parse_u64(argv[++i], a); top_given = 1;
+    }
     else if (!strcmp(a, "--cell-store") && i + 1 < argc)
       g_cal_store = argv[++i];
     else if (!strcmp(a, "--cell-labels") && i + 1 < argc)
@@ -3428,6 +3440,9 @@ int main_mrmp_build(int argc, char *argv[]) {
         "the violation rule, export); the routing tree is retired", NULL);
   if (flat && g_anneal_hi)
     die("--flat and --anneal-min-seg contradict each other", NULL);
+  if (g_bank && top_given)
+    die("--top cuts a single flat set; a bank's sets are budgeted by "
+        "--pattern-floor and --resolver-gate, or by mrmp-pool", NULL);
   if (flat) min_seg = UINT64_MAX;   /* nothing can split */
   /* The floor stays OFF by default, including under --flat. It was briefly
    * defaulted on here, because the standalone satellite builder that --flat
@@ -3566,6 +3581,24 @@ int main_mrmp_build(int argc, char *argv[]) {
   }
 
   ms_mrmp_chain_write(out, t.n, (const void *const *)t.img, t.len);
+  /* --flat --top N: the consumer's cut, applied at write time because a flat
+   * set has exactly one consumer and no other set to compete with. The same
+   * prune mrmp-pool --pooled-top runs -- winners are a prefix of the set's own
+   * CpG-count ranking -- so the two cannot drift. 0 keeps every pattern. */
+  if (flat && top && t.n == 1) {
+    ms_mrmpset_t *ch = ms_mrmpset_open(out);
+    void *pimg = NULL; uint64_t pbytes = 0;
+    uint32_t before = 0;
+    { mrmp_reader_t r; mrmp_open_at(&r, out, ch->block_off[0], ch->block_bytes[0]);
+      before = (uint32_t)r.h->n_candidates; mrmp_close(&r); }
+    prune_block(out, ch->block_off[0], ch->block_bytes[0], top, NULL, &pimg, &pbytes);
+    ms_mrmpset_free(ch);
+    ms_mrmp_chain_write(out, 1, (const void *const *)&pimg, &pbytes);
+    free(t.img[0]); t.img[0] = pimg; t.len[0] = pbytes;
+    if (before > top)
+      fprintf(stderr, "  --top %u: kept the %u patterns with the most CpGs of "
+              "%u, the rest folded into PNA\n", top, top, before);
+  }
   /* Also one file per node. A block is a byte-identical standalone MRMPIDX1, so
    * this needs no re-encode -- and it is what lets classify-featurize /
    * classify-train drive the tree per node with no new subcommand. */

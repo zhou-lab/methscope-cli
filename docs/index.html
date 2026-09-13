@@ -337,9 +337,11 @@ cd methscope-cli &amp;&amp; make          <span class="cm"># add CUDA=1 for the 
              00000000000000000000000000000000000   2,214,235  <span class="c">P3</span>
 <span class="k">membership</span> 4 B × 29,401,795  rank per CpG
              CpG 0 → 0  <span class="c">P1</span>    CpG 7 → 4294967295  <span class="c">PNA</span></pre>
-<figcaption><b>MRMPIDX1</b> — every candidate ranked, with no top-K baked in, so the top-K cut
-  belongs to the consumer. Ranking is deterministic, so the build is byte-reproducible from the
-  reference alone.</figcaption>
+<figcaption><b>MRMPIDX1</b> — every candidate ranked, so the top-K cut belongs to the consumer:
+  <code class="inl">mrmp-build --flat --top N</code> for a single set (default 10,000, the
+  N patterns with the most CpGs, the rest folded into PNA), <code class="inl">mrmp-pool
+  --pooled-top N</code> when sets from a chain must compete for one budget. Ranking is
+  deterministic, so the build is byte-reproducible from the reference alone.</figcaption>
   </figure>
 </section>
 
@@ -357,7 +359,9 @@ cd methscope-cli &amp;&amp; make          <span class="cm"># add CUDA=1 for the 
     <code class="inl">.cg</code> — no YAME + awk + sort pipeline, ~576&nbsp;MB peak, ~50&nbsp;s
     for a whole-genome reference. The fetchable example below is chr20 only, so it finishes in
     about a second. <code class="inl">--flat</code> builds one set over every class, which is
-    what this demo, upscale, export and the violation rule use.</p>
+    what this demo, upscale, export and the violation rule use; it keeps the
+    <code class="inl">--top</code> patterns with the most CpGs (default 10,000 — this chr20 set has
+    491, so nothing is cut).</p>
   <!-- example:20_classify_mrmp_build -->
 <pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
@@ -1203,7 +1207,7 @@ violation rule and export. One of the two is required.
 Workflow
   methscope mrmp-build --bank --anneal-min-seg 10000,3000,1000 \
       --cell-store CELLS.cg --cell-labels CELLS.tsv REF.cg OUT.mrmp
-  methscope mrmp-build --flat REF.cg OUT.mrmp
+  methscope mrmp-build --flat --top 500 REF.cg OUT.mrmp
 
 Split discovery (the hierarchy behind a bank's binstring blocks)
   --anneal-min-seg HI,LO[,STEP]
@@ -1228,6 +1232,13 @@ Split discovery (the hierarchy behind a bank's binstring blocks)
 
 Modes
   --flat                One set over every class, no hierarchy.
+  --top N               --flat only: keep the N patterns with the most
+                        CpGs, the rest folded into PNA. Default:
+                        10000; 0 keeps every pattern. The build ranks
+                        every candidate; this is the consumer's cut,
+                        applied here because a flat set has one
+                        consumer -- the same prune as mrmp-pool
+                        --pooled-top, for chains that must compete.
   --bank                The classifier artifact: a FLAT chain of two
                         feature types and no routing. Type 1: each split
                         node's binstrings, pruned to patterns with
@@ -1910,11 +1921,12 @@ Options:
   -h, --help       show this help
 
 EVERY pattern in IN.mrmp becomes a column -- there is no width knob here.
-Pattern SELECTION belongs to `mrmp-pool --pooled-top N`, which ranks every
-pattern of every set on CpG count and prunes to a shared budget. A width
-flag here was worse than redundant: it RESERVED slots per set, so a chain
-handed its root the first N columns whether or not the root's Nth pattern
-outweighed a child's 1st. Pool first, then featurize what survives.
+Pattern SELECTION happens when the MRMP is made: `mrmp-build --flat --top N`
+for a single set, or `mrmp-pool --pooled-top N` when several sets must
+compete for one budget. Both rank on CpG count and fold the rest into PNA.
+A width flag here was worse than redundant: it RESERVED slots per set, so a
+chain handed its root the first N columns whether or not the root's Nth
+pattern outweighed a child's 1st. Cut first, then featurize what survives.
 
 One msur serves many models. What is stored per (cell, replicate) is the raw
 summary -- beta and covered-CpG count for every pattern, plus the observed
