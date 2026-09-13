@@ -359,21 +359,21 @@ cd methscope-cli &amp;&amp; make          <span class="cm"># add CUDA=1 for the 
     <code class="inl">.cg</code> — no YAME + awk + sort pipeline, ~576&nbsp;MB peak, ~50&nbsp;s
     for a whole-genome reference. The fetchable example below is chr20 only, so it finishes in
     about a second. <code class="inl">--flat</code> builds one set over every class, which is
-    what this demo, upscale, export and the violation rule use; it keeps the
-    <code class="inl">--top</code> patterns with the most CpGs (default 10,000 — this chr20 set has
-    491, so nothing is cut).</p>
+    what this demo, upscale, export and the violation rule use; <code class="inl">--top</code>
+    keeps the N patterns with the most CpGs and folds the rest into PNA (default 10,000). This
+    chr20 set has 261, so <code class="inl">--top 500</code> cuts nothing here — it is the idiom
+    a whole-genome build uses.</p>
   <!-- example:20_classify_mrmp_build -->
 <pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 <span class="cm"># a 40-cell-type chr20 reference (39.5 MB)</span>
 methscope <a class="sub" href="#ref-fetch">fetch</a> -c hg38/data/human_hg38_40_celltypes_chr20.cg
-methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --flat human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</code></pre>
+methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --flat --top 500 human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</code></pre>
 <!-- /example -->
-  <pre class="res"><code>root  40 classes | 491 patterns | 7,218 CpGs
-  split threshold: 20,000 CpGs -> 1 group(s)
-  ! unsplittable (40 classes): GSM5652176_Adipocytes-Z000000T7 ... (34 more)
-  1 node(s), 29,904 bytes -> chr20_40celltypes.mrmp</code></pre>
+  <pre class="res"><code>root  40 classes | 261 patterns | 3,787 CpGs
+  split threshold: none (flat) -> 1 group(s)
+  1 node(s), 16,792 bytes -> chr20_40celltypes.mrmp</code></pre>
   <p class="note">40 samples is the ceiling: a pattern packs as a base-3 uint64 and 3^40 &lt; 2^64
     &lt; 3^41. The whole-genome models use 35 Zhou pseudo-bulks.</p>
 </section>
@@ -390,25 +390,28 @@ methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --flat human_hg38
   reference      human_hg38_40_celltypes_chr20.cg
 
   classes        40
-  patterns       491
-  covered        7,218 of 773,477 CpGs (0.93%)
-  PNA            766,259 CpGs (99.07%) match no pattern
+  patterns       261
+  covered        3,787 of 773,477 CpGs (0.49%)
+  PNA            769,690 CpGs (99.51%) match no pattern
 
-  block          29,904 bytes
-  membership     18,266 bytes, RLE + BGZF (169x vs dense)
+  block          16,792 bytes
+  membership     9,744 bytes, RLE + BGZF (318x vs dense)
+  thresholds     present (per-pattern midpoints)
+
   resolution     --mincov 1  --beta-threshold 0.500
+                 --max-ambig-frac 1.000  --min-major-fold 10.000
   checksum       8cf2026fa6de8d46  (over the per-CpG key stream)</code></pre>
   <p><code class="inl">--patterns</code> adds the ranked head; <code class="inl">--top</code> sets
     how many (default 20).</p>
   <!-- example:22_classify_mrmp_patterns -->
 <pre><code>methscope <a class="sub" href="#ref-inspect">inspect</a> chr20_40celltypes.mrmp --patterns --top 5</code></pre>
 <!-- /example -->
-  <pre class="res"><code>#pattern                                  label  count   (top 5 of 491)
-1111111101111111111111111111111111111111  P1     698
-1111101111111111111111111111111111111111  P2     527
-1111111111011111111111111111111111111111  P3     478
-1111111110111111111111111111111111111111  P4     429
-1111111111111101111111111111111111111111  P5     337</code></pre>
+  <pre class="res"><code>#pattern                                  label  count   (top 5 of 261)
+1111111101111111111111111111111111111111  P1     385
+1111111111011111111111111111111111111111  P2     331
+1111111110111111111111111111111111111111  P3     304
+1111111111111101111111111111111111111111  P4     219
+1111111111111111111111111111111111101111  P5     202</code></pre>
   <p>For a multi-set routing tree, <code class="inl">--tree</code> shows each MRMP
     node and the classes it decides. It works on the tree bundle written by
     <code class="inl">mrmp-build</code>.</p>
@@ -416,9 +419,9 @@ methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --flat human_hg38
 <pre><code>methscope <a class="sub" href="#ref-inspect">inspect</a> chr20_40celltypes.mrmp --tree</code></pre>
 <!-- /example -->
   <pre class="res"><code>TREE  chr20_40celltypes.mrmp
-  1 node, 40 classes, 491 patterns over 7,218 CpGs
+  1 node, 40 classes, 261 patterns over 3,787 CpGs
 
-root                       40 classes      491 patterns      7,218 CpGs
+root                       40 classes      261 patterns      3,787 CpGs
   |-- GSM5652176_Adipocytes-Z000000T7
   |-- GSM5652181_Saphenous-Vein-Endothel-Z000000RM
   ...</code></pre>
@@ -850,8 +853,8 @@ mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 methscope <a class="sub" href="#ref-fetch">fetch</a> -c hg38/data/human_hg38_40_celltypes_chr20.cg
 methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --flat --force human_hg38_40_celltypes_chr20.cg chr20.mrmp</code></pre>
 <!-- /example -->
-  <pre class="res"><code>root  40 classes | 491 patterns | 7,218 CpGs
-  1 node(s), 29,904 bytes -> chr20.mrmp</code></pre>
+  <pre class="res"><code>root  40 classes | 261 patterns | 3,787 CpGs
+  1 node(s), 16,792 bytes -> chr20.mrmp</code></pre>
   <!-- example:51_upscale_train_featurize -->
 <pre><code><span class="cm"># 2. featurize the truth atlas -&gt; sampling/truth msur</span>
 methscope <a class="sub" href="#ref-upscale-featurize">upscale-featurize</a> --reps 20 --sample 8000 human_hg38_40_celltypes_chr20.cg chr20.mrmp <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span></code></pre>
@@ -927,10 +930,10 @@ embedded_truth    yes (trainable)</code></pre>
   <!-- example:55_upscale_train -->
 <pre><code>methscope <a class="sub" href="#ref-upscale-train">upscale-train</a> -i <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span> --units <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span> --mrmp chr20.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">chr20.updecx</span> --work-dir work/ --threads 8</code></pre>
 <!-- /example -->
-  <pre class="res"><code>P=491 features=beta+count input=982 trunk=none pure=16 mixed=factor/32
+  <pre class="res"><code>P=261 features=beta+count input=522 trunk=none pure=16 mixed=factor/32
 backend=cpu
-units 109/109 (resumed=0) last_val_mae=0.193608
-wrote bare UPDEC2 work//model.updec2 (95924368 bytes), resumed=0</code></pre>
+units 109/109 (resumed=0) last_val_mae=0.188897
+wrote bare UPDEC2 work//model.updec2 (89885488 bytes), resumed=0</code></pre>
   <p class="note">The validation MAE moves a little between runs — 0.171 and 0.194 on two
     passes over this same input — so treat it as a scale, not a checksum. The unit count,
     the pattern count and the model size are stable.</p>
