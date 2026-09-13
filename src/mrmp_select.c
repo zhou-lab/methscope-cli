@@ -41,10 +41,8 @@ void ms_select_defaults(ms_select_opt_t *o) {
    * fold-0 stringency arms (a=3 band: native macro 0.9353 with the specific
    * confuser pairs at their best). Set 0 for the old unshrunk behaviour. */
   o->shrink_pseudocnt = 3.0f;
-  o->min_cg_depth = 0;
-  o->max_frac_na = 0.0f;
-  o->depth_floor_frac = 0.0f;      /* off; satellites turn it on */
-  o->depth_floor_cap = 20;
+  o->feature_mindepth = 0;         /* 0 = follow --call-mindepth */
+  o->max_lowdepth_frac = 0.0f;
   o->inc_all0 = 0; o->inc_all1 = 0;
   o->quiet = 0;
 }
@@ -66,34 +64,6 @@ static void seek_record(cfile_t *cf, const int64_t *rec_off, uint32_t k) {
   }
 }
 
-/* Per-class genome-wide mean depth, over CpGs the class actually covers.
- * Needed only for the RELATIVE floor: an absolute floor cannot serve both ends
- * of the class range -- 10 deletes a depth-5 class entirely while never binding
- * on a depth-112 one. */
-static double *class_mean_depth(const char *ref, uint32_t ns, uint32_t mincov,
-                                uint64_t n_cpg, const int64_t *rec_off) {
-  double *mean = xc(ns, sizeof(double), "class mean depth");
-  cfile_t cf = open_cfile((char *)ref);
-  for (uint32_t k = 0; k < ns; ++k) {
-    seek_record(&cf, rec_off, k);
-    cdata_t c = read_cdata1(&cf);
-    if (!c.n) { free_cdata(&c); break; }
-    decompress_in_situ(&c);
-    uint64_t tot = 0, seen = 0;
-    for (uint64_t i = 0; i < n_cpg; ++i) {
-      uint64_t mu = f3_get_mu(&c, i);
-      if (!mu) continue;
-      uint64_t cov = MU2cov(mu);
-      if (cov < mincov) continue;
-      tot += cov; ++seen;
-    }
-    mean[k] = seen ? (double)tot / (double)seen : 0.0;
-    free_cdata(&c);
-  }
-  bgzf_close(cf.fh);
-  return mean;
-}
-
 /* qsort comparator: CpG indices, descending by whichever statistic ranks them
  * by delta_mean, the mean beta of the classes the pattern calls 1 minus that
  * of the ones it calls 0. */
@@ -113,34 +83,22 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
                         const int64_t *rec_off) {
   /* The q-filter is a RULE, not merely a gate on the top-N leg. It used to be
    * the latter: with no cap every leg was inactive and the selector returned
-   * NULL -- no selection -- so `--qfilter 0.1,0.9` kept all 1,214,550 CpGs of a
+   * NULL -- no selection -- so `--call-band 0.1,0.9` kept all 1,214,550 CpGs of a
    * 2-class node instead of its 21,224. It now has an uncapped form of its own
    * (--delta-mean-top 0), so no combination of options means "select nothing". */
 
-  /* per-class relative-depth targets: min(frac * own mean, cap) */
-  double *target = NULL;
-  if (o->depth_floor_frac > 0.0f) {
-    double *mean = class_mean_depth(ref, ns, mincov, n_cpg, rec_off);
-    target = xc(ns, sizeof(double), "depth targets");
-    for (uint32_t k = 0; k < ns; ++k) {
-      double t = o->depth_floor_frac * mean[k];
-      if (t > (double)o->depth_floor_cap) t = (double)o->depth_floor_cap;
-      target[k] = t;
-    }
-    free(mean);
-  }
+  /* The depth a class needs for its beta to count as evidence here. Defaults
+   * to the call depth: a class the binstring could not even call is not
+   * evidence about anything. */
+  const uint32_t mindepth = o->feature_mindepth ? o->feature_mindepth : mincov;
 
   float *min1 = xc(n_cpg, sizeof(float), "min1");
   float *max0 = xc(n_cpg, sizeof(float), "max0");
   float *sum1 = xc(n_cpg, sizeof(float), "sum1");
   float *sum0 = xc(n_cpg, sizeof(float), "sum0");
   uint8_t *n1 = xc(n_cpg, 1, "n1"), *n0 = xc(n_cpg, 1, "n0");
-  uint8_t *npres = xc(n_cpg, 1, "npres");
-  uint8_t *floor_ok = xc(n_cpg, 1, "floor_ok");
-  uint16_t *mincv = xc(n_cpg, sizeof(uint16_t), "min coverage");
-  for (uint64_t i = 0; i < n_cpg; ++i) {
-    min1[i] = 2.0f; max0[i] = -1.0f; mincv[i] = 0xFFFF; floor_ok[i] = 1;
-  }
+  uint8_t *nlow = xc(n_cpg, 1, "nlow");        /* classes below mindepth */
+  for (uint64_t i = 0; i < n_cpg; ++i) { min1[i] = 2.0f; max0[i] = -1.0f; }
 
   /* One streaming pass. For each class we know, per CpG, whether its binstring
    * calls that class 1 or 0, so the expected-high and expected-low groups can
@@ -152,16 +110,27 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
     cdata_t c = read_cdata1(&cf);
     if (!c.n) { free_cdata(&c); break; }
     decompress_in_situ(&c);
-    const double tk = target ? target[k] : 0.0;
     for (uint64_t i = 0; i < n_cpg; ++i) {
       uint32_t r = memb[i];
       if (r == MRMP_PNA_MEMBERSHIP) continue;
       uint64_t mu = f3_get_mu(&c, i);
       uint64_t cov = mu ? MU2cov(mu) : 0;
-      if (!mu || cov < mincov) { floor_ok[i] = 0; continue; }   /* absent */
-      ++npres[i];
-      if (cov < mincv[i]) mincv[i] = (uint16_t)(cov > 0xFFFF ? 0xFFFF : cov);
-      if (target && (double)cov < tk) floor_ok[i] = 0;
+      /* Low-depth class: no usable measurement, so it is not tested -- an
+       * untested class can neither pass nor fail the band. How many such
+       * classes a feature may carry is --max-lowdepth-frac's call, below.
+       * (An earlier version cleared a depth-floor veto here unconditionally,
+       * which dropped every CpG with one uncovered class before the tolerance
+       * was consulted and cost 13.4% of the mouse genome; 20260912 entry.) */
+      if (cov < mindepth) { ++nlow[i]; continue; }
+      /* A class exactly at the call threshold is NOT skipped, though its
+       * binstring digit was imputed. It has reads: the measurement says
+       * "intermediate", which is a real answer to the band's question -- does
+       * every 1-class look methylated and every 0-class unmethylated -- and
+       * the answer is no, whichever way the fill went. Under any band that
+       * straddles the threshold it fails as a filled 0 and as a filled 1
+       * alike, so imputation does not decide the kept set. Only a class with
+       * NO measurement is skipped (above), and how many of those a CpG may
+       * have is --max-lowdepth-frac's call. */
       float b = (float)MU2beta(mu);
       /* The RANK gets a shrunk beta, the q-filter keeps the raw one. Without
        * shrinkage delta_mean is MAXIMIZED by depth-1 CpGs: one read gives beta
@@ -184,7 +153,7 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
        * admitted pool filled with unfalsifiable calls. Shrunk, a lone read
        * lands at 0.333/0.667 and can never clear a 0.30/0.70 band; unanimous
        * depth-2 can, and a site with dissent needs ~depth 5. A soft,
-       * self-scaling depth floor instead of --min-cg-depth's hard veto. */
+       * self-scaling depth floor instead of --feature-mindepth's hard veto. */
       if (binstr[r][k] == '1') {
         if (bs < min1[i]) min1[i] = bs;
         sum1[i] += bs; ++n1[i];
@@ -196,31 +165,28 @@ uint8_t *ms_mrmp_select(const char *ref, uint32_t ns, uint32_t mincov,
     free_cdata(&c);
   }
   bgzf_close(cf.fh);
-  free(target);
 
   /* Per-CpG verdicts. A CpG with an empty side carries no contrast, so it can
    * pass neither leg however extreme the other side looks. */
-  const uint32_t na_allow = (uint32_t)(o->max_frac_na * (float)ns);
+  const uint32_t low_allow = (uint32_t)(o->max_lowdepth_frac * (float)ns);
   uint8_t *keep = xc(n_cpg, 1, "keep");
   uint8_t *qok = xc(n_cpg, 1, "qok");
   float *rank = xc(n_cpg, sizeof(float), "rank statistic");
   for (uint64_t i = 0; i < n_cpg; ++i) {
-    /* Same relaxation as mrmp-build's --qfilter: an empty side is normally no
+    /* Same relaxation as mrmp-build's --call-band: an empty side is normally no
      * contrast and therefore skipped, but --include-all-0/-1 ask for exactly
      * those, so the gate must yield to the flag rather than silently undo it. */
     if (memb[i] == MRMP_PNA_MEMBERSHIP) continue;
     if (!n1[i] && !o->inc_all0) continue;
     if (!n0[i] && !o->inc_all1) continue;
-    if ((uint32_t)(ns - npres[i]) > na_allow) continue;
-    if (o->min_cg_depth && mincv[i] < o->min_cg_depth) continue;
-    if (!floor_ok[i]) continue;
+    if ((uint32_t)nlow[i] > low_allow) continue;
     rank[i] = sum1[i] / n1[i] - sum0[i] / n0[i];
     if (o->min_sbeta_gap > 0.0f) {
       if (min1[i] - max0[i] >= o->min_sbeta_gap) qok[i] = 1;
     } else if (max0[i] <= o->qfilter_lo && min1[i] >= o->qfilter_hi) qok[i] = 1;
   }
   free(min1); free(max0); free(sum1); free(sum0);
-  free(n1); free(n0); free(npres); free(floor_ok); free(mincv);
+  free(n1); free(n0); free(nlow);
 
   /* Floor leg: per binstring, the top delta_mean_top among q-filter passers.
    * Counting sort by pattern rank, so this is O(n_cpg) plus a per-pattern sort

@@ -1290,11 +1290,62 @@ Per-pair calibration
                         picking the loosest grid cell. Default: 0.02.
   --calib-threads N     Threads per calibration pass. Default: 8.
 
-Feature selection
-  --qfilter LO,HI       Keep CpGs where every 0-class &lt;= LO and every
-                        1-class &gt;= HI.
-  --delta-mean-top N    Keep at most N CpGs per binstring, ranked by
-                        mean class gap. Default: 20000; 0 keeps all.
+Binstring: which pattern a CpG belongs to
+  --beta-threshold B    Call beta &gt; B methylated. Default: 0.5.
+  --call-mindepth N     Reads a class needs at a CpG to be CALLED
+                        there; below it the class is ambiguous (see
+                        below). Per class per CpG, not a class
+                        filter. Default: 1. (was --mincov)
+  --include-all-0       Keep the all-unmethylated pattern.
+  --include-all-1       Keep the all-methylated pattern.
+  Ambiguous classes. A class is ambiguous at a CpG when it is below
+  --call-mindepth or sits exactly at --beta-threshold. Such a class
+  is imputed, by default from the majority call of the classes that
+  ARE confident at that CpG. --impute-ambiguous chooses the strategy,
+  `none` making the CpG PNA instead -- the strict reading, since a
+  binstring otherwise states something about a class with no
+  evidence behind it. The rest of this block tunes imputation and
+  means nothing under `none`.
+  --impute-ambiguous S  How to fill an ambiguous class:
+                          none      the CpG is PNA
+                          majority  the majority call of the
+                                    confidently called classes AT
+                                    THAT CpG (more 1s -&gt; 1, more
+                                    0s -&gt; 0, exact tie -&gt; 0)
+                                    [default]
+                          zero      always unmethylated
+                          one       always methylated
+                          random    an unbiased coin per (CpG,
+                                    class), from --impute-seed
+                        A nearest-neighbour strategy -- fill from
+                        the CpGs around it rather than the classes
+                        beside it -- is not implemented.
+  --impute-seed N       Seed for `random` (default 1). The draw is
+                        a hash of the seed, the CpG and the class,
+                        so it does not depend on row order or
+                        thread count. NOT stored in the artifact:
+                        keep the build command.
+  --min-major-fold F    `majority` only: trust the fill just where
+                        the majority sweeps, the larger side being
+                        &gt;= F times the smaller (unanimous always
+                        qualifies). Otherwise the CpG is PNA after
+                        all, because filling from a near-even split
+                        fabricates calls. Default: 10. 0 fills
+                        whatever the majority is.
+  --max-ambig-frac F    PNA a CpG whose ambiguous classes exceed
+                        this fraction, whatever the strategy says.
+                        Default: 1.0 (off).
+
+Feature selection: which CpGs back a pattern
+  --call-band LO,HI     Keep a CpG only if every 0-class reads &lt;= LO
+                        and every 1-class &gt;= HI, on shrunk betas.
+                        Default: 0.30,0.70. A class with reads is
+                        tested even where its digit was imputed: an
+                        intermediate measurement is a real answer,
+                        and a band failure is never tolerated. `none`
+                        (LO == HI == --beta-threshold) filters
+                        nothing, which is the way to see a set before
+                        and after the band. (was --qfilter)
   --shrink-pseudocnt A  Shrink the per-class beta to (M+A)/(M+U+2A)
                         for BOTH the admission test and the ranking.
                         In Bayesian terms this is the posterior mean
@@ -1308,19 +1359,19 @@ Feature selection
                         exactly 0 or 1, passing admission more easily
                         than well-measured evidence and taking the
                         maximum rank. 0 restores raw betas.
-  --mincov N            Minimum per-class coverage. Default: 1.
-  --depth-floor-frac F  Require F times each class's genome-wide mean
-                        depth. Default: 0 (off).
-  --depth-floor-cap N   Cap the depth-floor target. Default: 20.
-  --beta-threshold B    Call beta &gt; B methylated. Default: 0.5.
-  --max-ambig-frac F    Maximum ambiguous-call fraction.
-  --min-major-fold F    Minimum major-call depth fold.
-  --max-frac-na F       Maximum missing-class fraction per CpG.
-  --min-cg-depth N      Minimum per-class CpG depth. Required of
-                        EVERY class, so one thin class drops the CpG
-                        for all of them and the pool shrinks sharply.
-  --include-all-0       Keep all-unmethylated patterns.
-  --include-all-1       Keep all-methylated patterns.
+  --feature-mindepth N  Reads a class needs at a CpG for its beta to
+                        count as EVIDENCE there. A class below it is
+                        not tested. Default: --call-mindepth; a class
+                        that could not be called is not evidence.
+                        (was --min-cg-depth)
+  --max-lowdepth-frac F Fraction of classes allowed below
+                        --feature-mindepth before the CpG is dropped
+                        as a feature. Default: 0. This is the only
+                        tolerance: untested classes may be waived,
+                        tested-and-failed ones may not.
+                        (was --max-frac-na)
+  --delta-mean-top N    Keep at most N CpGs per binstring, ranked by
+                        mean class gap. Default: 20000; 0 keeps all.
 
 Output
   --name NAME           Root name. Default: root.
@@ -1399,7 +1450,7 @@ NAME: prefix and cannot mislabel anything.
                              binstring with no class on one side
                              separates nothing however many CpGs it
                              carries, so it should not consume budget.
-                             mrmp-build --qfilter also excludes them,
+                             mrmp-build --call-band also excludes them,
                              but only when a filter is given, and pool
                              takes blocks from any generator.</code></pre>
   </details>

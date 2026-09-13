@@ -299,8 +299,14 @@ int main_upscale_set_units(int argc, char **argv) {
     if (!ns) fail_path("reference index is empty", store_path);
     g_pattern_len = ns;
     pk = pna_key();                       /* depends on g_pattern_len */
+    /* impute=1 here, unlike mrmp-build's default. A unit map must place EVERY
+     * CpG -- that is the point of deriving units from the store rather than
+     * from a .mrmp -- so an ambiguous CpG has to land somewhere, and the
+     * majority fill puts it with the CpGs it most resembles instead of
+     * dumping it into PNA. Definitions are exclusive; units are exhaustive. */
     ms_binstring_map(store_path, ns, lab, voff, mincov, beta_thr,
-                     MS_BS_DEF_MAX_AMBIG, MS_BS_DEF_MIN_FOLD, 1, 1, &bm);
+                     MS_BS_DEF_MAX_AMBIG, MS_BS_DEF_MIN_FOLD,
+                     MRMP_IMPUTE_MAJORITY, 1 /*seed, unused*/, 1, 1, &bm);
     for (uint32_t k = 0; k < ns; ++k) free(lab[k]);
     free(lab); free(voff);
 

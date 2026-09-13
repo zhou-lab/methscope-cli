@@ -92,6 +92,40 @@
  * readable and old readers skip content by the stored offsets. */
 #define MRMP_FLAG_MINSEG 16u
 
+/* The set imputed its ambiguous classes rather than sending those CpGs to PNA
+ * (--impute-ambiguous, default majority; see resolve_cpg). Recorded because the
+ * strategies give different MRMP sets over one reference and a reader cannot
+ * tell them apart from the membership alone. ABSENT IN ARTIFACTS WRITTEN BEFORE
+ * THE OPTION EXISTED, which were all built the majority way, so absence means
+ * "majority, or old" and only the presence of a method is informative. */
+#define MRMP_FLAG_IMPUTE 32u
+
+/* Which imputation the set used, when MRMP_FLAG_IMPUTE is set: two bits, so
+ * a reader can tell a majority-filled set from a coin-flipped one without the
+ * build command. The random strategy's seed is NOT stored -- it belongs with
+ * the command in the lab record, and a set built from it is reproducible only
+ * with that command. */
+#define MRMP_FLAG_IMPUTE_METHOD_MASK 192u   /* bits 64 + 128 */
+#define MRMP_FLAG_IMPUTE_METHOD_SHIFT 6u
+#define MRMP_IMPUTE_NONE     0
+#define MRMP_IMPUTE_MAJORITY 1
+#define MRMP_IMPUTE_ZERO     2
+#define MRMP_IMPUTE_ONE      3
+#define MRMP_IMPUTE_RANDOM   4
+
+/* The method a header's flags record: MRMP_IMPUTE_NONE when the flag is off,
+ * otherwise the two method bits + 1, so the four strategies fit two bits. */
+static inline int mrmp_impute_method(uint32_t flags) {
+  if (!(flags & MRMP_FLAG_IMPUTE)) return MRMP_IMPUTE_NONE;
+  return (int)((flags & MRMP_FLAG_IMPUTE_METHOD_MASK) >>
+               MRMP_FLAG_IMPUTE_METHOD_SHIFT) + 1;
+}
+static inline uint32_t mrmp_impute_flags(int method) {
+  if (method <= MRMP_IMPUTE_NONE) return 0;
+  return MRMP_FLAG_IMPUTE |
+         ((uint32_t)(method - 1) << MRMP_FLAG_IMPUTE_METHOD_SHIFT);
+}
+
 /* Fixed header (136 bytes since split_minseg; 128 before); all little-endian,
  * offsets are absolute file bytes. */
 typedef struct {
@@ -227,7 +261,8 @@ typedef struct {
 
 void ms_binstring_map(const char *store, uint32_t ns, char *const *label,
                       const int64_t *voff, uint32_t mincov, float beta_thr,
-                      float max_ambig, float min_fold,
+                      float max_ambig, float min_fold, int impute,
+                      uint64_t impute_seed,
                       int inc_all0, int inc_all1, ms_binstring_map_t *out);
 void ms_binstring_map_free(ms_binstring_map_t *m);
 /* One 2-class satellite per (thin class, partner), as one chain.

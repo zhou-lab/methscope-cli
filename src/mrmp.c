@@ -86,7 +86,7 @@ static void key_to_string(const uint64_t *key, uint32_t len, char *out) {
 
 /* A binstring with no class on one side separates nothing: every class called
  * 1, or every class called 0, discriminates no pair however many CpGs it
- * carries. mrmp-build's --qfilter happens to exclude these (its both-sides test
+ * carries. mrmp-build's --call-band happens to exclude these (its both-sides test
  * is max0 >= 0 && min1 <= 1), but only when a filter is given, and pool accepts
  * blocks from any generator built with any flags -- so the check belongs where
  * every pattern passes through. '2' is the ambiguous call and counts as
@@ -236,6 +236,7 @@ char **ms_read_store_index(const char *ref, uint32_t *n_out,
 static void resolve_cpg(const uint8_t *meth, const uint8_t *ambig,
                         uint64_t i, uint32_t ns, uint32_t stride,
                         uint64_t n_cpg, float min_fold, float max_ambig,
+                        int impute, uint64_t impute_seed,
                         const uint64_t *pna_key, int *is_pna, uint64_t *key,
                         int inc_all0, int inc_all1) {
   uint32_t n1 = 0, namb = 0;
@@ -244,9 +245,24 @@ static void resolve_cpg(const uint8_t *meth, const uint8_t *ambig,
     namb += (uint32_t)__builtin_popcount(ambig[(uint64_t)g * n_cpg + i]);
   }
   uint32_t n0 = ns - n1 - namb;
+  /* Default (--impute-ambiguous none): a binstring is a statement about EVERY
+   * class, so one class that is not confidently called makes the CpG PNA. The
+   * other strategies fill the ambiguous classes instead, under the guards
+   * below (--min-major-fold for majority, --max-ambig-frac for all of them,
+   * and --max-lowdepth-frac in selection). Imputation is a claim about missing
+   * evidence, so it is made only when asked for. */
+  if (namb > 0 && impute == MRMP_IMPUTE_NONE) {
+    *is_pna = 1;
+    memcpy(key, pna_key, mrmp_key_words(ns) * sizeof(uint64_t));
+    return;
+  }
   int fill_one = (n1 > n0);                       /* exact tie -> '0' */
   uint32_t hi = fill_one ? n1 : n0, lo = fill_one ? n0 : n1;
-  int sweeping = (hi > 0) && (lo == 0 || (double)hi >= min_fold * (double)lo);
+  /* "Sweeping" gates the MAJORITY strategy only: it asks whether there is a
+   * majority worth copying. A fixed or random fill makes no claim about the
+   * confident classes, so nothing to gate. */
+  int sweeping = (impute != MRMP_IMPUTE_MAJORITY) ||
+                 ((hi > 0) && (lo == 0 || (double)hi >= min_fold * (double)lo));
   uint32_t nw = mrmp_key_words(ns);
   if ((ns && (double)namb > max_ambig * (double)ns) || (namb > 0 && !sweeping)) {
     *is_pna = 1;
@@ -254,7 +270,7 @@ static void resolve_cpg(const uint8_t *meth, const uint8_t *ambig,
     return;
   }
   /* No class on one side separates nothing. Done HERE rather than left to
-   * --qfilter's both-sides test, which only runs when a filter is given -- an
+   * --call-band's both-sides test, which only runs when a filter is given -- an
    * unfiltered build would otherwise carry these as ordinary patterns, ranked
    * by CpG count like anything else, able to win pooled budget while
    * discriminating no pair. */
@@ -268,13 +284,35 @@ static void resolve_cpg(const uint8_t *meth, const uint8_t *ambig,
   for (uint32_t s = 0; s < ns; ++s) {
     uint64_t off = (uint64_t)(s >> 3) * n_cpg + i;
     int digit;
-    if ((ambig[off] >> (s & 7)) & 1) digit = fill_one ? 1 : 0;
-    else digit = (meth[off] >> (s & 7)) & 1;
+    if ((ambig[off] >> (s & 7)) & 1) {
+      switch (impute) {
+        case MRMP_IMPUTE_ZERO: digit = 0; break;
+        case MRMP_IMPUTE_ONE:  digit = 1; break;
+        case MRMP_IMPUTE_RANDOM: {
+          /* A hash of (seed, CpG, class), not a stream from one generator:
+           * the draw must not depend on how many CpGs or classes came first,
+           * so it is the same under any thread count or row order. splitmix64
+           * finaliser. */
+          uint64_t x = impute_seed ^ (i * 0x9E3779B97F4A7C15ULL) ^
+                       ((uint64_t)s * 0xBF58476D1CE4E5B9ULL);
+          x ^= x >> 30; x *= 0xBF58476D1CE4E5B9ULL;
+          x ^= x >> 27; x *= 0x94D049BB133111EBULL;
+          x ^= x >> 31;
+          digit = (int)(x & 1ULL);
+          break;
+        }
+        default: digit = fill_one ? 1 : 0; break;   /* MRMP_IMPUTE_MAJORITY */
+      }
+    } else digit = (meth[off] >> (s & 7)) & 1;
     key[s / MRMP_TRITS_PER_WORD] = key[s / MRMP_TRITS_PER_WORD] * 3 + (uint64_t)digit;
   }
 }
 
 /* ---------------- ranking (count desc, key asc) ------------------------- */
+
+/* --impute-seed, for MRMP_IMPUTE_RANDOM. Not in the header (no room), so a
+ * random-filled set is reproducible from the build command, not from itself. */
+static uint64_t g_impute_seed = 1;
 
 static const uint64_t *g_keys;   /* n_pat * g_nw */
 static const uint64_t *g_count;
@@ -966,7 +1004,7 @@ int main_mrmp_inspect(int argc, char *argv[]) {
   printf("\n");
   /* Spelled as the flags that set them: "beta=0.500" reads like a measured
    * value rather than the knob it is. */
-  printf("  %-14s --mincov %u  --beta-threshold %.3f\n",
+  printf("  %-14s --call-mindepth %u  --beta-threshold %.3f\n",
          "resolution", h->mincov, h->beta_threshold);
   printf("  %-14s --max-ambig-frac %.3f  --min-major-fold %.3f\n",
          "", h->max_ambig_frac, h->min_major_fold);
@@ -1513,7 +1551,7 @@ int main_mrmp_pool(int argc, char *argv[]) {
         "                             binstring with no class on one side\n"
         "                             separates nothing however many CpGs it\n"
         "                             carries, so it should not consume budget.\n"
-        "                             mrmp-build --qfilter also excludes them,\n"
+        "                             mrmp-build --call-band also excludes them,\n"
         "                             but only when a filter is given, and pool\n"
         "                             takes blocks from any generator.\n");
       return 0;
@@ -1762,7 +1800,8 @@ typedef struct {
  * the same rule rather than a second copy of it. See mrmp.h. */
 void ms_binstring_map(const char *store, uint32_t ns, char *const *label,
                       const int64_t *voff, uint32_t mincov, float beta_thr,
-                      float max_ambig, float min_fold,
+                      float max_ambig, float min_fold, int impute,
+                      uint64_t impute_seed,
                       int inc_all0, int inc_all1, ms_binstring_map_t *out) {
   const uint32_t stride = (ns + 7) >> 3, nw = mrmp_key_words(ns);
 
@@ -1806,8 +1845,8 @@ void ms_binstring_map(const char *store, uint32_t ns, char *const *label,
   for (uint64_t i = 0; i < n_cpg; ++i) {
     int is_pna;
     resolve_cpg(meth, ambig, i, ns, stride, n_cpg,
-                min_fold, max_ambig, pna_key, &is_pna, key,
-                inc_all0, inc_all1);
+                min_fold, max_ambig, impute, impute_seed, pna_key, &is_pna,
+                key, inc_all0, inc_all1);
     if (is_pna) {
       pidx[i] = MRMP_PNA_MEMBERSHIP; ++pna_cpg;
     } else {
@@ -1870,7 +1909,8 @@ static void build_subset_block(const char *store, uint32_t ns,
    * more than the 4 bytes per CpG. */
   ms_binstring_map_t bm;
   ms_binstring_map(store, ns, label, voff, mincov, beta_thr, max_ambig,
-                   min_fold, sel->inc_all0, sel->inc_all1, &bm);
+                   min_fold, mrmp_impute_method(gh->flags), g_impute_seed,
+                   sel->inc_all0, sel->inc_all1, &bm);
   const uint64_t n_cpg = bm.n_cpg;
   uint64_t n_pat = bm.n_pat, pat_cap = bm.n_pat ? bm.n_pat : 1;
   uint64_t *pkeys = bm.keys, *pcount = bm.count;
@@ -3059,6 +3099,9 @@ int main_mrmp_build(int argc, char *argv[]) {
   mrmp_header_t gh; memset(&gh, 0, sizeof gh);
   gh.mincov = MRMP_DEF_MINCOV;       gh.beta_threshold = MRMP_DEF_BETA_THRESH;
   gh.max_ambig_frac = MRMP_DEF_MAX_AMBIG; gh.min_major_fold = MRMP_DEF_MIN_FOLD;
+  /* majority is the default because every model shipped so far was built
+   * that way -- it was the only behaviour -- so a rebuild reproduces them. */
+  gh.flags |= mrmp_impute_flags(MRMP_IMPUTE_MAJORITY);
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
@@ -3156,11 +3199,61 @@ int main_mrmp_build(int argc, char *argv[]) {
         "  --calib-eps E         Tolerance below the best LOO macro when\n"
         "                        picking the loosest grid cell. Default: 0.02.\n"
         "  --calib-threads N     Threads per calibration pass. Default: 8.\n\n"
-        "Feature selection\n"
-        "  --qfilter LO,HI       Keep CpGs where every 0-class <= LO and every\n"
-        "                        1-class >= HI.\n"
-        "  --delta-mean-top N    Keep at most N CpGs per binstring, ranked by\n"
-        "                        mean class gap. Default: 20000; 0 keeps all.\n"
+        "Binstring: which pattern a CpG belongs to\n"
+        "  --beta-threshold B    Call beta > B methylated. Default: 0.5.\n"
+        "  --call-mindepth N     Reads a class needs at a CpG to be CALLED\n"
+        "                        there; below it the class is ambiguous (see\n"
+        "                        below). Per class per CpG, not a class\n"
+        "                        filter. Default: 1. (was --mincov)\n"
+        "  --include-all-0       Keep the all-unmethylated pattern.\n"
+        "  --include-all-1       Keep the all-methylated pattern.\n"
+        "  Ambiguous classes. A class is ambiguous at a CpG when it is below\n"
+        "  --call-mindepth or sits exactly at --beta-threshold. Such a class\n"
+        "  is imputed, by default from the majority call of the classes that\n"
+        "  ARE confident at that CpG. --impute-ambiguous chooses the strategy,\n"
+        "  `none` making the CpG PNA instead -- the strict reading, since a\n"
+        "  binstring otherwise states something about a class with no\n"
+        "  evidence behind it. The rest of this block tunes imputation and\n"
+        "  means nothing under `none`.\n"        "  --impute-ambiguous S  How to fill an ambiguous class:\n"
+        "                          none      the CpG is PNA\n"
+        "                          majority  the majority call of the\n"
+        "                                    confidently called classes AT\n"
+        "                                    THAT CpG (more 1s -> 1, more\n"
+        "                                    0s -> 0, exact tie -> 0)\n"
+        "                                    [default]\n"
+        "                          zero      always unmethylated\n"
+        "                          one       always methylated\n"
+        "                          random    an unbiased coin per (CpG,\n"
+        "                                    class), from --impute-seed\n"
+        "                        A nearest-neighbour strategy -- fill from\n"
+        "                        the CpGs around it rather than the classes\n"
+        "                        beside it -- is not implemented.\n"
+        "  --impute-seed N       Seed for `random` (default 1). The draw is\n"
+        "                        a hash of the seed, the CpG and the class,\n"
+        "                        so it does not depend on row order or\n"
+        "                        thread count. NOT stored in the artifact:\n"
+        "                        keep the build command.\n"
+        "  --min-major-fold F    `majority` only: trust the fill just where\n"
+        "                        the majority sweeps, the larger side being\n"
+        "                        >= F times the smaller (unanimous always\n"
+        "                        qualifies). Otherwise the CpG is PNA after\n"
+        "                        all, because filling from a near-even split\n"
+        "                        fabricates calls. Default: 10. 0 fills\n"
+        "                        whatever the majority is.\n"
+        "  --max-ambig-frac F    PNA a CpG whose ambiguous classes exceed\n"
+        "                        this fraction, whatever the strategy says.\n"
+        "                        Default: 1.0 (off).\n"
+        "\n"
+        "Feature selection: which CpGs back a pattern\n"
+        "  --call-band LO,HI     Keep a CpG only if every 0-class reads <= LO\n"
+        "                        and every 1-class >= HI, on shrunk betas.\n"
+        "                        Default: 0.30,0.70. A class with reads is\n"
+        "                        tested even where its digit was imputed: an\n"
+        "                        intermediate measurement is a real answer,\n"
+        "                        and a band failure is never tolerated. `none`\n"
+        "                        (LO == HI == --beta-threshold) filters\n"
+        "                        nothing, which is the way to see a set before\n"
+        "                        and after the band. (was --qfilter)\n"
         "  --shrink-pseudocnt A  Shrink the per-class beta to (M+A)/(M+U+2A)\n"
         "                        for BOTH the admission test and the ranking.\n"
         "                        In Bayesian terms this is the posterior mean\n"
@@ -3174,19 +3267,20 @@ int main_mrmp_build(int argc, char *argv[]) {
         "                        exactly 0 or 1, passing admission more easily\n"
         "                        than well-measured evidence and taking the\n"
         "                        maximum rank. 0 restores raw betas.\n"
-        "  --mincov N            Minimum per-class coverage. Default: 1.\n"
-        "  --depth-floor-frac F  Require F times each class's genome-wide mean\n"
-        "                        depth. Default: 0 (off).\n"
-        "  --depth-floor-cap N   Cap the depth-floor target. Default: 20.\n"
-        "  --beta-threshold B    Call beta > B methylated. Default: 0.5.\n"
-        "  --max-ambig-frac F    Maximum ambiguous-call fraction.\n"
-        "  --min-major-fold F    Minimum major-call depth fold.\n"
-        "  --max-frac-na F       Maximum missing-class fraction per CpG.\n"
-        "  --min-cg-depth N      Minimum per-class CpG depth. Required of\n"
-        "                        EVERY class, so one thin class drops the CpG\n"
-        "                        for all of them and the pool shrinks sharply.\n"
-        "  --include-all-0       Keep all-unmethylated patterns.\n"
-        "  --include-all-1       Keep all-methylated patterns.\n\n"
+        "  --feature-mindepth N  Reads a class needs at a CpG for its beta to\n"
+        "                        count as EVIDENCE there. A class below it is\n"
+        "                        not tested. Default: --call-mindepth; a class\n"
+        "                        that could not be called is not evidence.\n"
+        "                        (was --min-cg-depth)\n"
+        "  --max-lowdepth-frac F Fraction of classes allowed below\n"
+        "                        --feature-mindepth before the CpG is dropped\n"
+        "                        as a feature. Default: 0. This is the only\n"
+        "                        tolerance: untested classes may be waived,\n"
+        "                        tested-and-failed ones may not.\n"
+        "                        (was --max-frac-na)\n"
+        "  --delta-mean-top N    Keep at most N CpGs per binstring, ranked by\n"
+        "                        mean class gap. Default: 20000; 0 keeps all.\n"
+        "\n"
         "Output\n"
         "  --name NAME           Root name. Default: root.\n"
         "  --force               Overwrite OUT.mrmp.\n\n"
@@ -3238,40 +3332,62 @@ int main_mrmp_build(int argc, char *argv[]) {
       g_cal_eps = (float)atof(argv[++i]);
     else if (!strcmp(a, "--calib-threads") && i + 1 < argc)
       g_cal_threads = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--depth-floor-frac") && i + 1 < argc)
-      sel.depth_floor_frac = (float)atof(argv[++i]);
-    else if (!strcmp(a, "--depth-floor-cap") && i + 1 < argc)
-      sel.depth_floor_cap = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--name") && i + 1 < argc) setname = argv[++i];
     else if (!strcmp(a, "--beta-threshold") && i + 1 < argc)
       gh.beta_threshold = (float)atof(argv[++i]);
+    else if (!strcmp(a, "--impute-ambiguous") && i + 1 < argc) {
+      const char *m = argv[++i];
+      int meth = !strcmp(m, "none")     ? MRMP_IMPUTE_NONE
+               : !strcmp(m, "majority") ? MRMP_IMPUTE_MAJORITY
+               : !strcmp(m, "zero")     ? MRMP_IMPUTE_ZERO
+               : !strcmp(m, "one")      ? MRMP_IMPUTE_ONE
+               : !strcmp(m, "random")   ? MRMP_IMPUTE_RANDOM : -1;
+      if (meth < 0) die("--impute-ambiguous: unknown strategy", m);
+      gh.flags = (gh.flags & ~(MRMP_FLAG_IMPUTE | MRMP_FLAG_IMPUTE_METHOD_MASK))
+               | mrmp_impute_flags(meth);
+    }
+    else if (!strcmp(a, "--impute-seed") && i + 1 < argc)
+      g_impute_seed = parse_u64(argv[++i], a);
     else if (!strcmp(a, "--max-ambig-frac") && i + 1 < argc)
       gh.max_ambig_frac = (float)atof(argv[++i]);
     else if (!strcmp(a, "--min-major-fold") && i + 1 < argc)
       gh.min_major_fold = (float)atof(argv[++i]);
-    else if (!strcmp(a, "--max-frac-na") && i + 1 < argc)
-      sel.max_frac_na = (float)atof(argv[++i]);
-    else if (!strcmp(a, "--min-cg-depth") && i + 1 < argc)
-      sel.min_cg_depth = (uint32_t)parse_u64(argv[++i], a);
+    else if ((!strcmp(a, "--max-lowdepth-frac") || !strcmp(a, "--max-frac-na"))
+             && i + 1 < argc)
+      sel.max_lowdepth_frac = (float)atof(argv[++i]);
+    else if ((!strcmp(a, "--feature-mindepth") || !strcmp(a, "--min-cg-depth"))
+             && i + 1 < argc)
+      sel.feature_mindepth = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--shrink-pseudocnt") && i + 1 < argc)
       sel.shrink_pseudocnt = (float)atof(argv[++i]);
     else if (!strcmp(a, "--include-all-0")) sel.inc_all0 = 1;
     else if (!strcmp(a, "--include-all-1")) sel.inc_all1 = 1;
     else if (!strcmp(a, "--max-depth") && i + 1 < argc)
       max_depth = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--mincov") && i + 1 < argc)
+    else if ((!strcmp(a, "--call-mindepth") || !strcmp(a, "--mincov"))
+             && i + 1 < argc)
       gh.mincov = (uint32_t)parse_u64(argv[++i], a);
     else if (!strcmp(a, "--delta-mean-top") && i + 1 < argc) {
       sel.delta_mean_top = (uint32_t)parse_u64(argv[++i], a);
     }
-    else if (!strcmp(a, "--qfilter") && i + 1 < argc) {
-      const char *v = argv[++i]; char *end = NULL;
+    else if ((!strcmp(a, "--call-band") || !strcmp(a, "--qfilter")) && i + 1 < argc) {
+      const char *v = argv[++i];
+      /* `none` is LO == HI == the call threshold, which is the identity: a
+       * confident 0-class is below it and a confident 1-class above it, so
+       * both legs always pass. Spelled out because a band that filters
+       * nothing should not have to be discovered. LO == HI is therefore
+       * legal; LO > HI still is not. */
+      if (!strcmp(v, "none") || !strcmp(v, "off")) {
+        sel.qfilter_lo = sel.qfilter_hi = gh.beta_threshold;
+      } else {
+      char *end = NULL;
       float lo = strtof(v, &end);
-      if (!end || *end != ',') die("--qfilter wants LO,HI", v);
+      if (!end || *end != ',') die("--call-band wants LO,HI (or none)", v);
       float hi = strtof(end + 1, NULL);
-      if (!(lo >= 0.0f && hi <= 1.0f && lo < hi))
-        die("--qfilter needs 0 <= LO < HI <= 1", v);
+      if (!(lo >= 0.0f && hi <= 1.0f && lo <= hi))
+        die("--call-band needs 0 <= LO <= HI <= 1", v);
       sel.qfilter_lo = lo; sel.qfilter_hi = hi;
+      }
                      /* asking for the old rule selects it */
     }
     else if (!strcmp(a, "--force")) force = 1;
@@ -3316,7 +3432,7 @@ int main_mrmp_build(int argc, char *argv[]) {
   /* The floor stays OFF by default, including under --flat. It was briefly
    * defaulted on here, because the standalone satellite builder that --flat
    * replaced ran it -- but measurement says the protection is band-specific,
-   * not builder-specific. At --qfilter 0.15,0.75 held-out PAL-Inh read 0.422 on a
+   * not builder-specific. At --call-band 0.15,0.75 held-out PAL-Inh read 0.422 on a
    * contrast its reference put at 0.043, and the floor was the right answer.
    * At 0.30,0.70 the same pair reads 0.080 against 0.078: the looser band
    * never selects the extreme, thinly-supported CpGs in the first place, so

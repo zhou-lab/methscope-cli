@@ -6,7 +6,7 @@
  * built first over every CpG, then each binstring independently decides which
  * of its CpGs to keep.
  *
- * THERE IS ONE RULE: --qfilter admits, delta_mean ranks, --delta-mean-top
+ * THERE IS ONE RULE: --call-band (once --qfilter) admits, delta_mean ranks, --delta-mean-top
  * budgets (0 = uncapped). A second rule, P(01), was tried and removed -- see
  * the section at the end for the measurement that retired it.
  *
@@ -61,7 +61,7 @@
  *
  * So the rule was carrying nothing the budget was not, and two selection rules
  * that silently switched on flag ORDER -- --p01-min after --qfilter voided both
- * --qfilter and --delta-mean-top -- cost more in confusion than the option was
+ * the band and --delta-mean-top -- cost more in confusion than the option was
  * worth. One rule now: q-filter admits, delta_mean ranks, --delta-mean-top
  * budgets, and --delta-mean-top 0 is the uncapped form. */
 #ifndef MS_MRMP_SELECT_H
@@ -92,10 +92,14 @@ typedef struct {
                                       * beta exactly 0 or 1, passing the band
                                       * more easily than measured evidence and
                                       * taking the maximum rank. 0 = raw. */
-  uint32_t min_cg_depth;             /* absolute, required of EVERY class */
-  float    max_frac_na;              /* fraction of classes allowed absent */
-  float    depth_floor_frac;         /* relative to each class's OWN mean */
-  uint32_t depth_floor_cap;          /* ceiling on the relative target */
+  uint32_t feature_mindepth;         /* reads a class needs for its beta to
+                                      * count as evidence at a CpG; 0 = the
+                                      * call depth (mrmp-build --call-mindepth) */
+  float    max_lowdepth_frac;        /* fraction of classes allowed below
+                                      * feature_mindepth before the CpG is
+                                      * dropped as a feature; they are not
+                                      * tested, so they cannot fail the band,
+                                      * and a band FAILURE is never tolerated */
   int      inc_all0, inc_all1;       /* keep patterns no class calls 1 / 0 */
   int      quiet;                    /* suppress the per-call select line: the
                                       * satellite builders run this once PER
@@ -107,7 +111,7 @@ typedef struct {
  *
  * `binstr[r]` is the length-ns binstring of rank r, `memb[i]` the rank of CpG i
  * (MRMP_PNA_MEMBERSHIP for PNA, which is never selected). Streams `ref` twice:
- * once for per-class mean depth (only when depth_floor_frac > 0), once for the
+ * once for the
  * per-CpG statistics.
  *
  * `rec_off`, when non-NULL, is the BGZF virtual offset of each class's record
