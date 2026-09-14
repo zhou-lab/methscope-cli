@@ -15,7 +15,7 @@ d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 ms_train "$d"
 
 ## ---- 1. the MRMP is built over CLASSES, and must see exactly two ----------
-"$MS" mrmp-build --flat "$d/ref.cg" "$d/m.mrmp" > "$d/build.log" 2>&1
+"$MS" mrmp-build "$d/ref.cg" "$d/m.mrmp" > "$d/build.log" 2>&1
 grep -q "2 classes" "$d/build.log" ||
   { echo "mrmp-build did not see 2 classes:"; cat "$d/build.log"; exit 1; }
 

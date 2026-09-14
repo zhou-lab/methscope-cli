@@ -338,7 +338,7 @@ cd methscope-cli &amp;&amp; make          <span class="cm"># add CUDA=1 for the 
 <span class="k">membership</span> 4 B × 29,401,795  rank per CpG
              CpG 0 → 0  <span class="c">P1</span>    CpG 7 → 4294967295  <span class="c">PNA</span></pre>
 <figcaption><b>MRMPIDX1</b> — every candidate ranked, so the top-K cut belongs to the consumer:
-  <code class="inl">mrmp-build --flat --top N</code> for a single set (default 10,000, the
+  <code class="inl">mrmp-build --top N</code> for a single set (default 10,000, the
   N patterns with the most CpGs, the rest folded into PNA), <code class="inl">mrmp-pool
   --pooled-top N</code> when sets from a chain must compete for one budget. Ranking is
   deterministic, so the build is byte-reproducible from the reference alone.</figcaption>
@@ -358,7 +358,7 @@ cd methscope-cli &amp;&amp; make          <span class="cm"># add CUDA=1 for the 
     <code class="inl">mrmp-build</code> constructs it natively from a discretized reference
     <code class="inl">.cg</code> — no YAME + awk + sort pipeline, ~576&nbsp;MB peak, ~50&nbsp;s
     for a whole-genome reference. The fetchable example below is chr20 only, so it finishes in
-    about a second. <code class="inl">--flat</code> builds one set over every class, which is
+    about a second. The default mode builds one set over every class, which is
     what this demo, upscale, export and the violation rule use; <code class="inl">--top</code>
     keeps the N patterns with the most CpGs and folds the rest into PNA (default 10,000). This
     chr20 set has 261, so <code class="inl">--top 500</code> cuts nothing here — it is the idiom
@@ -369,7 +369,7 @@ mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 
 <span class="cm"># a 40-cell-type chr20 reference (39.5 MB)</span>
 methscope <a class="sub" href="#ref-fetch">fetch</a> -c hg38/data/human_hg38_40_celltypes_chr20.cg
-methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --flat --top 500 human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</code></pre>
+methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --top 500 human_hg38_40_celltypes_chr20.cg chr20_40celltypes.mrmp</code></pre>
 <!-- /example -->
   <pre class="res"><code>root  40 classes | 261 patterns | 3,787 CpGs
   split threshold: none (flat) -> 1 group(s)
@@ -516,10 +516,12 @@ methscope <a class="sub" href="#ref-inspect">inspect</a> hg38_sex.clfx</code></p
     <code class="inl">hg38_celltype_full.clfx</code>, copied from the driver that ran them
     (<code class="inl">labjournal/zhouw3/2026/20260904_bankfull_final.sh</code>) rather than
     simplified for the page — the flags are load-bearing and a reader who drops them gets a
-    different model. <code class="inl">--resolver-gate 2000</code> in place of
-    <code class="inl">-1</code> is the whole difference between <code class="inl">_lite</code>
-    and <code class="inl">_full</code>. The driver writes <code class="inl">bank.clfx</code>;
-    it is renamed when staged.</p>
+    different model. The whole difference between <code class="inl">_lite</code> and
+    <code class="inl">_full</code> is three flags: <code class="inl">--min-pattern-cpgs 500
+    --resolvers 100</code> on the bank (the 100 class pairs with the thinnest hard-block
+    footprint get a resolver, instead of every pair) and <code class="inl">-n 100</code> on
+    the booster. The driver writes <code class="inl">bank.clfx</code>; it is renamed when
+    staged.</p>
   <!-- example:27_classify_train -->
 <pre data-norun="the recorded build of hg38_celltype_full.clfx (labjournal 20260904_bankfull_final.sh, SPECIES=human); needs the labelled reference store"><code><span class="cm"># inputs: REF = 63 per-class pooled references, STORE = the 84,601 labelled cells,</span>
 <span class="cm"># CLAB = cell -&gt; label for every cell, TRIDS/TRLAB = a balanced training draw.</span>
@@ -527,11 +529,11 @@ methscope <a class="sub" href="#ref-inspect">inspect</a> hg38_sex.clfx</code></p
 <span class="cm"># --resolver-stride k/8 into the same --resolver-cache; this is the one-job form.</span>
 LADDER=0,4096,16384,65536,262144; T=24; SEED=20260828
 
-methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --bank --resolver-gate -1 --pattern-floor 2000 \
+methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --bank --resolvers all --min-pattern-cpgs 2000 \
   --anneal-min-seg 10000,3000,1000 --max-depth 24 \
   --resolver-cache $B/cache \
   --cell-store $STORE --cell-labels $CLAB --calib-threads $T \
-  --force $REF $B/bank.mrmp                  <span class="cm"># --resolver-gate 2000 builds _lite instead</span>
+  --force $REF $B/bank.mrmp                  <span class="cm"># _lite: --min-pattern-cpgs 500 --resolvers 100</span>
 
 yame subset -l $TRIDS -o $B/train.cg $STORE
 yame index -s $TRIDS $B/train.cg
@@ -540,7 +542,8 @@ methscope <a class="sub" href="#ref-classify-featurize">classify-featurize</a> -
   -l $TRLAB -o $B/train.msfm $B/train.cg $B/bank.mrmp
 
 methscope <a class="sub" href="#ref-classify-train">classify-train</a> --threads $T --data $B/train.msfm \
-  -o $B/bank.clfx                            <span class="cm"># constrained defaults: max-depth 4, colsample 0.4</span></code></pre>
+  -o $B/bank.clfx                            <span class="cm"># constrained defaults: max-depth 4, colsample 0.4</span>
+                                             <span class="cm"># _lite: add -n 100 (a 100-round booster)</span></code></pre>
 <!-- /example -->
   <p class="note"><b>Why it is not runnable here.</b> It wants the 63-class pooled reference
     and the 84,601 labelled single cells behind it, not a chr20 fixture — and the cost is the
@@ -851,7 +854,7 @@ mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 <span class="cm"># the whole pipeline from scratch, on the 40-cell-type chr20 reference</span>
 <span class="cm"># 1. define the features</span>
 methscope <a class="sub" href="#ref-fetch">fetch</a> -c hg38/data/human_hg38_40_celltypes_chr20.cg
-methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --flat --force human_hg38_40_celltypes_chr20.cg chr20.mrmp</code></pre>
+methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --force human_hg38_40_celltypes_chr20.cg chr20.mrmp</code></pre>
 <!-- /example -->
   <pre class="res"><code>root  40 classes | 261 patterns | 3,787 CpGs
   1 node(s), 16,792 bytes -> chr20.mrmp</code></pre>
@@ -1198,19 +1201,21 @@ Notes:
 <section class="card">
   <h2>MRMP construction <span class="m">— the feature foundation</span></h2>
   <details class="ref" id="ref-mrmp-build">
-    <summary><code class="inl">methscope mrmp-build</code> <span class="m">— Build the MRMP routing tree (--flat for one flat set)</span></summary>
-    <pre class="help"><code>Usage: methscope mrmp-build --bank [options] REF.cg OUT.mrmp
-       methscope mrmp-build --flat [options] REF.cg OUT.mrmp
+    <summary><code class="inl">methscope mrmp-build</code> <span class="m">— Build an MRMP set (--bank: the classifier's chain)</span></summary>
+    <pre class="help"><code>Usage: methscope mrmp-build [options] REF.cg OUT.mrmp
+       methscope mrmp-build --bank [options] REF.cg OUT.mrmp
 
 Build an MRMP from a labelled reference store: one record per class,
-record name = class name. --bank is the classifier artifact (the
-release models); --flat is one set over every class, for upscale, the
-violation rule and export. One of the two is required.
+record name = class name. The default is ONE set over every class,
+for upscale, the violation rule and export; --bank is the classifier
+artifact (the release models), a chain of blocks from an annealed
+split hierarchy plus calibrated 2-class resolvers.
 
 Workflow
+  methscope mrmp-build --top 500 REF.cg OUT.mrmp
   methscope mrmp-build --bank --anneal-min-seg 10000,3000,1000 \
-      --cell-store CELLS.cg --cell-labels CELLS.tsv REF.cg OUT.mrmp
-  methscope mrmp-build --flat --top 500 REF.cg OUT.mrmp
+      --resolvers 100 --cell-store CELLS.cg --cell-labels CELLS.tsv \
+      REF.cg OUT.mrmp
 
 Split discovery (the hierarchy behind a bank's binstring blocks)
   --anneal-min-seg HI,LO[,STEP]
@@ -1234,8 +1239,7 @@ Split discovery (the hierarchy behind a bank's binstring blocks)
   --max-depth N         Maximum split depth. Default: 16.
 
 Modes
-  --flat                One set over every class, no hierarchy.
-  --top N               --flat only: keep the N patterns with the most
+  --top N               Default mode only: keep the N patterns with the most
                         CpGs, the rest folded into PNA. Default:
                         10000; 0 keeps every pattern. The build ranks
                         every candidate; this is the consumer's cut,
@@ -1245,24 +1249,37 @@ Modes
   --bank                The classifier artifact: a FLAT chain of two
                         feature types and no routing. Type 1: each split
                         node's binstrings, pruned to patterns with
-                        &gt;= --pattern-floor CpGs (tree-named for
+                        &gt;= --min-pattern-cpgs CpGs (tree-named for
                         provenance only). Type 2: calibrated 2-class
                         rebuilds named root@A__B -- every terminal
                         pair, every pair inside an unsplittable leaf
                         (which emits no type-1 of its own), and every
-                        cross-split pair passed by --resolver-gate.
+                        cross-split pair --resolvers picks.
                         Needs --anneal-min-seg and the calibration
                         inputs. Featurize the result with
                         --satellite-contrast replace and train with
                         classify-train --data.
-  --pattern-floor N     Type-1 pattern floor. Default: 2000.
-  --resolver-gate N     A pair gets a resolver unless a type-1
-                        pattern with &gt;= N CpGs separates it at the
-                        split where its classes part. -1 (default)
-                        = infinite = resolver for EVERY pair, the
-                        bank-full release model. N = the pattern
-                        floor gives bank-lite, the minimal-guarantee
-                        budget model; values between interpolate.
+  --min-pattern-cpgs N  A type-1 pattern must carry at least N CpGs
+                        to stay in its block; smaller ones fold into
+                        the background. Discovery is unaffected (it
+                        runs on full evidence), so the tree and the
+                        resolvers are the same at any N; only the
+                        hard blocks get fatter. Default 2000; 500
+                        is the release models' value.
+  --resolvers N|all     How many pairs get a calibrated resolver.
+                        Default 0: none, hard blocks only (no
+                        calibration, so no cell store needed).
+                        all = every pair, the bank-full model.
+                        N = the N thinnest pairs by hard-
+                        block FOOTPRINT -- the hard-block CpGs at
+                        which the two class pseudobulks are both
+                        covered and &gt; 0.5 apart in beta -- the
+                        pairs a sparse cell cannot tell apart from
+                        the type-1 columns alone. Pairs the tree
+                        never parts rank at the top by themselves;
+                        the log warns if N leaves one out. 100 is
+                        the bank-lite release model. The build log
+                        lists every chosen pair with its footprint.
   --resolver-cache DIR  Reuse resolver blocks across runs: before
                         building root@A__B, look for DIR/A__B.mrmp
                         (sanitized tags) and splice it in; else build
@@ -1924,7 +1941,7 @@ Options:
   -h, --help       show this help
 
 EVERY pattern in IN.mrmp becomes a column -- there is no width knob here.
-Pattern SELECTION happens when the MRMP is made: `mrmp-build --flat --top N`
+Pattern SELECTION happens when the MRMP is made: `mrmp-build --top N`
 for a single set, or `mrmp-pool --pooled-top N` when several sets must
 compete for one budget. Both rank on CpG count and fold the rest into PNA.
 A width flag here was worse than redundant: it RESERVED slots per set, so a

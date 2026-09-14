@@ -12,7 +12,7 @@ YAME=${YAME:?export YAME=/path/to/yame}
 here=$(cd "$(dirname "$0")" && pwd); . "$here/fixtures.sh"
 d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 ms_ref "$d"
-"$MS" mrmp-build --flat "$d/ref.cg" "$d/m.mrmp" >/dev/null 2>&1
+"$MS" mrmp-build "$d/ref.cg" "$d/m.mrmp" >/dev/null 2>&1
 "$MS" mrmp-export "$d/m.mrmp" "$d/m.cm" >/dev/null 2>&1
 
 ## a minimal linear model: the text spec form, so no xgboost training is needed

@@ -61,7 +61,7 @@ static int usage(FILE *out) {
   CMD("fetch",        "Download models and example data into the store (or -c: here)");
 
   fprintf(out, "\n%sMRMP construction%s %s— the feature foundation%s\n", B, R, D, R);
-  CMD("mrmp-build",   "Build the MRMP routing tree (--flat for one flat set)");
+  CMD("mrmp-build",   "Build an MRMP set (--bank: the classifier's chain)");
   CMD("mrmp-export",  "Emit the runtime .cm mask (and pattern / count tables)");
   CMD("mrmp-pool",    "Combine MRMP sets and cut them to a shared column budget");
 

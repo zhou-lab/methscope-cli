@@ -10,9 +10,9 @@ d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 ms_ref "$d"
 
 ## ---- 1. flat: one set over all classes ------------------------------------
-"$MS" mrmp-build --flat "$d/ref.cg" "$d/flat.mrmp" > "$d/build.log" 2>&1
+"$MS" mrmp-build "$d/ref.cg" "$d/flat.mrmp" > "$d/build.log" 2>&1
 "$MS" inspect "$d/flat.mrmp" > "$d/flat.txt" 2>&1
-grep -q "one set" "$d/flat.txt" || { echo "--flat did not produce one set:"; cat "$d/flat.txt"; exit 1; }
+grep -q "one set" "$d/flat.txt" || { echo "the default mode did not produce one set:"; cat "$d/flat.txt"; exit 1; }
 ## the six cells are two groups of three, so the build must see 6 classes
 grep -qE "classes +6" "$d/flat.txt" || { echo "expected 6 classes:"; cat "$d/flat.txt"; exit 1; }
 ## and the reference it names must be the store it was built from
@@ -25,23 +25,32 @@ pat=$(sed -n 's/^ *patterns *\([0-9]*\).*/\1/p' "$d/flat.txt" | head -1)
 
 ## ---- 3. a bank build: the annealed split finds the two-level hierarchy of
 ## ms_ref_bank and emits its binstring blocks plus one resolver per class
-## pair (C(6,2) = 15); --resolver-gate at the floor keeps only the pairs no
-## binstring separates. A build with neither mode refuses: the routing tree
-## is retired. ---------------------------------------------------------------
+## pair (C(6,2) = 15); --resolvers N keeps the N thinnest pairs by hard-block
+## footprint, so 3 blocks + 5 resolvers = 8 sets exactly. A build with
+## neither mode refuses: the routing tree is retired. ------------------------
 ms_ref_bank "$d"
-"$MS" mrmp-build --bank --anneal-min-seg 100,5 --pattern-floor 1 --force \
+"$MS" mrmp-build --bank --anneal-min-seg 100,5 --min-pattern-cpgs 1 --resolvers all --force \
   "$d/bankref.cg" "$d/bank.mrmp" > "$d/bank.log" 2>&1 ||
   { echo "bank build failed:"; cat "$d/bank.log"; exit 1; }
 "$MS" inspect "$d/bank.mrmp" > "$d/bank.txt" 2>&1
 grep -q "MRMPIDX1" "$d/bank.txt" || { echo "bank build is not an MRMPIDX1 artifact"; exit 1; }
 nset=$(sed -n 's/.*chain of \([0-9]*\) sets.*/\1/p' "$d/bank.txt" | head -1)
 [ "$nset" = "18" ] || { echo "bank-full on 6 classes should be 3 blocks + 15 resolvers = 18 sets, got '$nset'"; cat "$d/bank.txt"; exit 1; }
-"$MS" mrmp-build --bank --anneal-min-seg 100,5 --pattern-floor 1 --resolver-gate 1 --force \
-  "$d/bankref.cg" "$d/lite.mrmp" >/dev/null 2>&1
+"$MS" mrmp-build --bank --anneal-min-seg 100,5 --min-pattern-cpgs 1 --resolvers 5 --force \
+  "$d/bankref.cg" "$d/lite.mrmp" > "$d/lite.log" 2>&1
 nlite=$("$MS" inspect "$d/lite.mrmp" 2>&1 | sed -n 's/.*chain of \([0-9]*\) sets.*/\1/p' | head -1)
-[ -n "$nlite" ] && [ "$nlite" -lt "$nset" ] || { echo "bank-lite ($nlite sets) is not smaller than bank-full ($nset)"; exit 1; }
-if "$MS" mrmp-build "$d/bankref.cg" "$d/none.mrmp" >/dev/null 2>&1; then
-  echo "mrmp-build without --bank or --flat exited 0"; exit 1
+[ "$nlite" = "8" ] || { echo "bank --resolvers 5 on 6 classes should be 3 blocks + 5 resolvers = 8 sets, got '$nlite'"; cat "$d/lite.log"; exit 1; }
+grep -q "bank resolvers: the 5 of 15 pairs" "$d/lite.log" || { echo "the build log does not report the footprint pick"; cat "$d/lite.log"; exit 1; }
+"$MS" mrmp-build --bank --anneal-min-seg 100,5 --min-pattern-cpgs 1 --force \
+  "$d/bankref.cg" "$d/min.mrmp" > "$d/min.log" 2>&1
+nmin=$("$MS" inspect "$d/min.mrmp" 2>&1 | sed -n 's/.*chain of \([0-9]*\) sets.*/\1/p' | head -1)
+[ "$nmin" = "3" ] || { echo "the default (--resolvers 0, hard blocks only) should be the 3 blocks, got '$nmin'"; cat "$d/min.log"; exit 1; }
+if "$MS" mrmp-build --bank --anneal-min-seg 100,5 --resolver-gate 1 --force \
+  "$d/bankref.cg" "$d/gate.mrmp" >/dev/null 2>&1; then
+  echo "--resolver-gate is retired but was accepted"; exit 1
+fi
+if "$MS" mrmp-build --anneal-min-seg 100,5 "$d/bankref.cg" "$d/none.mrmp" >/dev/null 2>&1; then
+  echo "mrmp-build with --anneal-min-seg but no --bank exited 0"; exit 1
 fi
 
 ## ---- 4. mrmp-export emits a runtime mask over the same row space ---------

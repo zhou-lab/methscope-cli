@@ -317,7 +317,7 @@ static int usage(FILE *out) {
     "  -h, --help       show this help\n"
     "\n"
     "EVERY pattern in IN.mrmp becomes a column -- there is no width knob here.\n"
-    "Pattern SELECTION happens when the MRMP is made: `mrmp-build --flat --top N`\n"
+    "Pattern SELECTION happens when the MRMP is made: `mrmp-build --top N`\n"
     "for a single set, or `mrmp-pool --pooled-top N` when several sets must\n"
     "compete for one budget. Both rank on CpG count and fold the rest into PNA.\n"
     "A width flag here was worse than redundant: it RESERVED slots per set, so a\n"

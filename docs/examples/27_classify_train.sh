@@ -7,11 +7,11 @@
 # --resolver-stride k/8 into the same --resolver-cache; this is the one-job form.
 LADDER=0,4096,16384,65536,262144; T=24; SEED=20260828
 
-methscope mrmp-build --bank --resolver-gate -1 --pattern-floor 2000 \
+methscope mrmp-build --bank --resolvers all --min-pattern-cpgs 2000 \
   --anneal-min-seg 10000,3000,1000 --max-depth 24 \
   --resolver-cache $B/cache \
   --cell-store $STORE --cell-labels $CLAB --calib-threads $T \
-  --force $REF $B/bank.mrmp                  # --resolver-gate 2000 builds _lite instead
+  --force $REF $B/bank.mrmp                  # _lite: --min-pattern-cpgs 500 --resolvers 100
 
 yame subset -l $TRIDS -o $B/train.cg $STORE
 yame index -s $TRIDS $B/train.cg
@@ -21,3 +21,4 @@ methscope classify-featurize --threads $T --satellite-contrast replace \
 
 methscope classify-train --threads $T --data $B/train.msfm \
   -o $B/bank.clfx                            # constrained defaults: max-depth 4, colsample 0.4
+                                             # _lite: add -n 100 (a 100-round booster)

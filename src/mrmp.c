@@ -2501,7 +2501,7 @@ static uint64_t g_anneal_step = 0;                  /* 0 = continuous */
 
 /* ---- BANK mode (--bank): the two-type flat artifact -------------------
  * Type 1: each SPLIT node's binstrings, pruned to patterns carrying at
- * least --pattern-floor CpGs -- tree-named for provenance, but nothing
+ * least --min-pattern-cpgs CpGs -- tree-named for provenance, but nothing
  * routes. Type 2: calibrated 2-class rebuilds, ALL named root@A__B: every
  * terminal pair (a 2-class split group, or any pair inside an unsplittable
  * leaf, which emits no type-1 block of its own) plus every cross-split
@@ -2512,16 +2512,25 @@ static uint64_t g_anneal_step = 0;                  /* 0 = continuous */
  * classify-train --pool-nodes: pattern columns from type 1, one anchored
  * contrast per type-2 set, no routing anywhere. */
 static int g_bank = 0;
-static uint32_t g_pattern_floor = 2000;   /* applied to type-1 builds only */
-/* ONE knob spans the release family: a pair gets a calibrated resolver
- * unless a type-1 pattern of >= gate CpGs already separates it at the
- * split where its classes part. -1 (default) = infinite gate = resolver
- * for EVERY pair = bank-full; 2000 (= the floor) = bank-lite, the
- * minimal-guarantee budget model; values between interpolate. */
-static int64_t g_resolver_gate = -1;
+static uint32_t g_min_pattern_cpgs = 2000;   /* type-1 builds only */
+/* ONE knob spans the release family: --resolvers N|all. Every pair is
+ * registered at the split where its classes part; the mandatory ones
+ * (2-class groups, unsplittable leaves, floor failures) always get a
+ * resolver, and the rest are ranked by their hard-block FOOTPRINT
+ * (bank_footprint_pick, below) so the N thinnest pairs in total get one.
+ * Default 0 = the mandatory pairs only; -1 = all = bank-full, the
+ * expensive one, so it is asked for. This replaced --resolver-gate (a pair was judged
+ * resolved when ONE type-1 pattern at ONE node separated it with >= N
+ * CpGs): on fold 0 the gate's picks overlapped the pairs a held-out error
+ * search wanted by almost nothing, and every excess error of the gated
+ * lite was on a gated-out pair (20260913 entry). */
+static int64_t g_resolvers = 0;
 static const char *g_resolver_cache = NULL;  /* --resolver-cache DIR */
 static uint32_t g_stride_k = 0, g_stride_n = 0;  /* --resolver-stride k/N */
-typedef struct { char *a, *b; uint64_t sup; int mand; } bank_pair_t;
+/* mand: gets a resolver. never: the tree never parts the pair (a 2-class
+ * split group, an unsplittable leaf, a floor failure) -- recorded so the
+ * build can say how many such pairs the chosen resolvers cover. */
+typedef struct { char *a, *b; uint64_t sup; int mand, never; } bank_pair_t;
 static bank_pair_t *g_bp = NULL;
 static int bank_pair_cmp(const void *x, const void *y) {
   const bank_pair_t *p = (const bank_pair_t *)x, *q = (const bank_pair_t *)y;
@@ -2531,11 +2540,12 @@ static int bank_pair_cmp(const void *x, const void *y) {
 static uint32_t g_bp_n = 0, g_bp_cap = 0;
 
 static void bank_pair_add(const char *a, const char *b, uint64_t sup,
-                          int mand) {
+                          int mand, int never) {
   for (uint32_t i = 0; i < g_bp_n; ++i)
     if ((!strcmp(g_bp[i].a, a) && !strcmp(g_bp[i].b, b)) ||
         (!strcmp(g_bp[i].a, b) && !strcmp(g_bp[i].b, a))) {
       if (mand) g_bp[i].mand = 1;
+      if (never) g_bp[i].never = 1;
       if (sup && (!g_bp[i].sup || sup < g_bp[i].sup)) g_bp[i].sup = sup;
       return;
     }
@@ -2546,7 +2556,153 @@ static void bank_pair_add(const char *a, const char *b, uint64_t sup,
   }
   g_bp[g_bp_n].a = strdup(a); g_bp[g_bp_n].b = strdup(b);
   g_bp[g_bp_n].sup = sup; g_bp[g_bp_n].mand = mand;
+  g_bp[g_bp_n].never = never;
   ++g_bp_n;
+}
+
+/* ---- --resolvers N: the footprint pick --------------------------------
+ * Which cross pairs get a calibrated resolver is decided from the
+ * reference alone. A pair's FOOTPRINT is the number of hard-block CpGs --
+ * the union of every type-1 block's pattern CpGs, i.e. what the classifier
+ * looks at before any resolver -- at which the two class pseudobulks are
+ * both covered and differ by more than 0.5 in beta. At 4,096 sampled CpGs
+ * a cell hits ~0.02% of the row space, so a 10k footprint is ~2 usable
+ * CpGs and an 80k one ~16: the thinnest footprints are the pairs the hard
+ * blocks cannot part in a sparse cell, and those get the resolvers. The N
+ * thinnest pairs are marked, nothing else: the pairs the tree never parts
+ * (a 2-class split group, an unsplittable leaf) have no separating CpG
+ * by construction and rank at the very top on their own -- mouse ranks
+ * 1, 2, 7, 8 of 820; all 15 human ones within the top 16 of 1,953 -- so
+ * they need no special case, only a warning if N is so small that one is
+ * left out (the model then has NO feature for that pair). --resolvers 0
+ * is hard blocks only: no calibration, no cell store needed.
+ *
+ * Measured before adopting (fold 0, 20260913): the 100 thinnest pairs
+ * overlap the 100 an inner-validation error search picked by 69/100
+ * (mouse) and 58/100 (human) and train to within 0.5 point of them, where
+ * a pattern-level count (whole patterns by binstring bit, max over sets)
+ * managed 21/100 and the retired gate almost none: the pair needs a
+ * per-CpG contrast against the actual betas, not a node summary. The 0.5
+ * threshold and the both-covered rule are constants on purpose -- the
+ * recipe has no knob a user should tune. */
+static uint64_t *g_fp_key = NULL;         /* sort key: footprint per pair */
+static int fp_cmp(const void *x, const void *y) {
+  uint32_t i = *(const uint32_t *)x, j = *(const uint32_t *)y;
+  if (g_fp_key[i] != g_fp_key[j]) return g_fp_key[i] < g_fp_key[j] ? -1 : 1;
+  int c = strcmp(g_bp[i].a, g_bp[j].a);
+  return c ? c : strcmp(g_bp[i].b, g_bp[j].b);
+}
+static void bank_footprint_pick(const char *store, char *const *slab,
+                                const int64_t *voff, uint32_t ns,
+                                const treeout_t *t, FILE *rep) {
+  uint64_t want = g_resolvers < 0 ? g_bp_n : (uint64_t)g_resolvers;
+  if (want > g_bp_n) want = g_bp_n;
+  /* mand is set by rank alone from here; never-parted pairs rank at the
+   * top by themselves and are only counted for the report */
+  uint32_t nnever = 0;
+  for (uint32_t i = 0; i < g_bp_n; ++i) {
+    nnever += g_bp[i].never != 0; g_bp[i].mand = 0;
+  }
+  if (!want || !t->n) {
+    if (!t->n)
+      fprintf(rep, "\n[methscope] bank resolvers: no hard block to rank "
+              "on; none built\n");
+    else
+      fprintf(rep, "\n[methscope] bank resolvers: none (--resolvers 0): "
+              "hard blocks only\n");
+    fprintf(rep, "  %u pair(s) the tree never parts (no type-1 pattern "
+            "separates them), 0 covered by a resolver\n", nnever);
+    if (nnever)
+      fprintf(rep, "  WARNING: the model has NO feature for those pairs; "
+              "give --resolvers\n");
+    return;
+  }
+  /* 1. the hard-block CpG union */
+  const uint64_t n_cpg = ((const mrmp_header_t *)t->img[0])->n_cpg;
+  uint8_t *in = xcalloc(n_cpg, 1, "footprint mask");
+  for (uint32_t k = 0; k < t->n; ++k) {
+    const char *img = (const char *)t->img[k];
+    const mrmp_header_t *h = (const mrmp_header_t *)(const void *)img;
+    if (h->n_cpg != n_cpg) die("hard blocks disagree on the row space", NULL);
+    uint32_t *owned = NULL; const uint32_t *m;
+    if (h->flags & MRMP_FLAG_MEMB_RLE)
+      m = owned = memb_decompress((const uint8_t *)(img + h->membership_offset),
+                                  h->membership_bytes, n_cpg, h->n_candidates,
+                                  (h->flags & MRMP_FLAG_MEMB_BGZF) != 0,
+                                  "footprint membership");
+    else m = (const uint32_t *)(const void *)(img + h->membership_offset);
+    for (uint64_t i = 0; i < n_cpg; ++i)
+      if (m[i] != MRMP_PNA_MEMBERSHIP) in[i] = 1;
+    free(owned);
+  }
+  uint64_t nrow = 0;
+  for (uint64_t i = 0; i < n_cpg; ++i) nrow += in[i];
+  uint64_t *row = xcalloc(nrow ? nrow : 1, sizeof(uint64_t), "footprint rows");
+  for (uint64_t i = 0, j = 0; i < n_cpg; ++i) if (in[i]) row[j++] = i;
+  free(in);
+  /* 2. every class's beta at those rows (NAN = uncovered) */
+  float *beta = xcalloc((size_t)nrow * ns + 1, sizeof(float), "footprint betas");
+  cfile_t cf = open_cfile((char *)store);
+  for (uint32_t k = 0; k < ns; ++k) {
+    cdata_t c = read_record_at(&cf, voff[k], slab[k]);
+    if (c.n != n_cpg) die("reference and hard blocks disagree on rows", slab[k]);
+    for (uint64_t j = 0; j < nrow; ++j) {
+      uint64_t mu = f3_get_mu(&c, row[j]);
+      beta[j * ns + k] = (mu && MU2cov(mu)) ? (float)MU2beta(mu) : NAN;
+    }
+    free_cdata(&c);
+  }
+  bgzf_close(cf.fh);
+  free(row);
+  /* 3. per pair: rows both covered and > 0.5 apart */
+  uint64_t *fp = xcalloc((size_t)ns * ns, sizeof(uint64_t), "footprints");
+  for (uint64_t j = 0; j < nrow; ++j) {
+    const float *b = beta + j * ns;
+    for (uint32_t a = 0; a < ns; ++a) {
+      if (isnan(b[a])) continue;
+      for (uint32_t c2 = a + 1; c2 < ns; ++c2)
+        if (!isnan(b[c2]) && fabsf(b[a] - b[c2]) > 0.5f) ++fp[(size_t)a * ns + c2];
+    }
+  }
+  free(beta);
+  /* 4. rank the registry, mark the N thinnest */
+  g_fp_key = xcalloc(g_bp_n ? g_bp_n : 1, sizeof(uint64_t), "pair footprints");
+  for (uint32_t i = 0; i < g_bp_n; ++i) {
+    uint32_t ia = UINT32_MAX, ib = UINT32_MAX;
+    for (uint32_t k = 0; k < ns; ++k) {
+      if (!strcmp(slab[k], g_bp[i].a)) ia = k;
+      if (!strcmp(slab[k], g_bp[i].b)) ib = k;
+    }
+    if (ia == UINT32_MAX || ib == UINT32_MAX)
+      die("bank pair names a class missing from the store", g_bp[i].a);
+    if (ia > ib) { uint32_t x = ia; ia = ib; ib = x; }
+    g_fp_key[i] = fp[(size_t)ia * ns + ib];
+  }
+  free(fp);
+  uint32_t *ord = xcalloc(g_bp_n ? g_bp_n : 1, sizeof(uint32_t), "pair order");
+  for (uint32_t i = 0; i < g_bp_n; ++i) ord[i] = i;
+  qsort(ord, g_bp_n, sizeof(uint32_t), fp_cmp);
+  uint64_t median = g_bp_n ? g_fp_key[ord[g_bp_n / 2]] : 0;
+  for (uint32_t r = 0; r < want; ++r) g_bp[ord[r]].mand = 1;
+  char b1[32], b2[32], b3[32];
+  fprintf(rep, "\n[methscope] bank resolvers: the %" PRIu64 " of %u pairs "
+          "with the thinnest footprint (hard-block CpGs both covered and "
+          "> 0.5 apart; %s rows, median pair %s)\n", want, g_bp_n,
+          commafmt_local(nrow, b1), commafmt_local(median, b2));
+  for (uint32_t r = 0; r < want; ++r) {
+    const bank_pair_t *q = &g_bp[ord[r]];
+    fprintf(rep, "  %10s  %s | %s%s\n", commafmt_local(g_fp_key[ord[r]], b3),
+            q->a, q->b, q->never ? "   (never parted)" : "");
+  }
+  uint32_t covered = 0;
+  for (uint32_t i = 0; i < g_bp_n; ++i) covered += g_bp[i].never && g_bp[i].mand;
+  fprintf(rep, "  %u pair(s) the tree never parts (no type-1 pattern "
+          "separates them), %u covered by a resolver\n", nnever, covered);
+  if (covered < nnever)
+    fprintf(rep, "  WARNING: %u of them got no resolver -- the model has "
+            "NO feature for those pairs; raise --resolvers\n",
+            nnever - covered);
+  free(ord); free(g_fp_key); g_fp_key = NULL;
 }
 
 static const char *g_cal_store = NULL;   /* per-cell fmt3 .cg (with .idx) */
@@ -2780,7 +2936,7 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
   if (g_bank && n == 2) {
     fprintf(rep, "%s%s  %s + %s -> resolver pair\n", tty ? "\r\033[K" : "",
             ind, lab[0], lab[1]);
-    if (!dry) bank_pair_add(lab[0], lab[1], 0, 1);
+    if (!dry) bank_pair_add(lab[0], lab[1], 0, 1, 1);
     free(lab); free(vo); return;
   }
 
@@ -2813,7 +2969,7 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
       if (!dry)
         for (uint32_t a = 0; a < n; ++a)
           for (uint32_t b = a + 1; b < n; ++b)
-            bank_pair_add(lab[a], lab[b], 0, 1);
+            bank_pair_add(lab[a], lab[b], 0, 1, 1);
       if (!pushed) free(sb.img);
     } else if (!dry)
       tree_satellites(store, &sb, n, lab, vo, gh, sel, name, sat_n,
@@ -2865,7 +3021,7 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
     subset_block_t sbf;
     { char m[192]; snprintf(m, sizeof m, "[%s] floor", name);
       spin_start(tty, m); }
-    g_floor_active = g_pattern_floor;
+    g_floor_active = g_min_pattern_cpgs;
     build_subset_block(store, n, lab, vo, gh, sel, name, &sbf);
     g_floor_active = 0;
     spin_stop();
@@ -2881,7 +3037,7 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
         for (uint32_t a = 0; a < n; ++a)
           for (uint32_t b = a + 1; b < n; ++b)
             if (grp[a] != grp[b])
-              bank_pair_add(lab[a], lab[b], seg[(uint64_t)a * n + b], 1);
+              bank_pair_add(lab[a], lab[b], seg[(uint64_t)a * n + b], 1, 1);
     } else {
     if (min_seg != UINT64_MAX) {
       mrmp_header_t *fh2 = (mrmp_header_t *)sbf.img;
@@ -2890,53 +3046,15 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
     }
     if (!pushed) { tree_push(out, sbf.img, sbf.bytes, name); pushed = 1; }
     free(sb.img); sb.img = NULL;      /* the unpruned discovery image */
-    /* every cross-group pair parts HERE: record its seg support for the
-     * resolver quantile -- and apply the MAX-GATE coverage guarantee: a
-     * pair none of whose floor-surviving patterns at this split
-     * distinguishes it (largest such pattern < --pattern-floor, which
-     * with the floor in force means NO type-1 column separates the pair)
-     * gets a MANDATORY resolver, whatever its raw seg support. Measured
-     * before adopting: 10 such gaps on mouse (all CA3 vs distant
-     * classes, raw seg 9.7-11.7k -- above any quantile), 0 on human. */
-    if (!dry && g_resolver_gate < 0) {
-      /* infinite gate (bank-full): every cross pair is a resolver; no
-       * need to scan type-1 coverage */
+    /* every cross-group pair parts HERE: register it. Under --resolvers
+     * all every pair is a resolver outright; under --resolvers N the
+     * footprint pick (after the tree walk) decides which of them are. */
+    if (!dry)
       for (uint32_t a = 0; a < n; ++a)
         for (uint32_t b = a + 1; b < n; ++b)
           if (grp[a] != grp[b])
-            bank_pair_add(lab[a], lab[b], seg[(uint64_t)a * n + b], 1);
-    } else if (!dry) {
-      const mrmp_header_t *bh = (const mrmp_header_t *)sbf.img;
-      const uint32_t nw2 = mrmp_key_words(n);
-      const uint64_t stride = mrmp_pattern_stride(n);
-      const char *pbase = (const char *)sbf.img + bh->patterns_offset;
-      char *bs2 = xcalloc((size_t)n + 1, 1, "gate binstring");
-      for (uint32_t a = 0; a < n; ++a)
-        for (uint32_t b = a + 1; b < n; ++b) {
-          if (grp[a] == grp[b]) continue;
-          /* CUMULATIVE type-1 mass for the pair: the CpGs of every
-           * floor-surviving pattern that separates it -- the column mass
-           * a booster can actually sum. At gate == floor this is
-           * identical to a largest-pattern test (every survivor carries
-           * >= floor); above it, cumulative is the more permissive,
-           * booster-realistic reading. */
-          uint64_t t1sum = 0;
-          for (uint64_t p2 = 0; p2 < bh->n_candidates; ++p2) {
-            const char *rec = pbase + p2 * stride;
-            uint64_t cnt2;
-            memcpy(&cnt2, rec + (uint64_t)nw2 * sizeof(uint64_t),
-                   sizeof cnt2);
-            if (cnt2 < g_pattern_floor) continue;
-            key_to_string((const uint64_t *)(const void *)rec, n, bs2);
-            if (bs2[a] != bs2[b] && (bs2[a] == '0' || bs2[a] == '1')
-                && (bs2[b] == '0' || bs2[b] == '1'))
-              t1sum += cnt2;
-          }
-          bank_pair_add(lab[a], lab[b], seg[(uint64_t)a * n + b],
-                        t1sum < (uint64_t)g_resolver_gate);
-        }
-      free(bs2);
-    }
+            bank_pair_add(lab[a], lab[b], seg[(uint64_t)a * n + b],
+                          g_resolvers < 0, 0);
     }                              /* sbf.img != NULL */
   }
 
@@ -3031,7 +3149,7 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
       if (!dry)
         for (uint32_t a = 0; a < n; ++a)
           for (uint32_t b = a + 1; b < n; ++b)
-            bank_pair_add(lab[a], lab[b], 0, 1);
+            bank_pair_add(lab[a], lab[b], 0, 1, 1);
       if (!pushed) free(sb.img);
     } else if (!dry) {
       tree_satellites(store, &sb, n, lab, vo, gh, sel, name, sat_n,
@@ -3059,7 +3177,7 @@ static void tree_build(const char *store, char *const *slab, const int64_t *voff
       fprintf(rep, "%s  + %s + %s -> resolver pair (gap %s)\n", ind,
               slab[sub[0]], slab[sub[1]],
               commafmt_local(gap == UINT64_MAX ? 0 : gap, b1));
-      if (!dry) bank_pair_add(slab[sub[0]], slab[sub[1]], 0, 1);
+      if (!dry) bank_pair_add(slab[sub[0]], slab[sub[1]], 0, 1, 1);
       free(sub); continue;
     }
     fprintf(rep, "%s  + %u classes, gap %s\n", ind, m,
@@ -3108,16 +3226,18 @@ int main_mrmp_build(int argc, char *argv[]) {
     const char *a = argv[i];
     if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       ms_help(stdout,
-        "Usage: methscope mrmp-build --bank [options] REF.cg OUT.mrmp\n"
-        "       methscope mrmp-build --flat [options] REF.cg OUT.mrmp\n\n"
+        "Usage: methscope mrmp-build [options] REF.cg OUT.mrmp\n"
+        "       methscope mrmp-build --bank [options] REF.cg OUT.mrmp\n\n"
         "Build an MRMP from a labelled reference store: one record per class,\n"
-        "record name = class name. --bank is the classifier artifact (the\n"
-        "release models); --flat is one set over every class, for upscale, the\n"
-        "violation rule and export. One of the two is required.\n\n"
+        "record name = class name. The default is ONE set over every class,\n"
+        "for upscale, the violation rule and export; --bank is the classifier\n"
+        "artifact (the release models), a chain of blocks from an annealed\n"
+        "split hierarchy plus calibrated 2-class resolvers.\n\n"
         "Workflow\n"
+        "  methscope mrmp-build --top 500 REF.cg OUT.mrmp\n"
         "  methscope mrmp-build --bank --anneal-min-seg 10000,3000,1000 \\\n"
-        "      --cell-store CELLS.cg --cell-labels CELLS.tsv REF.cg OUT.mrmp\n"
-        "  methscope mrmp-build --flat --top 500 REF.cg OUT.mrmp\n\n"
+        "      --resolvers 100 --cell-store CELLS.cg --cell-labels CELLS.tsv \\\n"
+        "      REF.cg OUT.mrmp\n\n"
         "Split discovery (the hierarchy behind a bank's binstring blocks)\n"
         "  --anneal-min-seg HI,LO[,STEP]\n"
         "                        Anneal the split threshold PER NODE:\n"
@@ -3140,8 +3260,7 @@ int main_mrmp_build(int argc, char *argv[]) {
         "  --max-depth N         Maximum split depth. Default: 16.\n"
         "\n"
         "Modes\n"
-        "  --flat                One set over every class, no hierarchy.\n"
-        "  --top N               --flat only: keep the N patterns with the most\n"
+        "  --top N               Default mode only: keep the N patterns with the most\n"
         "                        CpGs, the rest folded into PNA. Default:\n"
         "                        10000; 0 keeps every pattern. The build ranks\n"
         "                        every candidate; this is the consumer's cut,\n"
@@ -3151,24 +3270,37 @@ int main_mrmp_build(int argc, char *argv[]) {
         "  --bank                The classifier artifact: a FLAT chain of two\n"
         "                        feature types and no routing. Type 1: each split\n"
         "                        node's binstrings, pruned to patterns with\n"
-        "                        >= --pattern-floor CpGs (tree-named for\n"
+        "                        >= --min-pattern-cpgs CpGs (tree-named for\n"
         "                        provenance only). Type 2: calibrated 2-class\n"
         "                        rebuilds named root@A__B -- every terminal\n"
         "                        pair, every pair inside an unsplittable leaf\n"
         "                        (which emits no type-1 of its own), and every\n"
-        "                        cross-split pair passed by --resolver-gate.\n"
+        "                        cross-split pair --resolvers picks.\n"
         "                        Needs --anneal-min-seg and the calibration\n"
         "                        inputs. Featurize the result with\n"
         "                        --satellite-contrast replace and train with\n"
         "                        classify-train --data.\n"
-        "  --pattern-floor N     Type-1 pattern floor. Default: 2000.\n"
-        "  --resolver-gate N     A pair gets a resolver unless a type-1\n"
-        "                        pattern with >= N CpGs separates it at the\n"
-        "                        split where its classes part. -1 (default)\n"
-        "                        = infinite = resolver for EVERY pair, the\n"
-        "                        bank-full release model. N = the pattern\n"
-        "                        floor gives bank-lite, the minimal-guarantee\n"
-        "                        budget model; values between interpolate.\n"
+        "  --min-pattern-cpgs N  A type-1 pattern must carry at least N CpGs\n"
+        "                        to stay in its block; smaller ones fold into\n"
+        "                        the background. Discovery is unaffected (it\n"
+        "                        runs on full evidence), so the tree and the\n"
+        "                        resolvers are the same at any N; only the\n"
+        "                        hard blocks get fatter. Default 2000; 500\n"
+        "                        is the release models' value.\n"
+        "  --resolvers N|all     How many pairs get a calibrated resolver.\n"
+        "                        Default 0: none, hard blocks only (no\n"
+        "                        calibration, so no cell store needed).\n"
+        "                        all = every pair, the bank-full model.\n"
+        "                        N = the N thinnest pairs by hard-\n"
+        "                        block FOOTPRINT -- the hard-block CpGs at\n"
+        "                        which the two class pseudobulks are both\n"
+        "                        covered and > 0.5 apart in beta -- the\n"
+        "                        pairs a sparse cell cannot tell apart from\n"
+        "                        the type-1 columns alone. Pairs the tree\n"
+        "                        never parts rank at the top by themselves;\n"
+        "                        the log warns if N leaves one out. 100 is\n"
+        "                        the bank-lite release model. The build log\n"
+        "                        lists every chosen pair with its footprint.\n"
         "  --resolver-cache DIR  Reuse resolver blocks across runs: before\n"
         "                        building root@A__B, look for DIR/A__B.mrmp\n"
         "                        (sanitized tags) and splice it in; else build\n"
@@ -3298,18 +3430,23 @@ int main_mrmp_build(int argc, char *argv[]) {
     }
     else if (!strcmp(a, "--bank")) {
       g_bank = 1;
-      /* legacy sugar from before the gate flag: 'full' and 'lite' map to
-       * --resolver-gate -1 / --resolver-gate <floor> */
-      if (i + 1 < argc && !strcmp(argv[i + 1], "full")) {
-        g_resolver_gate = -1; ++i;
-      } else if (i + 1 < argc && !strcmp(argv[i + 1], "lite")) {
-        g_resolver_gate = 0; /* 0 = 'floor', resolved after flags parse */ ++i;
-      }
+      if (i + 1 < argc && (!strcmp(argv[i + 1], "full") ||
+                           !strcmp(argv[i + 1], "lite")))
+        die("--bank full|lite is retired; say --resolvers all or "
+            "--resolvers N", argv[i + 1]);
     }
-    else if (!strcmp(a, "--pattern-floor") && i + 1 < argc)
-      g_pattern_floor = (uint32_t)parse_u64(argv[++i], a);
-    else if (!strcmp(a, "--resolver-gate") && i + 1 < argc)
-      g_resolver_gate = strtoll(argv[++i], NULL, 10);
+    else if (!strcmp(a, "--min-pattern-cpgs") && i + 1 < argc)
+      g_min_pattern_cpgs = (uint32_t)parse_u64(argv[++i], a);
+    else if (!strcmp(a, "--pattern-floor"))
+      die("--pattern-floor was renamed --min-pattern-cpgs", NULL);
+    else if (!strcmp(a, "--resolvers") && i + 1 < argc) {
+      const char *v = argv[++i];
+      g_resolvers = !strcmp(v, "all") ? -1 : (int64_t)parse_u64(v, a);
+    }
+    else if (!strcmp(a, "--resolver-gate"))
+      die("--resolver-gate is retired: the pairs that get a resolver are "
+          "now the N thinnest by hard-block footprint, --resolvers N "
+          "(or all)", NULL);
     else if (!strcmp(a, "--resolver-cache") && i + 1 < argc)
       g_resolver_cache = argv[++i];
     else if (!strcmp(a, "--resolver-stride") && i + 1 < argc) {
@@ -3332,7 +3469,9 @@ int main_mrmp_build(int argc, char *argv[]) {
     /* One MRMP over every class, no routing. What mrmp-build meant before it
      * became the tree builder, kept because a flat global is still the right
      * artifact for deconvolution and for a reference too shallow to split. */
-    else if (!strcmp(a, "--flat")) flat = 1;
+    else if (!strcmp(a, "--flat"))
+      die("--flat is the default now: drop the flag (--bank is the other "
+          "mode)", NULL);
     else if (!strcmp(a, "--top") && i + 1 < argc) {
       top = (uint32_t)parse_u64(argv[++i], a); top_given = 1;
     }
@@ -3415,12 +3554,11 @@ int main_mrmp_build(int argc, char *argv[]) {
     if (!g_anneal_hi)
       die("--bank discovers its splits by annealing; give --anneal-min-seg",
           NULL);
-    if (!g_cal_store && !dry)
+    if (!g_cal_store && !dry && g_resolvers)
       fprintf(stderr, "[methscope] mrmp-build: NOTE --bank without "
               "--cell-store: resolver pairs keep the DEFAULT selection "
               "(shrunk 0.30/0.70 band), uncalibrated -- the bulk-reference "
               "mode. Give per-cell data when you have it.\n");
-    if (g_resolver_gate == 0) g_resolver_gate = (int64_t)g_pattern_floor;
     if (g_stride_n && !g_resolver_cache)
       die("--resolver-stride only populates a cache; give --resolver-cache",
           NULL);
@@ -3435,14 +3573,12 @@ int main_mrmp_build(int argc, char *argv[]) {
      * Only the EMITTED type-1 block is pruned -- tree_build rebuilds a
      * confirmed split node with the floor active just for its image. */
   }
-  if (!g_bank && !flat)
-    die("mrmp-build builds a --bank (classifiers) or a --flat set (upscale, "
-        "the violation rule, export); the routing tree is retired", NULL);
+  flat = !g_bank;                    /* one set is the default mode */
   if (flat && g_anneal_hi)
-    die("--flat and --anneal-min-seg contradict each other", NULL);
+    die("--anneal-min-seg discovers a bank's splits; give --bank", NULL);
   if (g_bank && top_given)
     die("--top cuts a single flat set; a bank's sets are budgeted by "
-        "--pattern-floor and --resolver-gate, or by mrmp-pool", NULL);
+        "--min-pattern-cpgs and --resolvers, or by mrmp-pool", NULL);
   if (flat) min_seg = UINT64_MAX;   /* nothing can split */
   /* The floor stays OFF by default, including under --flat. It was briefly
    * defaulted on here, because the standalone satellite builder that --flat
@@ -3471,7 +3607,7 @@ int main_mrmp_build(int argc, char *argv[]) {
   treeout_t t; memset(&t, 0, sizeof t);
   if (flat)
     fprintf(stderr, "[methscope] %s: %u classes, one MRMP over all of them "
-            "(--flat: a tree of one level)\n", g_cmd, nstore);
+            "(a tree of one level)\n", g_cmd, nstore);
   else if (g_anneal_hi)
     fprintf(stderr, "[methscope] %s: %u classes, split threshold annealed "
             "%" PRIu64 " -> %" PRIu64 " per node%s\n", g_cmd, nstore,
@@ -3494,14 +3630,15 @@ int main_mrmp_build(int argc, char *argv[]) {
      * deterministic, so --resolver-stride ordinals agree across array jobs
      * (and cache filenames are name-keyed, unaffected by order). */
     qsort(g_bp, g_bp_n, sizeof(bank_pair_t), bank_pair_cmp);
-    uint32_t made = 0, nmand = 0;
-    if (g_resolver_gate < 0)
-      fprintf(rep, "\n[methscope] bank resolvers: gate infinite "
-              "(bank-full) -> every pair\n");
-    else
-      fprintf(rep, "\n[methscope] bank resolvers: gate %lld CpGs -- a "
-              "pair without a type-1 pattern that deep gets a resolver\n",
-              (long long)g_resolver_gate);
+    uint32_t made = 0;
+    if (g_resolvers < 0) {
+      uint32_t nnever = 0;
+      for (uint32_t i = 0; i < g_bp_n; ++i) nnever += g_bp[i].never != 0;
+      fprintf(rep, "\n[methscope] bank resolvers: all %u pairs "
+              "(bank-full)\n  %u pair(s) the tree never parts, %u covered "
+              "by a resolver\n", g_bp_n, nnever, nnever);
+    } else
+      bank_footprint_pick(store, slab, voff, nstore, &t, rep);
     uint32_t ncached = 0, nskipped = 0, ordinal = 0;
     for (uint32_t i = 0; i < g_bp_n; ++i) {
       if (!g_bp[i].mand) continue;
@@ -3569,7 +3706,7 @@ int main_mrmp_build(int argc, char *argv[]) {
         }
       }
       tree_push(&t, s2.img, s2.bytes, sname);
-      ++made; if (g_bp[i].mand) ++nmand;
+      ++made;
     }
     fprintf(rep, "  %u resolver pair(s) built (%u from cache)\n",
             made, ncached);
@@ -3577,7 +3714,6 @@ int main_mrmp_build(int argc, char *argv[]) {
       fprintf(rep, "  WARNING: %u out-of-stride pair(s) skipped -- this "
               "artifact is PARTIAL; rerun without --resolver-stride once "
               "the cache is fully populated\n", nskipped);
-    (void)nmand;
   }
 
   ms_mrmp_chain_write(out, t.n, (const void *const *)t.img, t.len);
