@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Build the cell x pattern beta matrix (the C replacement for the R
- * GenerateInput()). Each query record (cell/pixel) is summarized against every
- * mask record (MRMP pattern) in reference.cm using YAME's summary core; the
- * per-(cell,pattern) Beta becomes a matrix entry, NaN where there is no overlap.
+ * GenerateInput()). Each query record (cell/pixel) is scored against every
+ * state of every mask record (MRMP pattern) in reference.cm in one pass over
+ * the CpGs, via an inverted CpG -> column index; the per-(cell,pattern) mean
+ * beta becomes a matrix entry, NaN where there is no overlap. The numbers are
+ * those of YAME's summary core (summarize1), which remains the fallback for a
+ * non-fmt3 query.
  *
  * Column order = by numeric pattern id (first run of digits in the state name),
  * with "Pna" always last (the R GenerateInput() order); the booster's matching
@@ -146,66 +149,135 @@ static ms_matrix_t *matrix_build(const char *query_cg, const char *ref_cm,
     else { snprintf(b, sizeof(b), "%zu", k + 1); mask_names[k] = strdup(b); }
   }
 
-  /* ---- stream query cells; each summarize1() yields all pattern states ---- */
+  /* ---- raw column layout, from the masks' state tables ----
+   * One column per (mask record, state) in state-table order, background
+   * dropped: exactly the order summarize1() returns its stats_t[] in, so the
+   * layout is fixed before a cell is read instead of discovered on cell 0.
+   * classify-featurize emits no background either; emitting one here would
+   * make the two feature paths different widths -- the divergence that scored
+   * 2 of 42 cells correct. */
+  size_t   n_raw = 0;
+  char   **raw_names = NULL;          /* length n_raw, summarize order           */
+  int     *raw_set = NULL;            /* which mask record each column came from */
+  int    **key2col = malloc(n_masks * sizeof(int *));   /* state -> raw col, -1 = Pna */
+  int      fast = 1;                  /* every mask a fmt2 state track           */
+  if (!key2col) mdie("out of memory (state map)", NULL);
+  for (size_t k = 0; k < n_masks; ++k) {
+    if (c_masks[k].fmt != '2') { fast = 0; key2col[k] = NULL; continue; }
+    if (!c_masks[k].aux) fmt2_set_aux(&c_masks[k]);
+    f2_aux_t *aux = (f2_aux_t *)c_masks[k].aux;
+    key2col[k] = malloc((aux->nk ? aux->nk : 1) * sizeof(int));
+    if (!key2col[k]) mdie("out of memory (state map)", NULL);
+    for (uint64_t j = 0; j < aux->nk; ++j) {
+      const char *nm = aux->keys[j];
+      if (ms_is_pna_name(nm)) { key2col[k][j] = -1; continue; }
+      raw_names = realloc(raw_names, (n_raw + 1) * sizeof(char *));
+      raw_set   = realloc(raw_set,   (n_raw + 1) * sizeof(int));
+      if (!raw_names || !raw_set) mdie("out of memory (columns)", NULL);
+      raw_names[n_raw] = strdup(nm ? nm : "");
+      if (!raw_names[n_raw]) mdie("out of memory (column name)", NULL);
+      raw_set[n_raw] = (int)k;
+      key2col[k][j] = (int)n_raw++;
+    }
+  }
+  if (fast && n_raw == 0) mdie("reference has no pattern states", ref_cm);
+
+  /* ---- inverted index over CpGs: the columns each CpG belongs to ----
+   * summarize1() walks the whole genome once per (cell, mask), so a 124-set
+   * chain cost 124 genome scans per cell. Almost every CpG is background in
+   * almost every set, so list only the real memberships per CpG and each cell
+   * costs one scan plus one add per membership. Beta is still the mean of
+   * per-CpG betas over covered CpGs, accumulated in CpG order, so the sums are
+   * bit-identical to summarize1's. Only a fmt3 (M/U) query takes this path;
+   * anything else keeps the per-mask summary below. */
+  uint64_t n_cpg = c_masks[0].n;
+  uint32_t *cpg_off = NULL, *cpg_col = NULL;
+  if (fast) {
+    for (size_t k = 1; k < n_masks; ++k)
+      if (c_masks[k].n != n_cpg) mdie("mask records span different CpG counts", ref_cm);
+    cpg_off = calloc(n_cpg + 1, sizeof(uint32_t));
+    if (!cpg_off) mdie("out of memory (CpG offsets)", NULL);
+    for (size_t k = 0; k < n_masks; ++k) {
+      f2_aux_t *aux = (f2_aux_t *)c_masks[k].aux;
+      for (uint64_t i = 0; i < n_cpg; ++i) {
+        uint64_t s = f2_get_uint64(&c_masks[k], i);
+        if (s >= aux->nk) mdie("mask state data is corrupted", mask_names[k]);
+        if (key2col[k][s] >= 0) ++cpg_off[i + 1];
+      }
+    }
+    uint64_t acc = 0;
+    for (uint64_t i = 0; i <= n_cpg; ++i) { acc += cpg_off[i]; cpg_off[i] = (uint32_t)acc; }
+    if (acc > UINT32_MAX) mdie("too many pattern memberships to index", ref_cm);
+    cpg_col = malloc((acc ? acc : 1) * sizeof(uint32_t));
+    uint32_t *cur = calloc(n_cpg, sizeof(uint32_t));
+    if (!cpg_col || !cur) mdie("out of memory (CpG memberships)", NULL);
+    for (size_t k = 0; k < n_masks; ++k)
+      for (uint64_t i = 0; i < n_cpg; ++i) {
+        int col = key2col[k][f2_get_uint64(&c_masks[k], i)];
+        if (col >= 0) cpg_col[cpg_off[i] + cur[i]++] = (uint32_t)col;
+      }
+    free(cur);
+  }
+
+  /* ---- stream query cells ---- */
   cfile_t  cf_qry     = open_cfile((char *)query_cg);
   snames_t snames_qry = loadSampleNamesFromIndex((char *)query_cg);
 
-  size_t   n_raw = 0, rawcap = 0;     /* number of state-columns (set on cell 0) */
-  char   **raw_names = NULL;          /* length n_raw, summarize order           */
-  int     *raw_set = NULL;            /* which mask record each column came from */
-  double  *raw_row = NULL;            /* scratch row, length rawcap              */
-  int     *raw_Ncnt = NULL;           /* scratch N_overlap row, length rawcap    */
+  double  *raw_row  = malloc(n_raw * sizeof(double));   /* scratch row          */
+  int     *raw_Ncnt = malloc(n_raw * sizeof(int));      /* scratch N_overlap row */
+  double  *sum      = fast ? malloc(n_raw * sizeof(double)) : NULL;
+  uint64_t *cnt     = fast ? malloc(n_raw * sizeof(uint64_t)) : NULL;
   double  *Mraw = NULL;               /* n_cells x n_raw, raw column order        */
   int     *Nraw = NULL;               /* n_cells x n_raw N_overlap, raw order     */
   char   **cell_names = NULL;
   size_t   n_cells = 0, rcap = 0;
-  int      first = 1;
+  if (!raw_row || !raw_Ncnt || (fast && (!sum || !cnt)))
+    mdie("out of memory (row buffers)", NULL);
 
   for (size_t iq = 0;; ++iq) {
     cdata_t cq = read_cdata1(&cf_qry);
     if (cq.n == 0) break;
     prepare_mask(&cq);
 
-    size_t col = 0;
-    /* summarize1() takes char*, not const char*, so a string literal here is
-     * only safe as long as it never writes. Hand it a writable empty buffer
-     * instead of betting on that. */
-    char no_query_name[] = "";
-    for (size_t k = 0; k < n_masks; ++k) {
-      uint64_t n_st = 0;
-      stats_t *st = summarize1(&cq, &c_masks[k], &n_st, mask_names[k],
-                               no_query_name, &config);
-      for (uint64_t j = 0; j < n_st; ++j) {
-        /* Drop the background. classify-featurize no longer emits one, so
-         * emitting it here would make the two feature paths different widths --
-         * the divergence that scored 2 of 42 cells correct. */
-        if (ms_is_pna_name(st[j].sm)) continue;
-        double v = (st[j].beta >= 0) ? st[j].beta : NAN;
-        if (first) {
-          if (col == rawcap) {
-            rawcap = rawcap ? rawcap * 2 : 1024;
-            raw_names = realloc(raw_names, rawcap * sizeof(char *));
-            raw_set   = realloc(raw_set,   rawcap * sizeof(int));
-            raw_row   = realloc(raw_row,   rawcap * sizeof(double));
-            raw_Ncnt  = realloc(raw_Ncnt,  rawcap * sizeof(int));
-            if (!raw_names || !raw_row || !raw_Ncnt || !raw_set)
-              mdie("out of memory (columns)", NULL);
-          }
-          /* Both guards matter: strdup(NULL) is undefined, and an unchecked
-           * strdup would store NULL for the sort key to walk into. */
-          raw_names[col] = strdup(st[j].sm ? st[j].sm : "");
-          raw_set[col] = (int)k;
-          if (!raw_names[col]) mdie("out of memory (column name)", NULL);
-        }
-        raw_row[col]  = v;
-        raw_Ncnt[col] = (st[j].n_o > (uint64_t)INT_MAX) ? INT_MAX : (int)st[j].n_o;
-        col++;
+    if (fast && cq.fmt == '3') {
+      if (cq.n != n_cpg) mdie("query and mask CpG counts differ", query_cg);
+      memset(sum, 0, n_raw * sizeof(double));
+      memset(cnt, 0, n_raw * sizeof(uint64_t));
+      for (uint64_t i = 0; i < n_cpg; ++i) {
+        uint32_t e = cpg_off[i], e1 = cpg_off[i + 1];
+        if (e == e1) continue;
+        uint64_t mu = f3_get_mu(&cq, i);
+        if (!mu) continue;
+        double b = MU2beta(mu);
+        for (; e < e1; ++e) { sum[cpg_col[e]] += b; ++cnt[cpg_col[e]]; }
       }
-      for (uint64_t j = 0; j < n_st; ++j) { free(st[j].sm); free(st[j].sq); }
-      if (n_st) free(st);
+      for (size_t c = 0; c < n_raw; ++c) {
+        raw_row[c]  = cnt[c] ? sum[c] / (double)cnt[c] : NAN;
+        raw_Ncnt[c] = (cnt[c] > (uint64_t)INT_MAX) ? INT_MAX : (int)cnt[c];
+      }
+    } else {
+      /* summarize1() takes char*, not const char*, so a string literal here is
+       * only safe as long as it never writes. Hand it a writable empty buffer
+       * instead of betting on that. */
+      char no_query_name[] = "";
+      size_t col = 0;
+      for (size_t k = 0; k < n_masks; ++k) {
+        uint64_t n_st = 0;
+        stats_t *st = summarize1(&cq, &c_masks[k], &n_st, mask_names[k],
+                                 no_query_name, &config);
+        for (uint64_t j = 0; j < n_st; ++j) {
+          if (ms_is_pna_name(st[j].sm)) continue;
+          if (col >= n_raw || strcmp(st[j].sm ? st[j].sm : "", raw_names[col]))
+            mdie("summary states do not match the mask state table", mask_names[k]);
+          raw_row[col]  = (st[j].beta >= 0) ? st[j].beta : NAN;
+          raw_Ncnt[col] = (st[j].n_o > (uint64_t)INT_MAX) ? INT_MAX : (int)st[j].n_o;
+          col++;
+        }
+        for (uint64_t j = 0; j < n_st; ++j) { free(st[j].sm); free(st[j].sq); }
+        if (n_st) free(st);
+      }
+      if (col != n_raw) mdie("inconsistent pattern count across cells", NULL);
     }
-    if (first) { n_raw = col; first = 0; }
-    else if (col != n_raw) mdie("inconsistent pattern count across cells", NULL);
 
     if (n_cells == rcap) {
       rcap = rcap ? rcap * 2 : 256;
@@ -223,8 +295,11 @@ static ms_matrix_t *matrix_build(const char *query_cg, const char *ref_cm,
     free_cdata(&cq);
   }
   bgzf_close(cf_qry.fh);
-  for (size_t k = 0; k < n_masks; ++k) { free_cdata(&c_masks[k]); free(mask_names[k]); }
-  free(c_masks); free(mask_names);
+  for (size_t k = 0; k < n_masks; ++k) {
+    free_cdata(&c_masks[k]); free(mask_names[k]); free(key2col[k]);
+  }
+  free(c_masks); free(mask_names); free(key2col);
+  free(cpg_off); free(cpg_col); free(sum); free(cnt);
   cleanSampleNames2(snames_mask);
   cleanSampleNames2(snames_qry);
   free(raw_row); free(raw_Ncnt);   /* raw_set is read by the sort below */
