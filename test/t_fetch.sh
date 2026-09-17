@@ -21,7 +21,17 @@ case "$out" in *"yame fetch"*) echo "fetch -h leaks 'yame fetch'"; exit 1;; esac
 list=$("$MS" fetch -l 2>/dev/null)
 dirs=$(printf '%s\n' "$list" | tail -n +2 | cut -f1 | sort -u | tr '\n' ' ')
 [ "$dirs" = "hg38/data hg38/models mm10/models " ] || { echo "fetch -l directories: '$dirs'"; exit 1; }
-printf '%s\n' "$list" | grep -q "hg38_celltype.clfx" || { echo "fetch -l lacks hg38_celltype.clfx"; exit 1; }
+## A model the catalogue still carries, named exactly: the classifier the
+## routing-tree pair was withdrawn IN FAVOUR of at models v10.
+printf '%s\n' "$list" | grep -q "hg38_celltype_full.clfx" ||
+  { echo "fetch -l lacks hg38_celltype_full.clfx"; exit 1; }
+## ... and a withdrawn one must NOT reappear. `hg38_celltype.clfx` is a prefix
+## of `hg38_celltype_full.clfx`, so this needs a whole-field match, not grep -q.
+for gone in hg38_celltype.clfx mm10_celltype_brain.clfx; do
+  printf '%s\n' "$list" | cut -f2 | grep -qx "$gone" &&
+    { echo "fetch -l still offers the withdrawn $gone"; exit 1; }
+done
+:
 
 ## --version carries the model tag the catalogue pins
 v=$("$MS" --version)

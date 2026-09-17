@@ -184,7 +184,7 @@ int main_bundle(int argc, char *argv[]);
 int main_unbundle(int argc, char *argv[]);
 int main_relabel(int argc, char *argv[]);
 
-#define METHSCOPE_VERSION "0.9"
+#define METHSCOPE_VERSION "0.10"
 
 
 /* True for a per-set NA-BACKGROUND column: the CpGs a set has no pattern for.

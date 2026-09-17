@@ -83,7 +83,7 @@ int main_relabel(int argc, char *argv[]) {
 "\n"
 "Example:\n"
 "  methscope relabel 'Macrophage=Macrophage.(Monocyte.Derived)' \\\n"
-"      hg38_celltype.clfx -o hg38_celltype_v2.clfx\n");
+"      hg38_celltype_full.clfx -o hg38_celltype_v2.clfx\n");
       return 0;
     }
     else if (a[0] == '-' && a[1]) rdie("unrecognized option", a);

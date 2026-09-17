@@ -1,6 +1,11 @@
 #!/bin/bash
 ## title: Train your own classifier
-## norun: the recorded build of hg38_celltype_full.clfx (labjournal 20260904_bankfull_final.sh, SPECIES=human); needs the labelled reference store
+## norun: the recorded build of hg38_celltype_full.clfx (labjournal
+## 20260904_bankfull_final.sh, SPECIES=human); needs the labelled reference store.
+## Same recipe in CURRENT flags: that driver ran before 0.10 renamed them
+## (--resolver-gate -1 -> --resolvers all, --pattern-floor -> --min-pattern-cpgs)
+## and made the pooled booster the only mode (--pool-nodes is gone).
+## The _lite footnotes are 20260914_lite_build.sh, which shipped the v10 lites.
 # inputs: REF = 63 per-class pooled references, STORE = the 84,601 labelled cells,
 # CLAB = cell -> label for every cell, TRIDS/TRLAB = a balanced training draw.
 # The driver spreads the pairwise resolver calibration over 8 SLURM jobs with
