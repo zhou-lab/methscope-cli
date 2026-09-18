@@ -60,6 +60,24 @@
  *             whenever either exceeds 255 so the ratio survives; 0 means
  *             uncovered. beta = M/(M+U), depth = M+U saturating at 510.
  *             Version 1 stored a uint16 beta here and no depth at all.
+ *   trailer   -   VERSION 3 ONLY, immediately after mu, whose size the header
+ *                 gives exactly, so it needs no offset word:
+ *                   magic  8   "MSDCONF1"
+ *                   n_class 4  must equal the header's -- a free check
+ *                   flags   4  reserved, 0
+ *                   conf    4 * n_class * n_class  float32, row-major, row =
+ *                              TRUE class, column = where that class's mass
+ *                              was estimated to be. Rows sum to 1.
+ *                   prov    4 + that many bytes, how it was measured
+ *                 Version 3 means the trailer IS present; a build with no
+ *                 confusion stays version 2. A reader accepts 1, 2 and 3, so a
+ *                 new binary reads every old artifact while an old binary
+ *                 refuses a v3 outright rather than misreading its tail.
+ *
+ *                 The matrix is stored and the GROUPING is not: connected
+ *                 components are derived per run from the matrix and the
+ *                 user's --group-threshold, which is what keeps that threshold
+ *                 a knob rather than a decision frozen into the artifact.
  *
  * Class-major so a scope's rows are contiguous per class, matching how the
  * rebuild scans; ascending row index so a query can be walked against it with
@@ -144,9 +162,65 @@ static void put_u32(FILE *f, uint32_t v) { fwrite(&v, 4, 1, f); }
 static void put_u64(FILE *f, uint64_t v) { fwrite(&v, 8, 1, f); }
 static void put_f64(FILE *f, double v)   { fwrite(&v, 8, 1, f); }
 
+/* Read a long-form confusion TSV -- true<TAB>predicted<TAB>value, one pair per
+ * line, unnamed pairs zero -- into a row-major n_class x n_class matrix, and
+ * normalise each row to sum to 1. Long form rather than a matrix so the file
+ * carries no column order to get wrong, and every name is checked against the
+ * reference rather than positionally trusted. The FIRST '#' line becomes the
+ * provenance string, which is why there is no --confusion-note option. */
+static float *d2_conf_read(const char *path, char **name, uint32_t n_class,
+                           char **prov_out) {
+  FILE *f = fopen(path, "r");
+  if (!f) d2die("cannot open --confusion file", path);
+  float *C = d2alloc((size_t)n_class * n_class, sizeof(float), "confusion");
+  char line[8192];
+  *prov_out = NULL;
+  uint64_t n_pair = 0;
+  while (fgets(line, sizeof line, f)) {
+    size_t len = strlen(line);
+    while (len && (line[len-1] == '\n' || line[len-1] == '\r')) line[--len] = 0;
+    if (!len) continue;
+    if (line[0] == '#') {
+      if (!*prov_out) {
+        const char *q = line + 1;
+        while (*q == ' ' || *q == '\t') ++q;
+        *prov_out = strdup(q);
+      }
+      continue;
+    }
+    char *t1 = strchr(line, '\t');
+    if (!t1) d2die("--confusion wants true<TAB>pred<TAB>value", path);
+    *t1 = 0;
+    char *t2 = strchr(t1 + 1, '\t');
+    if (!t2) d2die("--confusion wants true<TAB>pred<TAB>value", path);
+    *t2 = 0;
+    int a = -1, b = -1;
+    for (uint32_t k = 0; k < n_class; ++k) {
+      if (!strcmp(line, name[k]))   a = (int)k;
+      if (!strcmp(t1 + 1, name[k])) b = (int)k;
+    }
+    if (a < 0) d2die("--confusion names a class the reference lacks", line);
+    if (b < 0) d2die("--confusion names a class the reference lacks", t1 + 1);
+    C[(size_t)a * n_class + b] = (float)atof(t2 + 1);
+    ++n_pair;
+  }
+  fclose(f);
+  if (!n_pair) d2die("--confusion file has no rows", path);
+  for (uint32_t a = 0; a < n_class; ++a) {
+    double sum = 0;
+    for (uint32_t b = 0; b < n_class; ++b) sum += C[(size_t)a * n_class + b];
+    if (sum > 0)
+      for (uint32_t b = 0; b < n_class; ++b) C[(size_t)a * n_class + b] /= sum;
+  }
+  fprintf(stderr, "[methscope] deconv-build-ref: confusion %u x %u from "
+          "%llu pairs%s%s\n", n_class, n_class, (unsigned long long)n_pair,
+          *prov_out ? ", note: " : "", *prov_out ? *prov_out : "");
+  return C;
+}
+
 int main_deconv_build_ref(int argc, char *argv[]) {
   d2_cmd = "deconv-build-ref";
-  const char *out_path = NULL;
+  const char *out_path = NULL, *conf_path = NULL;
   double qlo = 0.30, qhi = 0.70, beta_thr = 0.5;
   uint32_t mincov = 1;
   int force = 0, keep_all = 0, i = 1;
@@ -156,6 +230,7 @@ int main_deconv_build_ref(int argc, char *argv[]) {
     if (!strcmp(a, "-o") && i + 1 < argc) out_path = argv[++i];
     else if (!strcmp(a, "--force")) force = 1;
     else if (!strcmp(a, "--keep-all")) keep_all = 1;
+    else if (!strcmp(a, "--confusion") && i + 1 < argc) conf_path = argv[++i];
     else if (!strcmp(a, "--mincov") && i + 1 < argc)
       mincov = (uint32_t)strtoul(argv[++i], NULL, 10);
     else if (!strcmp(a, "--beta-threshold") && i + 1 < argc)
@@ -199,6 +274,14 @@ int main_deconv_build_ref(int argc, char *argv[]) {
 "                     0.30,0.70. Must match the solver's.\n"
 "  --beta-threshold B Call a class methylated above B. Default: 0.5.\n"
 "  --mincov N         A class is covered at N reads or more. Default: 1.\n"
+"  --confusion FILE   Embed a validation confusion matrix, which is what\n"
+"                     `deconv --group-threshold` reads to decide which classes\n"
+"                     are reported under one label. Long-form TSV,\n"
+"                     true<TAB>predicted<TAB>value, unnamed pairs zero, rows\n"
+"                     normalised on write; the first '#' line is kept as the\n"
+"                     provenance note. Measuring it is NOT this command's job\n"
+"                     -- run the validation, write the TSV, pass it here. With\n"
+"                     this flag the artifact is version 3; without it, 2.\n"
 "  --keep-all         Skip the never-useful row test, keeping every row so a\n"
 "                     consumer can re-apply any band in memory. Costs 1.94 GB\n"
 "                     for 33 classes x 29.4M rows.\n"
@@ -312,8 +395,11 @@ int main_deconv_build_ref(int argc, char *argv[]) {
 
   FILE *out = fopen(out_path, "wb");
   if (!out) d2die("cannot open output", out_path);
+  char *conf_prov = NULL;
+  float *conf = conf_path ? d2_conf_read(conf_path, name, n_class, &conf_prov)
+                          : NULL;
   fwrite(D2_MAGIC, 1, 8, out);                  /* 7 chars + NUL */
-  put_u32(out, 2);                              /* version: adds M/U */
+  put_u32(out, conf ? 3 : 2);                   /* 2 adds M/U, 3 the trailer */
   put_u32(out, n_class);
   put_u64(out, n_row);
   put_u64(out, n_keep);
@@ -329,6 +415,15 @@ int main_deconv_build_ref(int argc, char *argv[]) {
     const uint16_t *src = mup + (size_t)k * n_row;
     for (uint64_t j = 0; j < n_keep; ++j) buf[j] = src[keep[j]];
     fwrite(buf, sizeof(uint16_t), n_keep, out);
+  }
+  if (conf) {
+    fwrite("MSDCONF1", 1, 8, out);
+    put_u32(out, n_class);
+    put_u32(out, 0);                            /* flags: reserved */
+    fwrite(conf, sizeof(float), (size_t)n_class * n_class, out);
+    uint32_t plen = conf_prov ? (uint32_t)strlen(conf_prov) : 0;
+    put_u32(out, plen);
+    if (plen) fwrite(conf_prov, 1, plen, out);
   }
   if (ferror(out)) d2die("error writing output", out_path);
   fclose(out);
@@ -382,6 +477,10 @@ typedef struct {
   char    **name;
   uint32_t *row;              /* n_keep, ascending, into the full row space */
   int       has_depth;        /* v2 carries counts; v1 does not */
+  float    *conf;             /* v3 only: n_class^2, row-major, row = TRUE
+                               * class, rows summing to 1. NULL when the
+                               * artifact carries no confusion trailer. */
+  char     *conf_prov;        /* how that matrix was measured, free text */
   uint16_t *mu;               /* n_class * n_keep, class-major: M<<8 | U.
                                * beta and depth are DERIVED (d2_b / d2_dep), so
                                * neither is stored -- two bytes carry both. */
@@ -415,7 +514,8 @@ static void d2ref_load(const char *path, d2ref_t *R) {
       fread(&R->beta_thr, 8, 1, f) != 1 || fread(&R->mincov, 4, 1, f) != 1 ||
       fread(&rsv, 4, 1, f) != 1)
     d2die("truncated header", path);
-  if (ver != 1 && ver != 2) d2die("unsupported .msdref version", path);
+  if (ver != 1 && ver != 2 && ver != 3)
+    d2die("unsupported .msdref version", path);
 
   R->name = d2alloc(R->n_class, sizeof(char *), "class names");
   for (uint32_t k = 0; k < R->n_class; ++k) {
@@ -435,9 +535,32 @@ static void d2ref_load(const char *path, d2ref_t *R) {
   if (fread(R->mu, sizeof(uint16_t), (size_t)R->n_class * R->n_keep, f)
       != (size_t)R->n_class * R->n_keep)
     d2die("truncated M/U block", path);
+  R->conf = NULL; R->conf_prov = NULL;
+  if (ver == 3) {
+    /* Version 3 MEANS the trailer is there -- a build with no confusion stays
+     * version 2 -- so a missing one is corruption, not an older artifact. */
+    char tm[8];
+    uint32_t nc = 0, flags = 0, plen = 0;
+    if (fread(tm, 1, 8, f) != 8 || memcmp(tm, "MSDCONF1", 8))
+      d2die("version 3 reference without a confusion trailer", path);
+    if (fread(&nc, 4, 1, f) != 1 || fread(&flags, 4, 1, f) != 1)
+      d2die("truncated confusion trailer", path);
+    if (nc != R->n_class)
+      d2die("confusion trailer disagrees with the header on n_class", path);
+    R->conf = d2alloc((size_t)nc * nc, sizeof(float), "confusion");
+    if (fread(R->conf, sizeof(float), (size_t)nc * nc, f) != (size_t)nc * nc)
+      d2die("truncated confusion matrix", path);
+    if (fread(&plen, 4, 1, f) != 1) d2die("truncated confusion trailer", path);
+    if (plen) {
+      R->conf_prov = d2alloc(plen + 1, 1, "confusion note");
+      if (fread(R->conf_prov, 1, plen, f) != plen)
+        d2die("truncated confusion note", path);
+      R->conf_prov[plen] = 0;
+    }
+  }
   fclose(f);
   d2_lut_init();
-  R->has_depth = (ver == 2);
+  R->has_depth = (ver >= 2);
   if (ver == 1) {
     /* A v1 artifact stored a bare beta and no counts. Re-encode it as M/U so
      * one code path serves both -- but the pair sums to 255 whatever the beta,
@@ -464,8 +587,11 @@ static void d2ref_load(const char *path, d2ref_t *R) {
     "(%.0f MB%s), qfilter %.2f,%.2f\n", ver,
     R->n_class, (unsigned long long)R->n_keep,
     (double)((size_t)R->n_class * R->n_keep * 2) / 1e6,
-    ver == 2 ? " incl. depth" : ", NO depth: --rescue-min-depth inactive",
+    ver >= 2 ? " incl. depth" : ", NO depth: --rescue-min-depth inactive",
     R->qlo, R->qhi);
+  if (R->conf)
+    fprintf(stderr, "[methscope] deconv: confusion trailer present%s%s\n",
+            R->conf_prov ? " -- " : "", R->conf_prov ? R->conf_prov : "");
 }
 
 static void d2ref_free(d2ref_t *R) {
@@ -1575,6 +1701,75 @@ static int d2sh_cmp(const void *a, const void *b) {
   return x->s < y->s ? -1 : x->s > y->s;      /* ties in index order */
 }
 
+/* Confusable classes, merged for REPORTING only. Two near-collinear columns
+ * let NNLS split mass between them almost arbitrarily, but their SUM is
+ * identified -- so "CA3/DG-po 0.31" is the number the data supports where the
+ * split is not. The reference is untouched and --wide still emits every class,
+ * so nothing is destroyed; only the named answer is coarsened.
+ *
+ * Groups are CONNECTED COMPONENTS, not pairs. Overlap is the reason: IT-L23
+ * grading into both IT-L4 and IT-L5 cannot be resolved by independent pairwise
+ * merges, which would conflict. */
+typedef struct {
+  uint32_t  n;                /* number of groups */
+  uint32_t *gid;              /* class -> group */
+  char    **gname;            /* group -> "A/B/C", members in class order */
+} d2grp_t;
+
+static uint32_t d2uf_find(uint32_t *p, uint32_t x) {
+  while (p[x] != x) { p[x] = p[p[x]]; x = p[x]; }
+  return x;
+}
+
+static void d2grp_build(const d2ref_t *R, double thr, d2grp_t *G) {
+  const uint32_t n = R->n_class;
+  uint32_t *p = d2alloc(n, sizeof(uint32_t), "union-find");
+  for (uint32_t k = 0; k < n; ++k) p[k] = k;
+  /* Symmetric: either direction of confusion joins the pair, since a class
+   * whose mass lands on another is not separable from it whichever way the
+   * validation happened to measure the leak. */
+  for (uint32_t a = 0; a < n; ++a)
+    for (uint32_t b = a + 1; b < n; ++b)
+      if (R->conf[(size_t)a * n + b] >= thr || R->conf[(size_t)b * n + a] >= thr) {
+        uint32_t ra = d2uf_find(p, a), rb = d2uf_find(p, b);
+        if (ra != rb) p[ra] = rb;
+      }
+
+  G->gid = d2alloc(n, sizeof(uint32_t), "group id");
+  uint32_t *seen = d2alloc(n, sizeof(uint32_t), "group seen");
+  for (uint32_t k = 0; k < n; ++k) seen[k] = UINT32_MAX;
+  G->n = 0;
+  for (uint32_t k = 0; k < n; ++k) {          /* first member names the group */
+    uint32_t r = d2uf_find(p, k);
+    if (seen[r] == UINT32_MAX) seen[r] = G->n++;
+    G->gid[k] = seen[r];
+  }
+  G->gname = d2alloc(G->n, sizeof(char *), "group names");
+  for (uint32_t g = 0; g < G->n; ++g) {
+    size_t len = 0;
+    for (uint32_t k = 0; k < n; ++k)
+      if (G->gid[k] == g) len += strlen(R->name[k]) + 1;
+    char *nm = d2alloc(len + 1, 1, "group name");
+    nm[0] = 0;
+    for (uint32_t k = 0; k < n; ++k)
+      if (G->gid[k] == g) {
+        if (nm[0]) strcat(nm, "/");
+        strcat(nm, R->name[k]);
+      }
+    G->gname[g] = nm;
+  }
+  uint32_t merged = 0;
+  for (uint32_t g = 0; g < G->n; ++g)
+    if (strchr(G->gname[g], '/')) {
+      uint32_t members = 0;
+      for (uint32_t k = 0; k < n; ++k) if (G->gid[k] == g) ++members;
+      merged += members;
+    }
+  fprintf(stderr, "[methscope] deconv: --group-threshold %.3f -> %u reported "
+          "labels from %u classes (%u merged)\n", thr, G->n, n, merged);
+  free(p); free(seen);
+}
+
 static void d2_emit_header(FILE *out, const d2ref_t *R, int mode) {
   if (mode == D2_REPORT) return;
   if (mode == D2_LONG) { fputs("cell\tclass\tfraction\n", out); return; }
@@ -1587,7 +1782,8 @@ static void d2_emit_header(FILE *out, const d2ref_t *R, int mode) {
  * REPORT then names the dropped mass as "Others" rather than rescaling what
  * is left back up to 100%, so a percentage always means what it says. */
 static void d2_emit(FILE *out, const d2ref_t *R, const char *name,
-                    const double *x, int mode, double min_frac) {
+                    const double *x, int mode, double min_frac,
+                    const d2grp_t *G) {
   if (mode == D2_WIDE) {
     fprintf(out, "%s", name);
     for (uint32_t s = 0; s < R->n_class; ++s) fprintf(out, "\t%.6f", x[s]);
@@ -1595,22 +1791,28 @@ static void d2_emit(FILE *out, const d2ref_t *R, const char *name,
     return;
   }
 
-  d2sh_t *o = d2alloc(R->n_class, sizeof(d2sh_t), "emit order");
+  /* --wide is always per-class; every other shape reports groups when one is
+   * asked for, so the label carries the resolution the data supports. */
+  const uint32_t nn = G ? G->n : R->n_class;
+  char *const *nm = G ? G->gname : R->name;
+  d2sh_t *o = d2alloc(nn, sizeof(d2sh_t), "emit order");
   double total = 0;
+  for (uint32_t s = 0; s < nn; ++s) { o[s].s = s; o[s].v = 0; }
   for (uint32_t s = 0; s < R->n_class; ++s) {
-    o[s].s = s; o[s].v = x[s]; total += x[s];
+    o[G ? G->gid[s] : s].v += x[s];
+    total += x[s];
   }
-  qsort(o, R->n_class, sizeof(d2sh_t), d2sh_cmp);
+  qsort(o, nn, sizeof(d2sh_t), d2sh_cmp);
 
   double shown = 0;
   uint32_t n = 0;
   if (mode == D2_REPORT) fprintf(out, "%s:", name);
-  for (uint32_t k = 0; k < R->n_class; ++k) {
+  for (uint32_t k = 0; k < nn; ++k) {
     if (o[k].v < min_frac || o[k].v <= 0) break;
     if (mode == D2_LONG)
-      fprintf(out, "%s\t%s\t%.6f\n", name, R->name[o[k].s], o[k].v);
+      fprintf(out, "%s\t%s\t%.6f\n", name, nm[o[k].s], o[k].v);
     else
-      fprintf(out, "%s %s %.1f%%", n ? ";" : "", R->name[o[k].s],
+      fprintf(out, "%s %s %.1f%%", n ? ";" : "", nm[o[k].s],
               o[k].v * 100.0);
     shown += o[k].v; ++n;
   }
@@ -1671,7 +1873,7 @@ int main_deconv(int argc, char *argv[]) {
   /* Display only: it decides what LONG and REPORT list, never what is fitted.
    * 0.005 because NNLS leaves dust among collinear columns that is not a
    * claim about the sample; --min-frac 0 shows every non-zero class. */
-  double min_frac = 0.005;
+  double min_frac = 0.005, group_thr = 0;
   /* One value per ROUND, last repeating: "0.5,0.5,0" is 0.5 for the global fit
    * and the first rebuild, unweighted from round 3 on. A single value applies
    * everywhere. Per-round because the panel changes character as the scope
@@ -1710,6 +1912,8 @@ int main_deconv(int argc, char *argv[]) {
     }
     else if (!strcmp(a, "--wide")) outmode = D2_WIDE;
     else if (!strcmp(a, "--report")) outmode = D2_REPORT;
+    else if (!strcmp(a, "--group-threshold") && i + 1 < argc)
+      group_thr = atof(argv[++i]);
     else if (!strcmp(a, "--min-frac") && i + 1 < argc)
       min_frac = atof(argv[++i]);
     else if (!strcmp(a, "--no-narrow")) narrow = 0;
@@ -1778,6 +1982,20 @@ int main_deconv(int argc, char *argv[]) {
 "  --report                Emit a readable one-line summary per record --\n"
 "                          \"cell: Class 69.6%%; Class 30.4%%\" -- instead of a\n"
 "                          TSV.\n"
+"  --group-threshold F     Report confusable classes under one joined label,\n"
+"                          \"CA3/DG-po\", summing their fractions. A class\n"
+"                          handing F or more of its mass to another in the\n"
+"                          reference's confusion trailer joins it; groups are\n"
+"                          the connected components of that relation. Default:\n"
+"                          0, off. Needs a reference built with\n"
+"                          `deconv-build-ref --confusion`, and applies to every\n"
+"                          output shape but --wide, which stays per-class so\n"
+"                          the full-resolution answer is never lost.\n"
+"                          F IS A TUNING PARAMETER, NOT AN ERROR RATE: the\n"
+"                          matrix is pooled over sparsity levels and measured\n"
+"                          on the reference atlas's own held-out cells, so it\n"
+"                          names pairs that were not separable THERE and is a\n"
+"                          lower bound on what another protocol will confuse.\n"
 "  --min-frac F            Hide classes below this fraction. Default: 0.005.\n"
 "                          Display only: it never changes what is fitted. 0\n"
 "                          shows every non-zero class.\n"
@@ -1886,6 +2104,18 @@ int main_deconv(int argc, char *argv[]) {
 
   FILE *out = out_path ? fopen(out_path, "w") : stdout;
   if (!out) d2die("cannot open output", out_path);
+  /* One grouping for the whole run, built once from the artifact's own
+   * confusion. It is deliberately NOT per query: the matrix is pooled over
+   * sparsity levels, so the threshold is a tuning parameter and not a
+   * depth-specific error rate. */
+  d2grp_t Grp, *G = NULL;
+  if (group_thr > 0) {
+    if (!R.conf)
+      d2die("--group-threshold needs a reference carrying a confusion "
+            "trailer (deconv-build-ref --confusion)", rpath);
+    d2grp_build(&R, group_thr, &Grp);
+    G = &Grp;
+  }
   d2_emit_header(out, &R, outmode);
 
   d2opt_t opt;
@@ -1930,7 +2160,7 @@ int main_deconv(int argc, char *argv[]) {
     pthread_mutex_destroy(&J.lock);
     for (uint32_t r2 = 0; r2 < n_qname; ++r2)
       d2_emit(out, &R, qname[r2], J.xall + (size_t)r2 * R.n_class,
-              outmode, min_frac);
+              outmode, min_frac, G);
     free(J.xall); free(th);
     if (out != stdout) fclose(out);
     free(qoff);
@@ -1954,7 +2184,7 @@ int main_deconv(int argc, char *argv[]) {
 
     d2_record(&R, &opt, &ws, &c, rec, qname, n_qname, xrec);
     d2_emit(out, &R, rec < n_qname ? qname[rec] : "record", xrec,
-            outmode, min_frac);
+            outmode, min_frac, G);
     free_cdata(&c);
   }
   bgzf_close(qf.fh);
