@@ -409,7 +409,7 @@ bundle_report:;
            "MRMP chain (MRMPIDX1)");
     printf("  %3d  %-15s  %11s  %11s  %s\n", 1, "kind",
            commafmt(secs[1].offset, ob), commafmt(secs[1].length, sb),
-           "\\\"tree\\\" framework mark");
+           "\"tree\" framework mark");
     printf("  %3s  %-15s  %11s  %11s  %s\n", "2-", "booster chain",
            commafmt(secs[2].offset, ob), commafmt(booster_bytes, sb),
            "xgboost boosters for tree nodes");

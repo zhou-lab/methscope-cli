@@ -101,7 +101,8 @@ static int upscale_usage(FILE *out) {
     "            auto-detected and empty/NA fields are imputed with the model means.\n"
     "\n"
     "Options:\n"
-    "  -o <out>   Write output to a file instead of stdout (.cg is binary -- use -o).\n"
+    "  -o <out>   Write output to a file instead of stdout. A .cg is binary, so\n"
+    "             without -o it is refused on a terminal; a pipe or redirect is fine.\n"
     "  --binary   Threshold predictions at 0.5 and write 0/1 calls (format 6).\n"
     "             Lossy -- the default format 4 keeps the fraction itself.\n"
     "  --probs    Emit per-CpG probabilities as TSV instead of a .cg.\n"
@@ -409,6 +410,7 @@ static int read_magic_at(const char *path, uint64_t offset, char magic[8]) {
 }
 
 int main_upscale(int argc, char *argv[]) {
+  const char *pos[4]; int npos = 0;
   const char *out_path = NULL;
   int with_probs = 0, as_binary = 0;
   int i = 1;
@@ -421,11 +423,23 @@ int main_upscale(int argc, char *argv[]) {
     }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
       udie("unrecognized or incomplete option", argv[i]);
-    else break;
+    else if (npos < (int)(sizeof pos / sizeof *pos)) pos[npos++] = argv[i];
+    else break;   /* too many positionals: the tail's own check reports it */
   }
-  if (argc - i < 1 || argc - i > 2) return upscale_usage(stderr);
-  const char *model_path = argv[i];
-  const char *input_path = (argc - i == 2) ? argv[i + 1] : "-";
+  if (npos < 1 || npos > 2) return upscale_usage(stderr);
+  const char *model_path = pos[0];
+  const char *input_path = (npos == 2) ? pos[1] : "-";
+  /* A .cg is BGZF; writing it to a terminal fills the screen with binary and can
+   * leave the tty in a strange state. A pipe or a redirect is fine and stays
+   * supported -- `upscale ... | yame summary -` is a real workflow -- so the
+   * refusal is narrow: no -o AND stdout is a tty. deconv-build-ref already
+   * refuses this shape by requiring -o. Checked HERE, before the model is
+   * opened: the whole-genome decoder is 2.8 GB, and refusing after loading it
+   * would make the user wait to be told no. --probs writes a text table, so it
+   * is exempt. */
+  if (!with_probs && !out_path && isatty(fileno(stdout)))
+    udie("refusing to write a binary .cg to the terminal: give -o FILE, "
+         "redirect, or pipe (use --probs for a text table)", NULL);
   int bundled = ms_bundle_is(model_path);
   ms_bundle_entry_t model_entry = {0};
   uint64_t model_offset = 0, model_length = 0;

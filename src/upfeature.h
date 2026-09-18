@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-#ifndef METHSCOPE_UPFACTOR_CUDA_H
-#define METHSCOPE_UPFACTOR_CUDA_H
+/* Encoder feature modes, shared by the CPU and CUDA unit trainers and by the
+ * .updecx reader. Split out of the deleted upfactor_cuda.h on 2026-09-17: that
+ * header also declared the frozen-trunk trainer, which went with the trunk, but
+ * these constants describe what every encoder input IS and outlive it. */
+#ifndef METHSCOPE_UPFEATURE_H
+#define METHSCOPE_UPFEATURE_H
 
 #include <stdint.h>
 
@@ -26,30 +30,8 @@ static inline uint32_t ms_upfeature_dim(uint32_t mode, uint32_t patterns) {
   return 2u * patterns;
 }
 
-typedef struct {
-  const char *data_path;
-  const char *model_path;
-  uint32_t patterns;
-  uint32_t rank;
-  uint32_t hidden;
-  uint32_t steps;
-  uint32_t batch;
-  uint32_t eval_batches;
-  uint32_t log_every;
-  uint64_t seed;
-  int device;
-  double learning_rate;
-  double weight_decay;
-  const char *split_path; /* optional curated cell split; see upsplit.h */
-  const char *homogeneous_groups;
-  double homogeneous_fraction;
-  uint32_t feature_mode;
-} ms_upfactor_config_t;
-
-int ms_upfactor_cuda_available(void);
-int ms_upfactor_train_cuda(const ms_upfactor_config_t *cfg);
-
 #ifdef __cplusplus
 }
 #endif
+
 #endif

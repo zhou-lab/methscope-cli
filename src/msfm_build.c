@@ -34,6 +34,8 @@
 #include "mrmp.h"
 #include "cfile.h"
 #include "index.h"
+#include "summary_multi.h"      /* YAME: yame_acc_t, the enumerator types */
+#include "summary_index.h"      /* YAME: the inverted index over the masks */
 
 static void bdie(const char *msg, const char *det) __attribute__((noreturn));
 static void bdie(const char *msg, const char *det) {
@@ -140,6 +142,10 @@ typedef struct {
   const float *col_thresh;
 #define COL_CONTINUOUS (-1.0f)     /* leave this column as a fraction */
   const uint32_t *set_col0;    /* n_sets: first pattern column of each set */
+  /* The same memberships as cpg_off/cpg_col, kept as RUNS instead of inverted,
+   * so YAME's yame_summarize_multi() can be fed without re-reading the .mrmp per
+   * cell. Built only when the kernel path is asked for; see kernel_ok(). */
+  const yame_index_t *k_ix;    /* built once from the runs; NULL = scatter */
   uint32_t        n_sets;
   uint64_t        n_cpg;
   uint32_t        ncol;        /* total output columns across every set */
@@ -182,6 +188,44 @@ static const char *commafmt_mb(uint64_t v, char *buf) {
  * cannot disagree. */
 uint32_t ms_msfm_side_floor = 3;
 
+/* ---- YAME's multi-mask kernel ------------------------------------------- */
+
+/* Replay the cached runs into yame_summarize_multi().
+ *
+ * The runs are collected ONCE, alongside the inverted index, because the kernel
+ * calls its enumerator per query record and re-reading a 178-set .mrmp per cell
+ * would cost more than it saves.
+ *
+ * The kernel's two obligations hold by construction: ms_mrmp_membership_runs()
+ * emits one set in position order, so runs of one slot ascend and never
+ * overlap. Runs of DIFFERENT slots may overlap, which is exactly what a bank
+ * needs and what a .cm cannot express. */
+typedef struct {
+  const uint32_t *start, *len; const uint16_t *slot; uint64_t n;
+} kruns_t;
+
+/* Called twice by yame_index_build_runs() (count, then fill); replaying one
+ * array makes the two emissions identical by construction, which the build
+ * requires. Slots are global columns, so state_base is NULL and each run's
+ * "mask" is its slot. */
+static int kernel_runs(void *ctx, yame_emit_fn emit, void *emit_ctx) {
+  const kruns_t *L = ctx;
+  for (uint64_t r = 0; r < L->n; ++r)
+    emit(emit_ctx, L->slot[r], L->start[r], L->len[r], 0);
+  return 0;
+}
+
+/* YAME's index answers the native, unbinarised draw over a format 3 record: one
+ * mean over every covered row. A sampled rung takes a seeded subset and a
+ * binarised one replaces each beta with a coin flip against it; neither is a sum
+ * over the coverage bitmap, so those rungs keep the scatter below, as does a
+ * format 6 record. The two paths are the same arithmetic in the same row order
+ * and are bit-identical (test/t_mrmp.sh step 6 pins the numbers to yame). */
+static inline int index_ok(const job_t *J, const cdata_t *c,
+                           uint32_t want, uint32_t ne) {
+  return J->k_ix && c->fmt == '3' && !J->binarize && want == ne;
+}
+
 static void *worker(void *arg) {
   job_t *J = (job_t *)arg;
   cfile_t cf = open_cfile((char *)J->query);
@@ -190,6 +234,8 @@ static void *worker(void *arg) {
   uint32_t *elig = bmal((size_t)elig_cap * 4, "eligible positions");
   double   *sum  = bmal((size_t)J->ncol * sizeof(double), "beta sums");
   uint32_t *cnt  = bmal((size_t)J->ncol * 4, "beta counts");
+  yame_acc_t *kacc = J->k_ix
+    ? bmal((size_t)J->ncol * sizeof(yame_acc_t), "index accumulators") : NULL;
 
   /* Phase timers. Four clock reads per cell is noise against a multi-second
    * cell, and guessing which phase dominates has already been wrong twice. */
@@ -250,6 +296,22 @@ static void *worker(void *arg) {
       TICK();
       memset(sum, 0, (size_t)J->ncol * sizeof(double));
       memset(cnt, 0, (size_t)J->ncol * 4);
+      if (index_ok(J, &c, want, ne)) {
+        /* The covered rows are already in elig[], ascending and distinct at
+         * the native draw (no shuffle happened), so hand YAME the list: no
+         * rescan of the record and no bitmap in between. Same row order as
+         * the scatter below, so the sums are bit-identical; YAME refuses a
+         * list out of order or with a repeat, so a broken elig[] cannot pass
+         * silently. */
+        if (yame_index_apply_rows(J->k_ix, &c, elig, ne, kacc) != 0)
+          bdie("YAME's index refused this record's covered-row list", J->query);
+        for (uint32_t g = 0; g < J->ncol; ++g) {
+          sum[g] = kacc[g].sum_beta;
+          cnt[g] = (uint32_t)kacc[g].n_o;
+        }
+        TOCK(t_scatter);
+        goto emitted;
+      }
       for (uint32_t k = 0; k < want; ++k) {
         uint64_t pos = elig[k];
         uint64_t mu = c.fmt == '3' ? f3_get_mu(&c, pos)
@@ -263,6 +325,7 @@ static void *worker(void *arg) {
         }
       }
       TOCK(t_scatter);
+      emitted:
 
       uint64_t row = (uint64_t)rep * J->n_cells + cell;
       uint16_t *out = J->beta + row * J->ncol_out;
@@ -359,7 +422,7 @@ static void *worker(void *arg) {
   if (getenv("METHSCOPE_PROFILE"))
     fprintf(stderr, "[profile] io %.2fs  eligible-scan %.2fs  downsample %.2fs  "
             "scatter %.2fs  emit %.2fs\n", t_io, t_elig, t_draw, t_scatter, t_emit);
-  free(elig); free(sum); free(cnt);
+  free(elig); free(sum); free(cnt); free(kacc);
   #undef TICK
   #undef TOCK
   return NULL;
@@ -381,6 +444,31 @@ static void run_count(void *ctx, uint64_t start, uint64_t len, uint32_t rank) {
   if (rank == MRMP_PNA_MEMBERSHIP || rank >= a->patterns) return;
   for (uint64_t i = start; i < start + len; ++i) ++a->cnt[i];
 }
+/* The same runs again, kept flat for YAME's enumerator. Growable rather than
+ * two-pass: a bank is a few million runs, and the count pass would cost another
+ * walk of every membership to save one realloc chain. */
+typedef struct {
+  uint32_t *start, *len; uint16_t *slot;
+  uint64_t n, cap;
+  uint32_t base, patterns;
+} runlist_t;
+
+static void run_collect(void *ctx, uint64_t start, uint64_t len, uint32_t rank) {
+  runlist_t *L = ctx;
+  if (rank == MRMP_PNA_MEMBERSHIP || rank >= L->patterns) return;
+  if (L->n == L->cap) {
+    L->cap = L->cap ? L->cap * 2 : (1u << 16);
+    L->start = realloc(L->start, (size_t)L->cap * sizeof(uint32_t));
+    L->len   = realloc(L->len,   (size_t)L->cap * sizeof(uint32_t));
+    L->slot  = realloc(L->slot,  (size_t)L->cap * sizeof(uint16_t));
+    if (!L->start || !L->len || !L->slot) bdie("out of memory (run list)", NULL);
+  }
+  L->start[L->n] = (uint32_t)start;
+  L->len[L->n]   = (uint32_t)len;
+  L->slot[L->n]  = (uint16_t)(L->base + rank);
+  ++L->n;
+}
+
 static void run_fill(void *ctx, uint64_t start, uint64_t len, uint32_t rank) {
   runacc_t *a = ctx;
   if (rank == MRMP_PNA_MEMBERSHIP || rank >= a->patterns) return;
@@ -921,6 +1009,37 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
       if (g[i]) cpg_col[cpg_off[i] + cpg_cnt[i]++] = (uint16_t)(g[i] - 1);
     free(stage[si]);
   }
+  /* The same memberships once more, as runs, for YAME's inverted index. It is
+   * one implementation of the native-draw mean living in YAME and called from
+   * here (see index_ok); the scatter above stays for the rungs it cannot
+   * express. A set held as a dense .cm has no runs to collect, so a mixed or
+   * all-.cm artifact keeps the scatter for everything. MS_SUMMARY_INDEX=0
+   * turns the index off, for a comparison. */
+  runlist_t KL; memset(&KL, 0, sizeof KL);
+  int use_kernel = 1;
+  { const char *e = getenv("MS_SUMMARY_INDEX"); if (e && *e == '0') use_kernel = 0; }
+  for (uint32_t si = 0; use_kernel && si < n_sets; ++si)
+    if (!ra_base[si]) use_kernel = 0;
+  yame_index_t *k_ix = NULL;
+  if (use_kernel) {
+    for (uint32_t si = 0; si < n_sets; ++si) {
+      KL.base = set_col0[si]; KL.patterns = set_end[si] - set_col0[si];
+      ms_mrmp_membership_runs(mrmps[si], mrmp_base ? mrmp_base[si] : 0,
+                              mrmp_len ? mrmp_len[si] : 0, run_collect, &KL);
+    }
+    kruns_t kr = { KL.start, KL.len, KL.slot, KL.n };
+    char why[256] = "";
+    k_ix = yame_index_build_runs(kernel_runs, &kr, n_cpg, ncol, NULL, ncol,
+                                 0, why, sizeof why);
+    if (!k_ix) fprintf(stderr, "  %-14s declined: %s; using the scatter\n",
+                       "yame index", why);
+    else { char c1[32];
+      fprintf(stderr, "  %-14s %s bytes, built in %.2fs\n", "yame index",
+              commafmt_mb(yame_index_bytes(n_cpg, KL.n ? k_ix->off[n_cpg] : 0), c1),
+              k_ix->t_build); }
+    free(KL.start); free(KL.len); free(KL.slot); memset(&KL, 0, sizeof KL);
+  }
+
   free(stage); free(cpg_cnt); free(ra_base);
   { char c1[32], c2[32];
     fprintf(stderr, "  %-14s %s over %s CpGs (%.2f%% carry any)\n", "membership",
@@ -964,6 +1083,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   J.query = query; J.n_cells = n_cells; J.n_cpg = n_cpg;
   J.col_thresh = col_thresh;
   J.cpg_off = cpg_off; J.cpg_col = cpg_col;
+  J.k_ix = k_ix;
   J.set_end = set_end; J.set_col0 = set_col0;
   J.em_a = em_a; J.em_b = em_b; J.ncol_out = n_emit;
   J.rk_off = rk_off; J.rk_n1 = rk_n1; J.rk_idx = rk_idx;
@@ -1000,6 +1120,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
 
   free((void *)J.offset); free(tid);
   free(cpg_off); free(cpg_col); free(set_end); free(col_thresh);
+  yame_index_free(k_ix);
   free(em_a); free(em_b); free(rk_off); free(rk_n1); free(rk_idx); free(out_col0);
   if (set_col0_out) memcpy(set_col0_out, set_col0, n_sets * sizeof(uint32_t));
   free(set_col0);

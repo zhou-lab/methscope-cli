@@ -291,5 +291,7 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
 
 /* Subcommand entry point. */
 int  main_classify_featurize(int argc, char *argv[]);
+/* mrmp-summary: the same per-pattern means, as TSV instead of a .msfm. */
+int  main_mrmp_summary(int argc, char *argv[]);
 
 #endif /* MSFM_H */

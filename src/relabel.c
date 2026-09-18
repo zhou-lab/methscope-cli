@@ -43,6 +43,7 @@ static void rdie(const char *msg, const char *arg) {
 }
 
 int main_relabel(int argc, char *argv[]) {
+  const char *pos[4]; int npos = 0;
   const char *out_path = NULL, *from = NULL, *to = NULL;
   int force = 0, i = 1;
   for (; i < argc; ++i) {
@@ -82,20 +83,21 @@ int main_relabel(int argc, char *argv[]) {
 "  record what was built, not what it is.\n"
 "\n"
 "Example:\n"
-"  methscope relabel 'Macrophage=Macrophage.(Monocyte.Derived)' \\\n"
-"      hg38_celltype_full.clfx -o hg38_celltype_v2.clfx\n");
+"  methscope relabel -o hg38_celltype_v2.clfx \\\n"
+"      'Macrophage=Macrophage.(Monocyte.Derived)' hg38_celltype_full.clfx\n");
       return 0;
     }
     else if (a[0] == '-' && a[1]) rdie("unrecognized option", a);
-    else break;
+    else if (npos < (int)(sizeof pos / sizeof *pos)) pos[npos++] = a;
+    else break;   /* too many positionals: the tail's own check reports it */
   }
-  if (argc - i != 2 || !out_path) {
+  if (npos != 2 || !out_path) {
     fprintf(stderr,
-            "Usage: methscope relabel OLD=NEW IN.clfx -o OUT.clfx\n");
+            "Usage: methscope relabel -o OUT.clfx OLD=NEW IN.clfx\n");
     return 1;
   }
-  char *spec = strdup(argv[i]);
-  const char *in_path = argv[i + 1];
+  char *spec = strdup(pos[0]);
+  const char *in_path = pos[1];
   char *eq = strchr(spec, '=');
   if (!eq) rdie("expected OLD=NEW", argv[i]);
   *eq = '\0'; from = spec; to = eq + 1;

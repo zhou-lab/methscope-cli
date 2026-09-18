@@ -1,3 +1,3 @@
 #!/bin/bash
 ## title: Inspect the pattern set
-methscope inspect chr20_40celltypes.mrmp --patterns --top 5
+methscope inspect --patterns --top 5 chr20_40celltypes.mrmp

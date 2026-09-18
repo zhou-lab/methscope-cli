@@ -513,13 +513,18 @@ void ms_msui_report(const char *path) {
   if (fclose(f)) fail_path("error closing", path);
   if (memcmp(h.magic, "MSUIDX1", 7) || h.version != 1)
     fail_path("not a MSUIDX1 processing-unit index", path);
-  printf("format\tMSUIDX1 v%u\n", h.version);
-  printf("cpgs\t%" PRIu64 "\t(%" PRIu64 " real + %" PRIu64 " PNA)\n",
-         h.n_cpg, h.n_real_cpg, h.n_pna_cpg);
-  printf("pattern_length\t%u\n", h.pattern_length);
-  printf("target_unit_cpgs\t%u\n", h.target_unit_cpgs);
-  printf("units\t%u\t(%u PNA)\n", h.n_units, h.n_pna_units);
-  printf("real_memberships\t%u\n", h.n_real_memberships);
-  printf("pattern_checksum\t%016" PRIx64 "\n", h.pattern_checksum);
-  printf("file_bytes\t%" PRIu64 "\n", h.file_bytes);
+  /* The aligned two-column form every other `inspect` report uses (bundles,
+   * .mrmp, .msdref). This one printed TSV until 2026-09-17, which made the
+   * .msui and .msur the only artifacts whose report you could not read beside
+   * the others -- and the docs page quietly re-formatted them to match, hiding
+   * the inconsistency instead of showing it. */
+  printf("  %-16s MSUIDX1 v%u\n", "format", h.version);
+  printf("  %-16s %" PRIu64 "  (%" PRIu64 " real + %" PRIu64 " PNA)\n",
+         "cpgs", h.n_cpg, h.n_real_cpg, h.n_pna_cpg);
+  printf("  %-16s %u\n", "pattern_length", h.pattern_length);
+  printf("  %-16s %u\n", "target_unit_cpgs", h.target_unit_cpgs);
+  printf("  %-16s %u  (%u PNA)\n", "units", h.n_units, h.n_pna_units);
+  printf("  %-16s %u\n", "real_memberships", h.n_real_memberships);
+  printf("  %-16s %016" PRIx64 "\n", "pattern_checksum", h.pattern_checksum);
+  printf("  %-16s %" PRIu64 "\n", "file_bytes", h.file_bytes);
 }

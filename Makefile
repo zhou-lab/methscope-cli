@@ -42,7 +42,7 @@ OBJ = $(SRC:.c=.o)
 CUDA_OBJ =
 
 ifeq ($(CUDA),1)
-  CUDA_OBJ = src/upfactor_cuda.o src/upunit_cuda.o
+  CUDA_OBJ = src/upunit_cuda.o
   LDFLAGS += -L$(CUDA_HOME)/lib -Wl,-rpath,$(CUDA_HOME)/lib
   LIBS += -lcublas -lcudart -lstdc++
 endif
@@ -76,11 +76,22 @@ test: $(PROG) yame-lib
 	$(PYTHON) docs/build_models.py --check
 	$(PYTHON) docs/build_examples.py --check
 	$(PYTHON) docs/build_help.py --check
+	$(PYTHON) docs/make_llms.py ./$(PROG) --check
+	$(PYTHON) docs/build_readme.py ./$(PROG) --check
 
 ## docs/index.html is prose around three generated parts: the example blocks
 ## (docs/examples/*.sh, build_examples.py), the model table (YAME's
 ## assets.tsv, build_models.py) and the Reference tab (every subcommand's -h
 ## from THIS binary, build_help.py). `make test` checks all three.
+## docs/llms.txt is the agent-facing reference and the FOURTH generated
+## file: same binary, same catalogue rows as the model cards. It was the
+## one nothing ran or checked, and it rotted for three weeks -- it told an
+## agent `methscope fetch` was retired, listed the withdrawn v9 models, and
+## documented a --flat the binary refuses. Now `make docs` writes it and
+## `make test` checks it, like the other three.
+## The README quotes `--version` to explain the compiled-in catalogue; that
+## quote is generated too (docs/build_readme.py), because its three numbers
+## move independently and it sat two YAME releases and a model tag behind.
 ## The model table on the docs Models tab, generated from the submodule's
 ## YAME/data/assets.tsv (one row per model, compiled into every tool) plus the
 ## registry for tag and size. A model is described once, there; the page is a
@@ -90,6 +101,8 @@ docs: $(PROG)
 	$(PYTHON) docs/build_models.py
 	$(PYTHON) docs/build_examples.py
 	$(PYTHON) docs/build_help.py
+	$(PYTHON) docs/make_llms.py ./$(PROG)
+	$(PYTHON) docs/build_readme.py ./$(PROG)
 
 ## The documented-workflow gate: runs every runnable docs/examples/*.sh on this
 ## checkout's binary, as a reader would. Needs the network ONCE (the sandbox
@@ -115,9 +128,6 @@ $(YAME_LIB) $(HTSLIB): yame-lib
 
 src/%.o: src/%.c | check-xgb
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-src/upfactor_cuda.o: src/upfactor_cuda.cu src/upfactor_cuda.h | check-xgb
-	$(NVCC) -O3 $(CUDA_GENCODE) $(NVCCFLAGS) -Isrc -c $< -o $@
 
 src/upunit_cuda.o: src/upunit_cuda.cu src/upunit_cuda.h src/updec2.h | check-xgb
 	$(NVCC) -O3 $(CUDA_GENCODE) $(NVCCFLAGS) -Isrc -c $< -o $@
@@ -167,7 +177,7 @@ dist:
 	@sha256sum $(DIST_TARBALL) 2>/dev/null || shasum -a 256 $(DIST_TARBALL)
 
 clean:
-	rm -f $(OBJ) $(DEP) src/upfactor_cuda.o src/upunit_cuda.o \
+	rm -f $(OBJ) $(DEP) src/upunit_cuda.o \
 	      src/updec_cuda.o src/updec_nn.o src/updec_train.o $(PROG)
 
 # Also clean the YAME submodule build artifacts.

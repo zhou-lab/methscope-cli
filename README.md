@@ -22,8 +22,8 @@ git. They are fetched with **`methscope fetch`**; the
 ```sh
 methscope fetch                                     # browse the catalogue
 methscope fetch hg38/models/hg38_celltype_lite.clfx # one file
-methscope fetch hg38/models                         # every human model
-methscope fetch hg38/data                           # every example .cg fixture
+methscope fetch -y hg38/models                      # every human model (-y: a directory is GB)
+methscope fetch -y hg38/data                        # every example .cg fixture
 # -> $METHSCOPE_DATA_HOME, else $YAME_DATA_HOME, else ~/.local/share/yame (-d DIR overrides)
 ```
 
@@ -37,7 +37,7 @@ methscope classify hg38_celltype_lite.clfx human_hg38_celltypes.cg
 ```
 
 The catalogue and the model tag are compiled into the binary — `methscope
---version` prints `(yame v1.43, models v9)` — so a release fetches exactly the
+--version` prints <!-- version:begin -->`(yame v1.49, models v11)`<!-- version:end --> — so a release fetches exactly the
 models it documents, and nothing else needs to be installed. Every entry carries
 a pinned SHA-256, fetching is idempotent, and a `.cg`'s `.cg.idx` sibling rides
 along without being a second name to remember. See `methscope fetch -h` for the
@@ -111,7 +111,7 @@ feeding the `.cm`-based commands, but it is no longer a pipeline step. (An
 already-exported `.cm` is still accepted wherever a `.mrmp` is.)
 
 ```sh
-$MS upscale-train \
+methscope upscale-train \
   -i training.msur \
   --units processing_units_16k.msui \
   --mrmp zhou_major_p1000.mrmp \
@@ -134,7 +134,6 @@ would strand a whole cell type outside training, or to train against the exact
 held-out cells an external baseline used. The split is validated before CUDA is
 claimed, is recorded in the training manifest, and is folded into the checkpoint
 run checksum, so one work directory cannot resume across two different splits.
-Pass the same file to `_upscale trunk-train` when a frozen trunk is involved.
 
 Training runs on CPU by default, threaded over units with `--threads N` — units
 are independent, which is what makes the run resumable. `make CUDA=1
@@ -204,7 +203,7 @@ with open("toy.updec","wb") as f:
     f.write(f32([1,0, 0,1, 1,1, -1,0])); f.write(f32([0,0,0,0]))         # W2, b2
 PY
 printf 'feat_1\tfeat_2\tfeat_3\n2\t-1\t5\nNA\t0\t1\n' > toy_feats.tsv
-$MS upscale --probs toy.updec toy_feats.tsv
+methscope upscale --probs toy.updec toy_feats.tsv
 # 0.880796  0.5  0.880796  0.119204    # row1: h=[relu(2),relu(-1)]=[2,0]
 # 0.5       0.5  0.5       0.5          # row2: NA imputed to 0 -> all sigmoid(0)
 ```

@@ -54,3 +54,30 @@ case "$out" in
 esac
 printf '%s\n' "$out" | grep -q "hg38/models" || { echo "bare fetch (piped) did not list the catalogue"; exit 1; }
 echo "ok: $n subcommands answer -h; bad invocations refuse"
+
+## Options are parsed at ANY position. Every subcommand used to stop scanning at
+## the first positional, so the order its own usage string prints --
+## `deconv <ref> <query> -o out.tsv` -- exited 1 and wrote nothing. Reported
+## 20260917; the loops now collect positionals and keep scanning.
+for sub in deconv upscale classify; do
+  out=$("$MS" $sub nonexistent_a nonexistent_b -o /dev/null 2>&1 || true)
+  case "$out" in
+    *"Usage:"*|*"unrecognized"*|*"too many arguments"*)
+      echo "$sub rejects a trailing -o"; exit 1 ;;
+  esac
+done
+
+## A .cg is BGZF: never write it to a terminal when no -o was given. Reported
+## 20260917 -- `upscale MODEL QUERY` with no -o dumped binary onto the tty.
+## A pipe and a redirect must keep working; only the tty case refuses, which
+## needs a pseudo-terminal to test at all (this harness has no tty).
+if command -v script >/dev/null 2>&1; then
+  ## Capture, then match. Piping into grep would fail under `set -o pipefail`
+  ## on the REFUSAL ITSELF: methscope exits 1, which is the behaviour under
+  ## test, and the pipeline would inherit that as a test failure.
+  tty_out=$(script -qec "$MS upscale /dev/null /dev/null" /dev/null 2>&1 || true)
+  case "$tty_out" in
+    *"refusing to write a binary"*) ;;    # short: a pty wraps the line at 80
+    *) echo "upscale does not refuse a binary .cg on a tty"; exit 1 ;;
+  esac
+fi

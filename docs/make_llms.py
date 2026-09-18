@@ -17,15 +17,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from helpdump import banner_sections, help_of   # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "llms.txt"
 
-## Full help for what an agent actually runs. The training and artifact-build
-## commands (upscale-train, upscale-featurize, classify-train, mrmp-build, ...)
-## are deliberately summarized instead: together they are ~11 KB of help for
-## work that needs a GPU, a truth atlas and hours, and an agent that truly needs
-## them can run `methscope <cmd> -h` itself.
-FULL = ["upscale", "classify", "deconv", "inspect"]
 
 PREAMBLE = """\
 # methscope
@@ -50,27 +47,27 @@ bundles that carry their own feature definition:
 ## Install
 
   conda install -c zhou-lab -c conda-forge methscope
-  conda install -c zhou-lab -c conda-forge methscope-cuda   # linux-64, only
+  conda install -c zhou-lab -c conda-forge methscope-cuda   # linux-64; only
                                                             # upscale-train
-                                                            # needs a GPU
+                                                            # uses a GPU, and
+                                                            # only to go faster
 
 ## Getting models
 
-Models live on HuggingFace (zhou-lab/methscope) and are fetched through YAME's
-shared registry, which verifies each file against a pinned digest:
+Models live on HuggingFace (zhou-lab/methscope) and are fetched through the
+registry compiled into this binary, which verifies each file against a pinned
+digest. `methscope fetch` needs no other tool installed:
 
-  yame fetch methscope/hg38/models      # or mm10/models, hg38/data
+  methscope fetch -c hg38/models/hg38_celltype_lite.clfx   # one file
+  methscope fetch -y hg38/models                           # the whole directory
 
-`methscope fetch` was RETIRED -- do not use it. Available:
-  hg38_wg.updecx           whole-genome upscale decoder (human)
-  mm10_wg.updecx           whole-genome upscale decoder (mouse)
-  hg38_celltype.clfx       cell-type classifier (human, 33 types)
-  mm10_celltype_brain.clfx cell-type classifier (mouse brain, 41 types)
-  hg38_sex.clfx            sex classifier
-  hg38_62celltypes.msdref  deconvolution reference (62 types, Zhou
-                           single-cell backbone) -- prefer this one
-  hg38_33celltypes.msdref  deconvolution reference (33 types, bulk-pooled)
-  hg38_10k1.updecx         upscale decoder for one 10k-CpG block (legacy, small)
+A directory is gigabytes, so `fetch` asks before it starts and refuses outright
+when nothing can answer -- a script, a batch job -- which is what `-y` settles.
+`-c` fetches into the current directory instead of the store. `methscope fetch`
+with no argument browses; `methscope fetch -l` dumps the catalogue as TSV, which
+is the machine-readable form to read before fetching anything.
+
+MODEL_TABLE
 
 Example queries with KNOWN answers live beside the models in hg38/data:
 `human_hg38_immune_mixture.cg` holds nine mixtures whose truths are exact by
@@ -106,26 +103,71 @@ These are the mistakes that are not visible in the usage strings.
 """
 
 
+def model_table(ms):
+    """One line per catalogued model: the file, and its title from YAME's
+    assets.tsv. Both come from where the docs page's model cards get them --
+    `fetch -l` for what this binary actually pins, assets.tsv for the prose --
+    so this list cannot name a withdrawn file or miss a new one. It rotted
+    once: llms.txt sat at the v9 set, naming two files v10 had withdrawn and
+    none of the four bank classifiers."""
+    import csv, os, subprocess, tempfile
+    tsv = os.path.join(HERE.parent, "YAME", "data", "assets.tsv")
+    title = {}
+    with open(tsv) as fh:
+        for row in csv.DictReader((l for l in fh if not l.startswith("#")),
+                                  delimiter="\t"):
+            title[row["key"]] = row["title"]
+    with tempfile.TemporaryDirectory() as d:
+        env = dict(os.environ, METHSCOPE_DATA_HOME=d)
+        out = subprocess.run([ms, "fetch", "-l"], env=env, capture_output=True,
+                             text=True, check=True).stdout
+    lines = []
+    for line in out.splitlines()[1:]:
+        t = line.split("\t")
+        if not t[0].endswith("/models"):
+            continue
+        key = t[4].split(".")[0]
+        lines.append("  %-24s %s" % (t[4], title.get(key, "")))
+    return "\n".join(lines)
+
 def main():
-    binary = sys.argv[1] if len(sys.argv) > 1 else str(HERE.parent / "methscope")
+    argv = [a for a in sys.argv[1:] if a != "--check"]
+    binary = argv[0] if argv else str(HERE.parent / "methscope")
 
-    def help_of(*args):
-        r = subprocess.run([binary, *args], capture_output=True, text=True)
-        return (r.stdout + r.stderr).rstrip()
-
-    top = help_of("-h")
+    top = help_of(binary, "-h")
     ## The one-line summaries in the top-level help are the summary list; keep
     ## them so an agent knows a command exists before deciding to ask for its -h.
     summary = [l for l in top.splitlines() if l.startswith("  ") and l[2:3].isalpha()]
 
-    parts = [PREAMBLE, "\n".join(summary), ""]
-    for cmd in FULL:
-        parts += [f"\n### methscope {cmd}\n", help_of(cmd, "-h"), ""]
-    parts += ["\n### Other commands\n",
-              "Run `methscope <command> -h` for these; they build or train\n"
-              "artifacts and need a truth atlas, and upscale-train needs a GPU.\n"]
+    ## EVERY subcommand, in banner order, from the same -h dump the docs page's
+    ## Reference tab is built from (docs/helpdump.py). This file used to carry
+    ## four in full and send the reader back to `-h` for the rest, which made it
+    ## a different document rather than the same one in another format -- and
+    ## where the two overlapped they had drifted apart by 0.10. An agent cannot
+    ## run `-h` on a machine it is only reading docs for, so "ask the tool" was
+    ## never an answer here anyway.
+    parts = [PREAMBLE.replace("MODEL_TABLE", model_table(binary)),
+             "\n".join(summary), ""]
+    for heading, cmds in banner_sections(binary):
+        parts.append("\n## %s\n" % heading)
+        for name, desc in cmds:
+            parts += ["\n### methscope %s -- %s\n" % (name, desc),
+                      help_of(binary, name, "-h"), ""]
 
-    OUT.write_text("\n".join(parts).rstrip() + "\n")
+    text = "\n".join(parts).rstrip() + "\n"
+    ## --check is what keeps this file honest. It shipped stale for three weeks
+    ## -- a retirement notice for a command that works, the withdrawn v9 model
+    ## list, and a --flat flag the binary refuses -- because nothing compared it
+    ## with the binary. `make test` runs this.
+    if "--check" in sys.argv:
+        have = OUT.read_text() if OUT.exists() else ""
+        if have != text:
+            print("llms.txt is behind the binary; run docs/make_llms.py ./methscope",
+                  file=sys.stderr)
+            sys.exit(1)
+        print("llms.txt is current")
+        return
+    OUT.write_text(text)
     print(f"wrote {OUT} ({OUT.stat().st_size} bytes)")
 
 

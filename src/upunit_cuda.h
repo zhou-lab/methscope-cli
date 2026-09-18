@@ -3,7 +3,7 @@
 #define METHSCOPE_UPUNIT_CUDA_H
 
 #include <stdint.h>
-#include "upfactor_cuda.h"
+#include "upfeature.h"
 
 #ifdef __cplusplus
 extern "C" {

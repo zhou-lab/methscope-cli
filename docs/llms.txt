@@ -20,27 +20,37 @@ bundles that carry their own feature definition:
 ## Install
 
   conda install -c zhou-lab -c conda-forge methscope
-  conda install -c zhou-lab -c conda-forge methscope-cuda   # linux-64, only
+  conda install -c zhou-lab -c conda-forge methscope-cuda   # linux-64; only
                                                             # upscale-train
-                                                            # needs a GPU
+                                                            # uses a GPU, and
+                                                            # only to go faster
 
 ## Getting models
 
-Models live on HuggingFace (zhou-lab/methscope) and are fetched through YAME's
-shared registry, which verifies each file against a pinned digest:
+Models live on HuggingFace (zhou-lab/methscope) and are fetched through the
+registry compiled into this binary, which verifies each file against a pinned
+digest. `methscope fetch` needs no other tool installed:
 
-  yame fetch methscope/hg38/models      # or mm10/models, hg38/data
+  methscope fetch -c hg38/models/hg38_celltype_lite.clfx   # one file
+  methscope fetch -y hg38/models                           # the whole directory
 
-`methscope fetch` was RETIRED -- do not use it. Available:
-  hg38_wg.updecx           whole-genome upscale decoder (human)
-  mm10_wg.updecx           whole-genome upscale decoder (mouse)
-  hg38_celltype.clfx       cell-type classifier (human, 33 types)
-  mm10_celltype_brain.clfx cell-type classifier (mouse brain, 41 types)
-  hg38_sex.clfx            sex classifier
-  hg38_62celltypes.msdref  deconvolution reference (62 types, Zhou
-                           single-cell backbone) -- prefer this one
-  hg38_33celltypes.msdref  deconvolution reference (33 types, bulk-pooled)
-  hg38_10k1.updecx         upscale decoder for one 10k-CpG block (legacy, small)
+A directory is gigabytes, so `fetch` asks before it starts and refuses outright
+when nothing can answer -- a script, a batch job -- which is what `-y` settles.
+`-c` fetches into the current directory instead of the store. `methscope fetch`
+with no argument browses; `methscope fetch -l` dumps the catalogue as TSV, which
+is the machine-readable form to read before fetching anything.
+
+  hg38_10k1.updecx         Upscaling decoder (one block)
+  hg38_wg.updecx           Upscaling decoder (whole genome)
+  hg38_celltype_full.clfx  Cell-type classifier (human, bank-full)
+  hg38_celltype_lite.clfx  Cell-type classifier (human, bank-lite)
+  hg38_sex.clfx            Sex classifier
+  hg38_33celltypes.msdref  Deconvolution reference, bulk-pooled
+  hg38_62celltypes.msdref  Deconvolution reference
+  mm10_wg.updecx           Upscaling decoder (whole genome, mouse)
+  mm10_brain_full.clfx     Cell-type classifier (mouse brain, bank-full)
+  mm10_brain_lite.clfx     Cell-type classifier (mouse brain, bank-lite)
+  mm10_41celltypes.msdref  Deconvolution reference (mouse brain)
 
 Example queries with KNOWN answers live beside the models in hg38/data:
 `human_hg38_immune_mixture.cg` holds nine mixtures whose truths are exact by
@@ -74,60 +84,413 @@ These are the mistakes that are not visible in the usage strings.
 
 ## Commands
 
-  mrmp-build        Build the MRMP routing tree (--flat for one flat set)
+  fetch             Download models and example data into the store (or -c: here)
+  mrmp-build        Build an MRMP set (--bank: the classifier's chain)
   mrmp-export       Emit the runtime .cm mask (and pattern / count tables)
   mrmp-pool         Combine MRMP sets and cut them to a shared column budget
   classify          Classify a methylome -> labels + confidence
   classify-train    Fit a label classifier (xgboost / threshold / logistic)
   classify-featurize Prebuild the .msfm feature matrix (parallel, reusable)
+  mrmp-summary      Per-pattern mean methylation as TSV (the MRMP average)
   deconv-build-ref  Pack a cell-type store into the .msdref deconvolution reference
   deconv            Estimate cell-type proportions, rebuilding the MRMP per query
   upscale           Impute genome-wide CpG methylation from a sparse methylome
   upscale-featurize Build the MSURAW2/3 training msur from a truth .cg
   upscale-set-units Build the MSUIDX1 processing-unit index from the reference store
-  upscale-train     Train the whole-genome upscale decoder (CUDA)
+  upscale-train     Train the upscale decoder (CPU, CUDA optional)
   bundle            Wrap a model + its MRMP into a self-contained bundle
   relabel           Rename a class label in a trained model, no retraining
   unbundle          Unpack a bundle into its model, MRMP, and outcpg mask
   inspect           Describe any artifact: bundle, .mrmp, .msui, .msur, or .msfm
 
 
-### methscope upscale
+## Models & data
+
+
+### methscope fetch -- Download models and example data into the store (or -c: here)
 
 
 Usage:
-  methscope upscale [options] <model.updec|.updecx> [input]
+  methscope fetch                              browse the catalogue
+  methscope fetch [options] <name>[@tag] ...
+  methscope fetch [options] -u <url> -s <sha256> -o <dest>
+
+Naming:
+  A name is what the browser shows: hg38, hg38/KYCG, hg38/data,
+  EPIC. It is a scope -- `hg38` takes the unit and everything under
+  it, `hg38/data` takes the one directory. Narrow within it with -g.
+  A file resolves too, best written out: `hg38/data/test.cg`. The
+  bare name works when only one directory publishes it.
+  Several names may be given, separated by spaces or by commas --
+  commas so a list fits an option that takes one argument. A
+  directory named twice is taken once, and naming it whole absorbs a
+  file picked out of it.
+  The registry's own <source>/<target> still resolves.
+
+Browsing:
+  With no target on a terminal, opens a tree browser: species, then
+  platform or genome build, then its knowledgebase and files. Arrows
+  move, right/left open and close a row, space or x selects (a folder
+  takes everything under it), f fetches what is selected, h lists every
+  key, q leaves. `/` filters the tree -- by name, source, collection
+  or title -- and enter keeps the filter so you can then select.
+  What is already in the store shows as present and
+  cannot be selected.
+  Piped or redirected it dumps the registry as TSV instead (same as
+  -l), so a script never blocks on a keystroke.
 
 Purpose:
-  Impute CpG methylation from a sparse methylome. Unified UPDEC2 models
-  predict the whole genome; legacy UPDEC1 block models remain readable.
-  Both inference paths are pure C and require neither CUDA nor BLAS.
+  Download reference assets into the shared store that every tool in the
+  suite reads, verifying each file against a digest this build pins.
+  -c puts them in the current directory instead, for a one-off or a
+  demo: no SHA256SUMS is written beside them, but each file is checked
+  against the same digest.
 
-Arguments:
-  <model>   A bare decoder (.updec/.updec2) OR a bundle with the MRMP attached
-            (.updecx, from `bundle`). The form selects the input below.
-  [input]   For .updec : a feature TSV (one row per sample, n_in numeric cols).
-            For .updecx: a query .cg, featurized internally against the bundled
-            MRMP. '-' or omitted reads from stdin; for .updec a header row is
-            auto-detected and empty/NA fields are imputed with the model means.
+Store:
+  Resolved in order: -d, $METHSCOPE_DATA_HOME, $YAME_DATA_HOME,
+  ${XDG_DATA_HOME:-~/.local/share}/yame
+  METHSCOPE_DATA_HOME: /home/user/.local/share/yame
+
+Mirror:
+  $YAME_ASSETS_MIRROR=<scheme://host[:port]> downloads from a site that
+  mirrors the public repositories, keeping each URL's path: the file at
+  https://github.com/zhou-lab/X/raw/v1/f is fetched from <mirror>/zhou-lab/X/raw/v1/f.
+  Every byte is still checked against the compiled-in digest.
 
 Options:
-  -o <out>   Write output to a file instead of stdout (.cg is binary -- use -o).
-  --binary   Threshold predictions at 0.5 and write 0/1 calls (format 6).
-             Lossy -- the default format 4 keeps the fraction itself.
-  --probs    Emit per-CpG probabilities as TSV instead of a .cg.
-  -h         Show this help message.
+  -d <dir>          Store root, overriding the environment.
+  -t <tag>          Upstream tag, overriding the pinned one. Without a digest
+                    for that tag nothing can be verified, so this needs -k.
+  -k                Accept an unpinned tag (no anchor check). Files are still
+                    verified against the manifest that tag publishes.
+  -f                Re-download what is present, and overwrite a store that
+                    was populated from a different tag.
+  -l                Dump the registry as TSV and exit: one row per file, with
+                    its size, digest, description and whether the store has it.
+                    Takes the same <name> and -g a fetch does, so `-l -g
+                    methscope hg38` is the dry run for fetching exactly that.
+  -g <a,b>          Only files matching every term: name, source, collection,
+                    title or upstream database. `-g chromatin` inside a
+                    knowledgebase, `-g celltype` across a whole genome.
+  -n                Say what would be fetched and stop, successfully. The same
+                    plan a fetch prints before asking, but it exits 0, so a
+                    script can check first. -l gives the same set as TSV.
+  -y                Fetch a whole folder without asking. A folder is confirmed
+                    first, since a short name can reach a lot -- `hg38` is 3.5
+                    GB. A name that picks out ONE file needs no -y: naming the
+                    file is the confirmation, so a documented fetch line runs
+                    in a script as it stands.
+  -q                No progress output.
+  -u <url>          Single-file form: what to download.
+  -s <sha256>       Single-file form: the digest it must have.
+  -o <dest>         Single-file form: where it goes (a path, not a dir).
+  -c                Into the current directory rather than the store.
+  -h                This help.
 
-Output:
-  A YAME .cg (format 4: continuous methylation fraction), one record per input
-  sample. UPDEC2 output is always in whole-genome CpG order. For legacy UPDEC1,
-  if the bundle carries an outcpg.cm (the imputed-CpG locations), the .cg spans
-  the whole genome with the block's CpGs predicted (no NA) and the rest NA;
-  otherwise a dense block of n_out CpGs. With --binary, format 6 of 0/1 calls;
-  with --probs, a TSV of per-CpG probabilities (one row per sample).
+Notes:
+  * A directory records which upstream tag filled it, in the SHA256SUMS
+    it keeps. A build pinned elsewhere refuses to overwrite it rather
+    than start a re-download war; -f overrules that.
+  * `shasum -a 256 -c SHA256SUMS` in any store directory re-verifies it
+    by hand, with none of this code involved.
+  * Built with libcurl: fetch available.
 
 
-### methscope classify
+## MRMP construction — the feature foundation
+
+
+### methscope mrmp-build -- Build an MRMP set (--bank: the classifier's chain)
+
+Usage: methscope mrmp-build [options] REF.cg OUT.mrmp
+       methscope mrmp-build --bank [options] REF.cg OUT.mrmp
+
+Build an MRMP from a labelled reference store: one record per class,
+record name = class name. The default is ONE set over every class,
+for upscale, the violation rule and export; --bank is the classifier
+artifact (the release models), a chain of blocks from an annealed
+split hierarchy plus calibrated 2-class resolvers.
+
+Workflow
+  methscope mrmp-build --top 500 REF.cg OUT.mrmp
+  methscope mrmp-build --bank --anneal-min-seg 10000,3000,1000 \
+      --resolvers 100 --cell-store CELLS.cg --cell-labels CELLS.tsv \
+      REF.cg OUT.mrmp
+
+Split discovery (the hierarchy behind a bank's binstring blocks)
+  --anneal-min-seg HI,LO[,STEP]
+                        Anneal the split threshold PER NODE:
+                        try HI, and when nothing separates,
+                        drop exactly to the first disconnection of the
+                        single-linkage graph (the largest threshold
+                        that splits anything -- the slowest possible
+                        peel), stopping at LO. A node unsplittable at
+                        LO is a leaf. Each node re-anneals from HI, so
+                        the root peels only its best-separated groups
+                        while deep leaves can still split fine
+                        structure. A STEP quantizes the drop to the
+                        grid HI, HI-STEP, ...: near-tied
+                        disconnections land in one split instead of a
+                        cascade of near-duplicate levels, and the
+                        recorded thresholds are round numbers. Every
+                        node records the threshold it used in its
+                        header (inspect --tree shows it). Required by
+                        --bank; a fixed threshold is HI,HI.
+  --max-depth N         Maximum split depth. Default: 16.
+
+Modes
+  --top N               Default mode only: keep the N patterns with the most
+                        CpGs, the rest folded into PNA. Default:
+                        10000; 0 keeps every pattern. The build ranks
+                        every candidate; this is the consumer's cut,
+                        applied here because a flat set has one
+                        consumer -- the same prune as mrmp-pool
+                        --pooled-top, for chains that must compete.
+  --bank                The classifier artifact: a FLAT chain of two
+                        feature types and no routing. Type 1: each split
+                        node's binstrings, pruned to patterns with
+                        >= --min-pattern-cpgs CpGs (tree-named for
+                        provenance only). Type 2: calibrated 2-class
+                        rebuilds named root@A__B -- every terminal
+                        pair, every pair inside an unsplittable leaf
+                        (which emits no type-1 of its own), and every
+                        cross-split pair --resolvers picks.
+                        Needs --anneal-min-seg and the calibration
+                        inputs. Featurize the result with
+                        --satellite-contrast replace and train with
+                        classify-train --data.
+  --min-pattern-cpgs N  A type-1 pattern must carry at least N CpGs
+                        to stay in its block; smaller ones fold into
+                        the background. Discovery is unaffected (it
+                        runs on full evidence), so the tree and the
+                        resolvers are the same at any N; only the
+                        hard blocks get fatter. Default 2000; 500
+                        is the release models' value.
+  --resolvers N|all     How many pairs get a calibrated resolver.
+                        Default 0: none, hard blocks only (no
+                        calibration, so no cell store needed).
+                        all = every pair, the bank-full model.
+                        N = the N thinnest pairs by hard-
+                        block FOOTPRINT -- the hard-block CpGs at
+                        which the two class pseudobulks are both
+                        covered and > 0.5 apart in beta -- the
+                        pairs a sparse cell cannot tell apart from
+                        the type-1 columns alone. Pairs the tree
+                        never parts rank at the top by themselves;
+                        the log warns if N leaves one out. 100 is
+                        the bank-lite release model. The build log
+                        lists every chosen pair with its footprint.
+  --resolver-cache DIR  Reuse resolver blocks across runs: before
+                        building root@A__B, look for DIR/A__B.mrmp
+                        (sanitized tags) and splice it in; else build
+                        it and save it there. A block embodies its
+                        calibration, so bank-full and bank-lite on
+                        the same reference + cells share one cache,
+                        and a rerun rebuilds nothing. The cache is
+                        valid ONLY for one (reference, cell store,
+                        labels, selection) combination -- point
+                        different builds at different directories.
+  --resolver-stride k/N Populate the cache in parallel: build only
+                        the resolver pairs with ordinal == k mod N
+                        (0-based); an uncached out-of-stride pair is
+                        skipped and the artifact is PARTIAL. Run N
+                        array jobs with the same command and
+                        k = 0..N-1, then one final run without the
+                        stride to assemble everything from cache.
+                        Requires --resolver-cache.
+
+Per-pair calibration
+  --cell-store F.cg     Per-cell fmt3 store (with F.cg.idx) holding
+                        the training cells. With --cell-labels, every
+                        2-class resolver gets its own
+                        (shrink-pseudocnt, gap) by leave-one-cell-out:
+                        selection pools drop the held-out cell (no
+                        leak, and the inner pool depth matches the
+                        final build), the anchored sign feature
+                        scores it, and the LEAST RESTRICTIVE grid
+                        cell within --calib-eps of the best LOO
+                        macro wins -- looser admission keeps more
+                        CpGs for sparse queries. Grid: pseudocount
+                        1-14, gap 0.28-0.53. Validated on fold-0:
+                        13 pairs, mean 2.8 points off the per-pair
+                        oracle, worst 10.7.
+  --cell-labels F.tsv   cell<TAB>class, class names as in REF.cg.
+                        Cells missing from the store index are
+                        skipped with a note.
+  --calib-eps E         Tolerance below the best LOO macro when
+                        picking the loosest grid cell. Default: 0.02.
+  --calib-threads N     Threads per calibration pass. Default: 8.
+
+Binstring: which pattern a CpG belongs to
+  --beta-threshold B    Call beta > B methylated. Default: 0.5.
+  --call-mindepth N     Reads a class needs at a CpG to be CALLED
+                        there; below it the class is ambiguous (see
+                        below). Per class per CpG, not a class
+                        filter. Default: 1. (was --mincov)
+  --include-all-0       Keep the all-unmethylated pattern.
+  --include-all-1       Keep the all-methylated pattern.
+  Ambiguous classes. A class is ambiguous at a CpG when it is below
+  --call-mindepth or sits exactly at --beta-threshold. Such a class
+  is imputed, by default from the majority call of the classes that
+  ARE confident at that CpG. --impute-ambiguous chooses the strategy,
+  `none` making the CpG PNA instead -- the strict reading, since a
+  binstring otherwise states something about a class with no
+  evidence behind it. The rest of this block tunes imputation and
+  means nothing under `none`.
+  --impute-ambiguous S  How to fill an ambiguous class:
+                          none      the CpG is PNA
+                          majority  the majority call of the
+                                    confidently called classes AT
+                                    THAT CpG (more 1s -> 1, more
+                                    0s -> 0, exact tie -> 0)
+                                    [default]
+                          zero      always unmethylated
+                          one       always methylated
+                          random    an unbiased coin per (CpG,
+                                    class), from --impute-seed
+                        A nearest-neighbour strategy -- fill from
+                        the CpGs around it rather than the classes
+                        beside it -- is not implemented.
+  --impute-seed N       Seed for `random` (default 1). The draw is
+                        a hash of the seed, the CpG and the class,
+                        so it does not depend on row order or
+                        thread count. NOT stored in the artifact:
+                        keep the build command.
+  --min-major-fold F    `majority` only: trust the fill just where
+                        the majority sweeps, the larger side being
+                        >= F times the smaller (unanimous always
+                        qualifies). Otherwise the CpG is PNA after
+                        all, because filling from a near-even split
+                        fabricates calls. Default: 10. 0 fills
+                        whatever the majority is.
+  --max-ambig-frac F    PNA a CpG whose ambiguous classes exceed
+                        this fraction, whatever the strategy says.
+                        Default: 1.0 (off).
+
+Feature selection: which CpGs back a pattern
+  --call-band LO,HI     Keep a CpG only if every 0-class reads <= LO
+                        and every 1-class >= HI, on shrunk betas.
+                        Default: 0.30,0.70. A class with reads is
+                        tested even where its digit was imputed: an
+                        intermediate measurement is a real answer,
+                        and a band failure is never tolerated. `none`
+                        (LO == HI == --beta-threshold) filters
+                        nothing, which is the way to see a set before
+                        and after the band. (was --qfilter)
+  --shrink-pseudocnt A  Shrink the per-class beta to (M+A)/(M+U+2A)
+                        for BOTH the admission test and the ranking.
+                        In Bayesian terms this is the posterior mean
+                        under a Beta(A,A) prior: A is the PRIOR
+                        INERTIA, A pseudo-observations on each side
+                        pulling the estimate toward 0.5 until real
+                        votes outweigh them. Default: 3 -- a
+                        unanimous site needs depth 4 to clear the
+                        0.70 leg, one dissenting read pushes that to
+                        ~8. Without it a single read scores beta
+                        exactly 0 or 1, passing admission more easily
+                        than well-measured evidence and taking the
+                        maximum rank. 0 restores raw betas.
+  --feature-mindepth N  Reads a class needs at a CpG for its beta to
+                        count as EVIDENCE there. A class below it is
+                        not tested. Default: --call-mindepth; a class
+                        that could not be called is not evidence.
+                        (was --min-cg-depth)
+  --max-lowdepth-frac F Fraction of classes allowed below
+                        --feature-mindepth before the CpG is dropped
+                        as a feature. Default: 0. This is the only
+                        tolerance: untested classes may be waived,
+                        tested-and-failed ones may not.
+                        (was --max-frac-na)
+  --delta-mean-top N    Keep at most N CpGs per binstring, ranked by
+                        mean class gap. Default: 20000; 0 keeps all.
+
+Output
+  --name NAME           Root name. Default: root.
+  --force               Overwrite OUT.mrmp.
+
+Inspect the result with: inspect --tree OUT.mrmp
+
+
+### methscope mrmp-export -- Emit the runtime .cm mask (and pattern / count tables)
+
+Usage: methscope mrmp-export [options] IN.mrmp OUT.cm
+
+  IN               a .mrmp: one set, or a chain of several
+  OUT.cm           per-CpG P1..PK/Pna labels as a YAME format-2 mask
+  OUT.cm           OPTIONAL when --patterns/--counts is given
+  OUT.cm           a multi-set input writes ONE .cm holding every set as
+                   a record, plus OUT.cm.idx naming them -- YAME's own
+                   store convention, so `yame subset -s <set>` works.
+
+  This command is an INTERFACE TO YAME, not part of the pipeline.
+  classify-featurize reads a .mrmp directly and a bundle carries one, so
+  nothing in methscope consumes a .cm any more; export exists to hand
+  sets to yame and should speak yame's idiom rather than ours.
+
+  --set NAME       export just this set of a container, to OUT.cm
+  --top K          rank cut for the mask and --patterns (default 1000)
+  --patterns TSV   top-K patterns: string<tab>P<rank><tab>count (- = stdout)
+  --counts TSV     every pattern (incl. PNA): count<tab>string (- = stdout)
+  --pna-label NAME background label in the mask (default Pna)
+
+
+### methscope mrmp-pool -- Combine MRMP sets and cut them to a shared column budget
+
+Usage: methscope mrmp-pool [options] -o OUT.mrmp IN.mrmp [IN.mrmp ...]
+
+Pool several MRMP sets into one chain and cut them to a
+shared pattern budget. Needs no store and no reference -- pattern CpG
+counts are already in each artifact -- so re-pooling at a different
+budget costs seconds. Plain concatenation is just `cat`; this is the
+step that SELECTS.
+
+A set is a set: the inputs may come from any generator and from
+DIFFERENT stores, as long as they share a row space. Nothing here
+distinguishes a global from a satellite.
+
+Each input is a CHAIN of one or more sets and expands into all of
+them under their own names, so a satellite-bearing chain competes for
+slots as the many 2-class sets it is, not as one blob. A set carries
+its name in its own block (mrmp-build --name), so pooling needs no
+NAME: prefix and cannot mislabel anything.
+
+  --pooled-top N   total pattern budget across every input, ranked by
+                   CpG count (default 1000). Sets COMPETE for these
+                   slots rather than being reserved any, so a set that
+                   cannot field well-covered patterns loses -- the right
+                   verdict, since a pattern too thin to rank is too thin
+                   to trust. The cut PRUNES: the output holds exactly N
+                   patterns, with the CpGs of the rest folded into PNA
+                   and any set winning nothing dropped, so the file IS
+                   what it claims and can go to a model unchanged. To
+                   re-pool at another budget, re-run this on the same
+                   generator outputs -- they are untouched. 0 disables
+                   the cut, leaving a plain `cat` plus the row check.
+  -o OUT           output container
+  --min-cpgs N     drop any pattern carrying fewer than N CpGs,
+                   BEFORE the budget ranks what is left. A pattern is
+                   a feature, and a feature averages the reads a cell
+                   happens to have in it -- so a 1-CpG pattern is one
+                   binarized read, which is noise wearing a column.
+                   The tail is nearly free to cut: on the 7-set Zhou
+                   tree, --min-cpgs 10 drops 82% of the patterns and
+                   1.6% of the CpGs (4,626 of 9,965 are singletons).
+                   Gate and budget compose: --min-cpgs alone prunes to
+                   everything that clears the floor.
+  --include-all-0            keep patterns no class calls 1
+  --include-all-1            keep patterns no class calls 0
+                             Both are folded into PNA by default: a
+                             binstring with no class on one side
+                             separates nothing however many CpGs it
+                             carries, so it should not consume budget.
+                             mrmp-build --call-band also excludes them,
+                             but only when a filter is given, and pool
+                             takes blocks from any generator.
+
+
+## Classification (cell type, sex, ...)
+
+
+### methscope classify -- Classify a methylome -> labels + confidence
 
 
 Usage:
@@ -152,7 +515,7 @@ Arguments:
 Options:
   -o <out.tsv>             Write output to a file instead of stdout.
   --framework violation   Score directly from a .mrmp with the violation
-                          rule. Give <query.cg> <ref.mrmp>. The rule is an
+                          rule. Give <ref.mrmp> <query.cg>. The rule is an
                           unfitted function of the artifact and the three
                           options below.
   --call-threshold T      Violation beta cutoff. Default: 0.5.
@@ -163,11 +526,6 @@ Options:
   --probs                 Append one predicted-probability column per class.
                           This is unavailable for routing trees because each
                           node scores a different class subset.
-  --levels                Append the predicted label's full taxonomy path:
-                          compartment, lineage, group, and subtype.
-  --level NAME            Append one taxonomy level: compartment, lineage,
-                          group, or subtype. Taxonomy options require a model
-                          trained with `classify-train --hierarchy`.
   --no-header             Suppress the output header.
   --threads T             Featurize with T workers. Default: 1. Workers seek
                           indexed query records; streams use the serial path.
@@ -182,7 +540,253 @@ Output columns:
   and reports a margin instead.
 
 
-### methscope deconv
+### methscope classify-train -- Fit a label classifier (xgboost / threshold / logistic)
+
+
+Usage:
+  methscope classify-train -l <labels.txt> -o <out.clfx> [options] <query.cg> <ref.cm>
+  methscope classify-train --data <in.msfm> -o <out.clfx> [options] <ref.cm>
+
+Purpose:
+  Train a multiclass classifier for any per-record label (cell type, sex,
+  ...; fixed hyperparameters, no grid search) and write a self-describing
+  model with the class labels embedded.
+
+Arguments:
+  <query.cg>   Training methylome(s), one record per sample.
+  <ref.cm>     MRMP pattern definition. A bundle (.clfx/.updecx) also
+               works; its MRMP is used. Features are the MRMP states; the
+               'Pna' NA-background state is always excluded.
+               NOTE the default framework (xgboost) does not take this form
+               at all -- it needs --data TRAIN.msfm, which carries its own
+               chain. This positional serves the unfitted frameworks.
+
+Options:
+  -l <labels.txt>  One label per query record, in query order (required).
+  -o <out.clfx>    Output model path (required). A '.clfx' name writes a
+                   self-contained bundle (model + MRMP) that `classify` can
+                   run directly; a plain '.ubj' writes just the loose booster.
+                   The bundled MRMP is TRIMMED to exactly the patterns used
+                   (others folded into 'Pna'), and `classify` uses that same set.
+  -p <npattern>    Use the first N patterns, in the artifact's own order and
+                   after the 'Pna' backgrounds have been excluded. For an
+                   auto MRMP that order
+                   is recurrence rank (P1,P2,...), so N means the N most
+                   recurrent; for curated named markers it is definition
+                   order, and leaving it unset is what you want.
+                   Note this cuts across a FUSED multi-set artifact rather
+                   than within each set, so a value below the total will
+                   drop whole trailing sets. Cut with mrmp-pool --pooled-top
+                   instead if you want a per-set budget.
+                   Default: every non-'Pna' state.
+  --framework <f>  Model framework (default: xgboost):
+                     xgboost    gradient-boosted trees (multiclass).
+                     logistic   binary L2-regularized logistic regression.
+                     violation  multiclass, UNFITTED. Calls the class the query
+                                contradicts least, straight from the MRMP's own
+                                binstrings. Takes ONE positional, <ref.mrmp>:
+                                no training data, no -l, nothing to overfit.
+                   logistic is binary-only; both need a .clfx out.
+  --call-threshold <t>    violation only: beta cutoff for calling a pattern
+                   methylated (default 0.5).
+  --pattern-weight <w>    violation only: sqrt|log1p|linear|flat weighting of each
+                   pattern by its CpG count (default sqrt). CpGs inside one MRMP
+                   are strongly correlated, so effective sample size saturates and
+                   'linear' lets the largest patterns decide every call.
+  --min-patterns <n>      violation only: observed patterns required on each of
+                   the expected-1 and expected-0 sides before a call (default 20);
+                   below it the record is reported NA rather than guessed.
+  -n <nrounds>     Boosting rounds, xgboost only (default: round(sqrt(n_cells))).
+  --eval-every <N> Report training mlogloss every N rounds, as a rolling
+                   window of the last 5. Default: nrounds/20, about 5%%
+                   overhead -- each evaluation predicts over the whole
+                   training matrix. 0 disables, 1 evaluates every round.
+  --threads <N>    xgboost nthread (default: the CPUs this process may
+                   actually use). Left to xgboost it sizes its pool from
+                   the machine, which on a shared batch node is not what
+                   the job was allocated -- so the same matrix and the
+                   same rounds have timed 76 s on one node and 46 min on
+                   another. Pinning it makes runs comparable.
+  --max-depth <d>  Cap tree depth (xgboost default 6). Lower it when the
+                   training set is redundant -- e.g. one pseudobulk repeated
+                   across a coverage ladder -- since the repeats inflate
+                   split confidence and let one feature decide a class.
+  --min-child-weight <w>  Minimum child weight (xgboost default 1).
+  --colsample <f>  Per-tree feature subsample fraction, 0-1 (default 1).
+  --data <in.msfm> Train from a prebuilt feature artifact (classify-featurize)
+                   instead of featurizing <query.cg> here. Only <ref.cm> is then
+                   positional, and labels come from the artifact unless -l is
+                   given. Featurization is single-threaded, so this is how to
+                   train repeatedly on the same cells without repeating it.
+  -h               Show this help message.
+
+
+### methscope classify-featurize -- Prebuild the .msfm feature matrix (parallel, reusable)
+
+
+Usage:
+  methscope classify-featurize [options] -o <out.msfm> <query.cg> <ref.mrmp>
+  methscope classify-featurize [options] -o <out.msfm> <query.cg> <ref.cm> [ref2.cm ...]
+
+Purpose:
+  Summarize each query record against the MRMP once and store the result,
+  so training and scoring never repeat the featurization. `classify-train`
+  and `classify` both accept the artifact with --data.
+
+  --threads T partitions the records across workers, each seeking its own
+  through the .cg index.
+
+Arguments:
+  <query.cg>   Query methylome(s), one record per sample or cell.
+  <ref.mrmp>   A pooled MRMP. A .mrmp is a chain, so ONE argument carries
+               every set, and set names come from the blocks -- no loose
+               .cm files and no order.txt to keep in step with it. This is
+               the normal input.
+  <ref.cm>     Exported masks, one per set; a bundle also works. Equivalent,
+               but the caller owns keeping them together and in order.
+
+Options:
+  -o <out>       Output .msfm (required).
+  -l <labels>    One label per query record, in query order. Embedded in the
+                 artifact, so a downstream train cannot be handed a
+                 mismatched label file. Omit for an unlabeled query.
+  --sample LIST  Comma list of target covered-CpG counts, one replicate each
+                 (0 = keep native coverage). Every cell is inflated ONCE and
+                 all replicates are drawn from that copy, so a coverage ladder
+                 costs one pass rather than one pass per level.
+  --reps N       Replicates per --sample level (default 1).
+  --patterns N   Feature patterns P1..PN. Default: every non-Pna mask state.
+  -b, --binarize Draw one read per sampled CpG, so the call is 0/1 not a
+                 fraction -- what a real sparse methylome delivers.
+  --continuous-features
+                 Emit each pattern's mean beta instead of a call. By DEFAULT
+                 a pattern beta is cut at 0.5, so a feature says "this cell
+                 is methylated across this pattern" rather than "this cell
+                 reads 0.918". The call is absolute, so it means the same
+                 thing on a cohort this reference never saw -- which a raw
+                 beta does not once a global shift, mitotic or otherwise,
+                 moves every value at once.
+                 continuous either way; they are not a contrast.
+  --set NAME     featurize only this set of a chain, so one node of an
+                 mrmp-tree can be scored straight out of the tree it
+                 lives in -- a block inside a chain is byte-identical to
+                 the standalone .mrmp, so nothing need be kept beside it.
+  --satellite-contrast off|add|replace   (default off)
+                 A 2-class satellite's two patterns have opposite polarity,
+                 so "is P1 above P2" asks the pair's question RELATIVELY --
+                 anything shifting both patterns together cancels, which is
+                 the violation rule's argmin cancellation as one feature.
+                 replace: emit the contrast INSTEAD of the two patterns.
+                 add: emit it alongside them -- but note the model then has
+                 no reason to prefer it, since in training the absolute
+                 columns work just as well; that is why replace is the one
+                 that removes the fragility rather than offering an
+                 alternative to it.
+  --thresh-pattern
+                 Cut at each pattern's OWN midpoint (stored in the .mrmp)
+                 rather than 0.5. Separates a close pair better, since
+                 inside a satellite both classes can sit above 0.5 -- but it
+                 is fitted to this reference and travels worse.
+  --seed S       Sampling seed (default 1). The draw is a pure function of it
+                 and is NOT affected by --threads.
+  --side-floor N Pairwise features only: a side backed by fewer than N
+                 observed CpGs contributes the neutral 0.5 instead of a
+                 one-read coin flip; both sides under N -> NA. Default 3.
+                 The 0.30/0.70 admission band is what makes 0.5 a
+                 calibrated anchor between the reference poles. Score
+                 with the same value the model was trained with.
+  --threads T    Worker threads (default 1). Cells are partitioned across
+                 workers, each seeking its own records via the .cg index.
+  --counts <N>   Require N measured CpGs behind a pattern's beta; below that
+                 the beta is recorded MISSING rather than kept. A beta from a
+                 single CpG can only be 0 or 1, so after the 0.5 call it is
+                 always maximally confident and never borderline -- yet it
+                 carries the same weight as one backed by hundreds of CpGs.
+                 In mouse single cells 46.5% of observed pattern-betas rest
+                 on one or two CpGs. Default 1 (keep every observed pattern).
+  -h, --help     Show this help message.
+
+Notes:
+  Every pattern is stored, never a -p prefix, so one artifact serves any
+  `classify-train --patterns N`. Betas are u16 fixed point (code/65534,
+  65535 = NA), the same encoding the upscale msur uses for truth.
+
+
+### methscope mrmp-summary -- Per-pattern mean methylation as TSV (the MRMP average)
+
+Usage: methscope mrmp-summary [options] <query.cg> <ref.mrmp>
+
+Purpose:
+  Per-pattern mean methylation for every query record: one pass over the
+  query, every set of the chain at once. This is the feature matrix a
+  classifier would train on, as text -- an embedding for clustering, a
+  projection, or a heatmap.
+
+Arguments:
+  <query.cg>   Query methylome(s), one record per sample or cell.
+  <ref.mrmp>   A .mrmp (one set or a chain); a bundle carrying one works.
+
+Options:
+  -o <out>     Write here instead of stdout.
+  --wide       One row per record, one column per pattern (the embedding
+               matrix). Default is long: sample, set, pattern, beta.
+  --with-pna   Keep the Pna background column. It is the CpGs no pattern
+               claims, so it is coverage, not a feature; excluded by
+               default to stop it being embedded as one.
+  --threads T  Records per worker, each seeking through the .cg index.
+  --min-cpgs N A pattern seen at fewer than N CpGs in a record reads NA
+               rather than a confident mean (default 1).
+
+
+## Deconvolution
+
+
+### methscope deconv-build-ref -- Pack a cell-type store into the .msdref deconvolution reference
+
+Usage:
+  methscope deconv-build-ref -o <out.msdref> [options] <celltypes.cg>
+
+Purpose:
+  Pack a per-cell-type M/U store into the uint16 M/U reference that `deconv`
+  rebuilds its pattern set from, keeping only the CpGs that could ever
+  contribute to some class subset.
+
+  A class is CALLABLE at a CpG when it is covered and outside the ambiguous
+  band (beta <= LO or beta >= HI). A row is kept only when at least one
+  callable class is unmethylated AND at least one is methylated -- otherwise
+  no subset of classes can form a non-constant admissible binstring there,
+  whatever the query, so the row is dead weight. The test is a necessary
+  condition under EVERY scope, so dropping a row cannot remove a pattern a
+  later rebuild would have found.
+
+Arguments:
+  <celltypes.cg>     One record per cell type, YAME format 3 (M/U) or format 6
+                     (universe 0/1), with a matching <celltypes.cg>.idx whose
+                     index order IS the binstring digit order. Format-6
+                     positions outside the universe are treated as missing.
+
+Options:
+  -o <out.msdref>    Write the reference here. Required.
+  --qfilter LO,HI    The admission band baked into the row test. Default:
+                     0.30,0.70. Must match the solver's.
+  --beta-threshold B Call a class methylated above B. Default: 0.5.
+  --mincov N         A class is covered at N reads or more. Default: 1.
+  --confusion FILE   Embed a validation confusion matrix, which is what
+                     `deconv --group-threshold` reads to decide which classes
+                     are reported under one label. Long-form TSV,
+                     true<TAB>predicted<TAB>value, unnamed pairs zero, rows
+                     normalised on write; the first '#' line is kept as the
+                     provenance note. Measuring it is NOT this command's job
+                     -- run the validation, write the TSV, pass it here. With
+                     this flag the artifact is version 3; without it, 2.
+  --keep-all         Skip the never-useful row test, keeping every row so a
+                     consumer can re-apply any band in memory. Costs 1.94 GB
+                     for 33 classes x 29.4M rows.
+  --force            Overwrite an existing output.
+  -h                 Show this help message.
+
+
+### methscope deconv -- Estimate cell-type proportions, rebuilding the MRMP per query
 
 Usage:
   methscope deconv [options] <ref.msdref> <query.cg>
@@ -201,7 +805,7 @@ Purpose:
   rebuilt over that scope and refit: dropping classes relaxes the admission
   conjunction, so a narrower scope admits CpGs the full one could not. The
   scope only ever narrows, and rounds stop once it stops changing or at
-  --max-round. --no-narrow keeps the round-1 fit over every class.
+  --max-round. --no-adaptive keeps the round-1 fit over every class.
 
 Arguments:
   <ref.msdref>   Deconvolution reference from `deconv-build-ref`. Its index
@@ -219,20 +823,31 @@ Options:
   --report                Emit a readable one-line summary per record --
                           "cell: Class 69.6%%; Class 30.4%%" -- instead of a
                           TSV.
+  --group-threshold F     Report confusable classes under one joined label,
+                          "CA3/DG-po", summing their fractions. A class
+                          handing F or more of its mass to another in the
+                          reference's confusion trailer joins it; groups are
+                          the connected components of that relation. Default:
+                          0, off. Needs a reference built with
+                          `deconv-build-ref --confusion`, and applies to every
+                          output shape but --wide, which stays per-class so
+                          the full-resolution answer is never lost.
+                          F IS A TUNING PARAMETER, NOT AN ERROR RATE: the
+                          matrix is pooled over sparsity levels and measured
+                          on the reference atlas's own held-out cells, so it
+                          names pairs that were not separable THERE and is a
+                          lower bound on what another protocol will confuse.
   --min-frac F            Hide classes below this fraction. Default: 0.005.
                           Display only: it never changes what is fitted. 0
                           shows every non-zero class.
   --threads N             Deconvolve N records in parallel. Default: 1.
-                          --nthreads is an alias. The reference is shared, so
+                          The reference is shared, so
                           memory grows by the per-thread workspace (~16 MB),
                           not linearly. Needs a <query.cg>.idx to seek by; -v
                           and the dump options force a single thread.
-  --no-narrow             Fit the global panel over every class, skipping the
-                          per-query rebuild rounds.
   --max-round N           Cap on rebuild rounds. Default: 8. Rounds stop early
                           once the class set stops changing.
   -v                      Report per-record panel size and measured-row count.
-                          --verbose is an alias.
   -h                      Show this help message.
 
 Tuning:
@@ -277,6 +892,13 @@ Tuning:
   --rescue-qfilter LO,HI  The wider admission band. Default: 0.40,0.60.
 
 Diagnostics:
+  --no-adaptive           Stop after round 1: fit the frozen global panel
+                          over every class, skipping the per-query rebuild.
+                          It is the CONTROL that says what narrowing is
+                          worth, and the one way to score a cohort on a
+                          single panel. Not a tuning knob: it measured 9-12x
+                          worse TVD than the default on the 41-class mouse
+                          benchmark, at every coverage rung.
   --panel-out F           Dump the rebuilt panel: binstring, measured CpGs and
                           observed beta, one row per pattern per record.
   --scope-out F           Write the settled scope, 1/0 per class per record.
@@ -309,7 +931,264 @@ Output:
   means the same thing.
 
 
-### methscope inspect
+## Upscaling (imputation)
+
+
+### methscope upscale -- Impute genome-wide CpG methylation from a sparse methylome
+
+
+Usage:
+  methscope upscale [options] <model.updec|.updecx> [input]
+
+Purpose:
+  Impute CpG methylation from a sparse methylome. Unified UPDEC2 models
+  predict the whole genome; legacy UPDEC1 block models remain readable.
+  Both inference paths are pure C and require neither CUDA nor BLAS.
+
+Arguments:
+  <model>   A bare decoder (.updec/.updec2) OR a bundle with the MRMP attached
+            (.updecx, from `bundle`). The form selects the input below.
+  [input]   For .updec : a feature TSV (one row per sample, n_in numeric cols).
+            For .updecx: a query .cg, featurized internally against the bundled
+            MRMP. '-' or omitted reads from stdin; for .updec a header row is
+            auto-detected and empty/NA fields are imputed with the model means.
+
+Options:
+  -o <out>   Write output to a file instead of stdout. A .cg is binary, so
+             without -o it is refused on a terminal; a pipe or redirect is fine.
+  --binary   Threshold predictions at 0.5 and write 0/1 calls (format 6).
+             Lossy -- the default format 4 keeps the fraction itself.
+  --probs    Emit per-CpG probabilities as TSV instead of a .cg.
+  -h         Show this help message.
+
+Output:
+  A YAME .cg (format 4: continuous methylation fraction), one record per input
+  sample. UPDEC2 output is always in whole-genome CpG order. For legacy UPDEC1,
+  if the bundle carries an outcpg.cm (the imputed-CpG locations), the .cg spans
+  the whole genome with the block's CpGs predicted (no NA) and the rest NA;
+  otherwise a dense block of n_out CpGs. With --binary, format 6 of 0/1 calls;
+  with --probs, a TSV of per-CpG probabilities (one row per sample).
+
+
+### methscope upscale-featurize -- Build the MSURAW2/3 training msur from a truth .cg
+
+Usage: methscope upscale-featurize [options] TRUTH.cg IN.mrmp OUT.msur
+
+Create a compact exact-YAME sampling msur for global upscale training.
+The original TRUTH.cg remains the truth store and is never copied.
+
+  TRUTH.cg         continuous format-3 YAME .cg truth store
+  IN.mrmp          MRMPIDX1 artifact (preferred) or an exported .cm
+  OUT.msur         output msur
+
+Options:
+  --reps N         deterministic simulations per --sample level (default 100)
+  --sample N[,N..] CpGs retained per cell/replicate (default 29000). Give a
+                   comma list to mix coverages: --reps applies to EACH level,
+                   so --reps 100 --sample 14701,29000,147009 writes 300
+                   replicates. Each level stores exactly its own record size.
+  --sample-logrange MIN,MAX
+                   continuous ladder instead of --sample: --reps is the TOTAL
+                   replicate count, each getting its own sample size spread
+                   in log space over [MIN,MAX]
+  --sample-skew A  bend that draw (default 0.5). A<1 puts more replicates at
+                   the DENSE end, where finer differences must be resolved;
+                   A=1 is plain log-uniform
+  --binarize       one read per observed CpG: replace each sampled beta with a
+                   Bernoulli(beta) draw, as `yame dsample -b` does
+  --threads N      inflate and scan N samples at once (default 1). Needs a
+                   <store>.idx, since each worker opens its own handle and
+                   seeks to its sample. Output is byte-identical at any N.
+  --manifest PATH  write provenance TSV (default OUT.msur.tsv)
+  -h, --help       show this help
+
+EVERY pattern in IN.mrmp becomes a column -- there is no width knob here.
+Pattern SELECTION happens when the MRMP is made: `mrmp-build --top N`
+for a single set, or `mrmp-pool --pooled-top N` when several sets must
+compete for one budget. Both rank on CpG count and fold the rest into PNA.
+A width flag here was worse than redundant: it RESERVED slots per set, so a
+chain handed its root the first N columns whether or not the root's Nth
+pattern outweighed a child's 1st. Cut first, then featurize what survives.
+
+One msur serves many models. What is stored per (cell, replicate) is the raw
+summary -- beta and covered-CpG count for every pattern, plus the observed
+set -- NOT the encoder input. Which projection the encoder sees is chosen at
+TRAINING time, so one msur covers every `upscale-train --features` mode
+(missing / count / beta / scalar). Only the *simulation* is fixed here: the
+cells, the replicate count, the coverage ladder and --binarize.
+
+
+### methscope upscale-set-units -- Build the MSUIDX1 processing-unit index from the reference store
+
+Usage: methscope upscale-set-units [options] REF.cg OUT.msui
+
+Build the whole-genome processing-unit index used by UPDEC2. Each CpG's
+binstring is derived from the reference store itself. Memberships are
+size-ranked and never split; PNA CpGs are implicit singleton memberships
+packed after all real memberships.
+
+Units are an OUTPUT partition, so this reads the STORE and not a .mrmp.
+A built .mrmp is a SELECTION -- mrmp-build drops the constant binstrings
+because a CpG every class calls the same way separates nothing, which is
+right for a classifier and fatal here: those CpGs are 54% of the genome
+and they still need reconstructing. Reading the store keeps them, so
+every CpG has a real membership and coverage is 100% by construction.
+
+  REF.cg                reference store
+  OUT.msui              output MSUIDX1 index
+
+  --mincov N            min per-class coverage (default 1)
+  --beta-threshold B    call a class methylated above B (default 0.5).
+                        Must match mrmp-build's.
+  --unit-cpgs N         target CpGs per unit (default 16384)
+  -h, --help            show this help
+
+
+### methscope upscale-train -- Train the upscale decoder (CPU, CUDA optional)
+
+Usage: methscope upscale-train -i DATA.msur --units UNITS.msui
+       --mrmp TOP1000.mrmp -o MODEL.updecx --work-dir DIR [options]
+
+Train whole-genome UPDEC2 processing units on CUDA. Each MRMP contributes
+beta plus log1p(observed-CpG count); count zero represents missingness.
+
+Required:
+  -i, --data PATH          embedded-truth MSURAW2/3 training msur
+  --units PATH             whole-genome MSUIDX1 processing-unit index
+                           (from upscale-set-units)
+  --mrmp PATH              MRMPIDX1 artifact (preferred) or exported .cm;
+                           the runtime mask is bundled into the output
+  -o PATH                  self-contained output .updecx
+  --work-dir DIR           resumable unit checkpoints and bare UPDEC2
+
+Architecture:
+  --features MODE          beta, count, missing, or scalar (default count).
+                           scalar = beta + ONE log1p(total covered CpGs), so
+                           input is P+1 wide instead of 2P.
+                           Both of these are projections of what the msur
+                           already stores, so one msur trains every mode and
+                           width -- retrain to vary them rather than paying
+                           for another upscale-featurize
+  --pure-bottleneck N      one-membership unit dimension (default 16)
+  --mixed-bottleneck N     mixed/PNA unit dimension (default 32)
+  --mixed-mode MODE        factor or direct (default factor)
+  --activation MODE        linear or leaky (default linear)
+
+Optimization:
+  --min-steps N            earliest stopping point (default 2000)
+  --max-steps N            maximum updates per unit (default 8000)
+  --eval-every N           validation interval (default 200)
+  --patience N             non-improving checks (default 8)
+  --batch N                target CpGs per update (default 8192)
+  --eval-rows N            fixed validation rows per unit (default 8)
+  --learning-rate X        AdamW rate (default 0.001)
+  --weight-decay X         AdamW decay (default 0.00001)
+  --seed N                 deterministic seed (default 1)
+  --split FILE             curated cell split, rows <cell_index>TAB<train|
+                           val|test> (default: seeded 70/15/15 shuffle)
+  --device N|cpu           CUDA device (default 0), or cpu to force the
+                           portable backend
+  --threads N              CPU backend worker threads (default 1)
+  --pilot-units FILE       train listed unit IDs only. The bundle is still
+                           assembled, holding just those units, so it can be
+                           run with `upscale` -- CpGs outside them come back
+                           NA. That is what makes a locus-sized experiment
+                           possible without training all 700 units.
+  --force                  replace final output and manifest
+  --dry-run                validate options and print configuration
+  -h, --help               show this help
+
+
+## Model bundles
+
+
+### methscope bundle -- Wrap a model + its MRMP into a self-contained bundle
+
+
+Usage:
+  methscope bundle -m <ref.mrmp> -o <out> <model>
+
+Purpose:
+  Bundle a model with the MRMP definition it needs into one self-contained
+  file, so a query .cg can be featurized + run without a separate .mrmp.
+  Works for any model; by convention the output extension names the ROLE:
+    a classifier          -> model.clfx    (classify)
+    an upscale decoder    -> model.updecx  (upscale)
+  Both are the same MSBNDL1 container and are detected by magic, not by
+  name; '.ubjx' is the former classifier extension and is still accepted.
+
+Options:
+  -m <ref.mrmp>   the MRMP definition (a YAME .cm) to bundle (required).
+  -k <kind>       framework mark to record (xgboost/violation/logistic);
+                  required for a classifier .clfx that `classify` will run (it
+                  rejects an unmarked bundle). Also re-stamps an existing model.
+  -O <outcpg.cm>  output-CpG locations (upscale only): a YAME mask marking the
+                  CpGs the model imputes. With it, `upscale` writes a full-genome
+                  .cg; without it, a dense block .cg.
+  -o <out>        output bundle path (required).
+  -h              Show this help message.
+
+
+### methscope relabel -- Rename a class label in a trained model, no retraining
+
+Usage:
+  methscope relabel [options] OLD=NEW <in.clfx> -o <out.clfx>
+
+Purpose:
+  Rename a class label inside a trained model. The label lives in one XGBoost
+  booster attribute ("methscope_labels", comma-separated in class-index
+  order), so this rewrites that string and nothing else -- every prediction is
+  bit-identical and only the emitted name changes.
+
+  A class name is a claim about what the reference CONTAINS, and it can be
+  wrong while the model is right. Retraining to correct a name would perturb
+  numbers that were never at fault.
+
+  On a TREE bundle every node carrying the class has its own copy of the label
+  list, so all of them are walked; renaming the root alone would leave the
+  leaves disagreeing with it.
+
+Arguments:
+  OLD=NEW            The existing label and its replacement.
+  <in.clfx>          The model to read. It is never modified.
+
+Options:
+  -o <out.clfx>      Write the relabelled model here. Required.
+  --force            Overwrite an existing output.
+  -h                 Show this help message.
+
+Notes:
+  The bundled MRMP's reference sample names are left ALONE on purpose: they
+  record what was built, not what it is.
+
+Example:
+  methscope relabel -o hg38_celltype_v2.clfx \
+      'Macrophage=Macrophage.(Monocyte.Derived)' hg38_celltype_full.clfx
+
+
+### methscope unbundle -- Unpack a bundle into its model, MRMP, and outcpg mask
+
+
+Usage:
+  methscope unbundle [-o <model_out>] [--mrmp <mrmp_out>] <bundle>
+
+Purpose:
+  Unpack a bundle (.clfx / .updecx) into its inner model, its MRMP,
+  and (if present) the output-CpG mask.
+
+  With no -o/--mrmp, output names are derived from the bundle path (the
+  original .mrmp filename is not stored): drop the 'x' from the extension for
+  the model, and add sibling suffixes for the rest --
+    foo.clfx   -> foo.model + foo.mrmp  (+ foo.outcpg.cm if present)
+    foo.updecx -> foo.updec + foo.mrmp
+
+Options:
+  -o <model_out>    write the inner model here (default: derived, see above).
+  --mrmp <mrmp_out> write the bundled MRMP (.cm) here (default: derived).
+  -h                Show this help message.
+
+
+### methscope inspect -- Describe any artifact: bundle, .mrmp, .msui, .msur, or .msfm
 
 
 Usage:
@@ -332,9 +1211,3 @@ Options:
   --patterns   .mrmp only: list the top-ranked patterns
   --top K      .mrmp only: how many to list (default 20)
   -h           Show this help message.
-
-
-### Other commands
-
-Run `methscope <command> -h` for these; they build or train
-artifacts and need a truth atlas, and upscale-train needs a GPU.

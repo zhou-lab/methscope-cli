@@ -743,47 +743,47 @@ void ms_msur_report(const char *path) {
   }
   if (fclose(f)) pdie("error closing", path);
   int truth = (h->flags & MSUR_F_TRUTH_U16) && h->truth_offset;
-  printf("format\t%s v%u\n", v3 ? "MSURAW3" : "MSURAW2", h->version);
-  printf("cells\t%u\n", h->n_cells);
-  printf("replicates\t%u\n", h->n_reps);
-  printf("rows\t%" PRIu64 "\t(cells x replicates)\n",
+  printf("  %-16s %s v%u\n", "format", v3 ? "MSURAW3" : "MSURAW2", h->version);
+  printf("  %-16s %u\n", "cells", h->n_cells);
+  printf("  %-16s %u\n", "replicates", h->n_reps);
+  printf("  %-16s %" PRIu64 "  (cells x replicates)\n", "rows",
          (uint64_t)h->n_cells * h->n_reps);
-  printf("cpgs\t%" PRIu64 "\n", h->n_cpg);
-  printf("patterns\t%u\n", h->n_patterns);
-  printf("observed_beta\t%s\n", (h->flags & MSUR_F_BINARIZED)
+  printf("  %-16s %" PRIu64 "\n", "cpgs", h->n_cpg);
+  printf("  %-16s %u\n", "patterns", h->n_patterns);
+  printf("  %-16s %s\n", "observed_beta", (h->flags & MSUR_F_BINARIZED)
          ? "binarized (one read per CpG)" : "continuous (full-depth truth)");
   if (v3) {
     uint32_t nb = 0;
     for (uint32_t r = 0; r < h->n_reps; ++r) nb += reps[r].flags == MSUR_ENC_BITMAP;
-    if (nb) printf("observed_set\tbitmap for %u/%u replicates, sorted list for the rest\n",
-                   nb, h->n_reps);
-    else    printf("observed_set\tsorted list (all replicates)\n");
+    if (nb) printf("  %-16s bitmap for %u/%u replicates, sorted list for the rest\n",
+                   "observed_set", nb, h->n_reps);
+    else    printf("  %-16s sorted list (all replicates)\n", "observed_set");
   } else {
-    printf("observed_set\tsorted list (all replicates)\n");
+    printf("  %-16s sorted list (all replicates)\n", "observed_set");
   }
-  printf("embedded_truth\t%s\n", truth ? "yes (trainable)" :
+  printf("  %-16s %s\n", "embedded_truth", truth ? "yes (trainable)" :
          "no (upscale-train will reject it)");
-  printf("groups_bytes\t%" PRIu64 "\n", h->n_cpg * 2);
+  printf("  %-16s %" PRIu64 "\n", "groups_bytes", h->n_cpg * 2);
   if (truth)
-    printf("truth_bytes\t%" PRIu64 "\n", (uint64_t)h->n_cells * h->n_cpg * 2);
+    printf("  %-16s %" PRIu64 "\n", "truth_bytes", (uint64_t)h->n_cells * h->n_cpg * 2);
   if (v3) {
     /* Collapse the per-replicate table to one line per distinct level. */
     uint64_t total = 0;
-    printf("sampled_per_cell\tvariable (widest %u)\n", h->sampled_per_cell);
+    printf("  %-16s variable (widest %u)\n", "sampled_per_cell", h->sampled_per_cell);
     for (uint32_t i = 0; i < h->n_reps; ++i) {
       total += (uint64_t)h->n_cells * reps[i].record_bytes;
       if (i && reps[i].sample == reps[i - 1].sample) continue;
       uint32_t n = 0;
       for (uint32_t j = i; j < h->n_reps && reps[j].sample == reps[i].sample; ++j) ++n;
-      printf("  level\t%u CpGs\t%u replicates\trecord %" PRIu64 " B\n",
+      printf("  %-16s %u CpGs, %u replicates, record %" PRIu64 " B\n", "level",
              reps[i].sample, n, reps[i].record_bytes);
     }
-    printf("records_bytes\t%" PRIu64 "\n", total);
+    printf("  %-16s %" PRIu64 "\n", "records_bytes", total);
     free(reps);
   } else {
-    printf("sampled_per_cell\t%u\n", h->sampled_per_cell);
-    printf("record_bytes\t%" PRIu64 "\n", h->record_bytes);
-    printf("records_bytes\t%" PRIu64 "\n",
+    printf("  %-16s %u\n", "sampled_per_cell", h->sampled_per_cell);
+    printf("  %-16s %" PRIu64 "\n", "record_bytes", h->record_bytes);
+    printf("  %-16s %" PRIu64 "\n", "records_bytes",
            (uint64_t)h->n_cells * h->n_reps * h->record_bytes);
   }
 }

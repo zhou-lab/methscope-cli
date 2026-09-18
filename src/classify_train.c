@@ -523,6 +523,7 @@ int main_train_tree(int argc, char *argv[]) {
 }
 
 int main_train(int argc, char *argv[]) {
+  const char *pos[4]; int npos = 0;
   /* xgboost + a prebuilt matrix is the tree path: the .msfm carries the chain
    * it was featurized against, so training walks its nodes and emits one
    * scorable bundle. The other frameworks are UNFITTED -- they transcribe a
@@ -602,7 +603,8 @@ int main_train(int argc, char *argv[]) {
     }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
       tdie("unrecognized or incomplete option", argv[i]);
-    else break;
+    else if (npos < (int)(sizeof pos / sizeof *pos)) pos[npos++] = argv[i];
+    else break;   /* too many positionals: the tail's own check reports it */
   }
   if (!strcmp(framework, "violation"))
     tdie("the violation rule is UNFITTED -- it transcribes a .mrmp and consumes "
@@ -624,11 +626,11 @@ int main_train(int argc, char *argv[]) {
    * not the binstrings). Writing the mask at exactly the model's pattern count
    * is what keeps the shipped mask and the model dimension from drifting. */
   if (fw_vio) {
-    if (!out_path || argc - i != 1) return train_usage(stderr);
+    if (!out_path || npos != 1) return train_usage(stderr);
     if (!ms_path_is_bundle_ext(out_path))
       tdie("the violation framework requires a .clfx output (bundled with the MRMP)",
            out_path);
-    const char *artifact = argv[i];
+    const char *artifact = pos[0];
     if (!ms_mrmp_is_artifact(artifact))
       tdie("the violation framework needs the MRMPIDX1 artifact (.mrmp), not an "
            "exported .cm -- the .cm has no binstrings", artifact);
@@ -663,11 +665,11 @@ int main_train(int argc, char *argv[]) {
   /* With --data the features are already built, so <query.cg> drops out and
    * only <ref.cm> stays positional -- the bundle still has to carry the MRMP. */
   int want_pos = data_path ? 1 : 2;
-  if (!out_path || argc - i != want_pos) return train_usage(stderr);
+  if (!out_path || npos != want_pos) return train_usage(stderr);
   if (!data_path && !labels_path) return train_usage(stderr);
   if (fw_lin && !ms_path_is_bundle_ext(out_path))
     tdie("the logistic framework requires a .clfx output (bundled with the MRMP)", out_path);
-  const char *query_cg = data_path ? NULL : argv[i];
+  const char *query_cg = data_path ? NULL : pos[0];
   char *tmp_mrmp = NULL;
   /* Keep the ARTIFACT path as given. ms_mrmp_resolve() materialises a runtime
    * mask for featurizing, but the bundle should carry the .mrmp itself: it is
@@ -676,7 +678,7 @@ int main_train(int argc, char *argv[]) {
    * resolved multi-record mask silently lost every record's name. The chain
    * walker stops at MSBNDL1, so a bundled .mrmp is readable straight off the
    * bundle prefix, exactly as a bundled .cm was. */
-  const char *ref_arg  = argv[i + (data_path ? 0 : 1)];
+  const char *ref_arg  = pos[data_path ? 0 : 1];
   const char *ref_mrmp = ms_mrmp_resolve(ref_arg, &tmp_mrmp);
 
   /* ---- features ----

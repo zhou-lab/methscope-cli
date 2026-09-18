@@ -247,7 +247,7 @@ int main_deconv_build_ref(int argc, char *argv[]) {
     else if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
       ms_help(stdout,
 "Usage:\n"
-"  methscope deconv-build-ref [options] <celltypes.cg> -o <out.msdref>\n"
+"  methscope deconv-build-ref -o <out.msdref> [options] <celltypes.cg>\n"
 "\n"
 "Purpose:\n"
 "  Pack a per-cell-type M/U store into the uint16 M/U reference that `deconv`\n"
@@ -294,7 +294,7 @@ int main_deconv_build_ref(int argc, char *argv[]) {
   }
   if (argc - i != 1 || !out_path) {
     fprintf(stderr,
-      "Usage: methscope deconv-build-ref <celltypes.cg> -o <out.msdref>\n");
+      "Usage: methscope deconv-build-ref -o <out.msdref> <celltypes.cg>\n");
     return 1;
   }
   const char *ref = argv[i];
@@ -1372,7 +1372,7 @@ static void d2_record(const d2ref_t *Rr, const d2opt_t *o, d2ws_t *w,
           }
         }
       }
-      /* --no-narrow: skip the rebuild rounds entirely and keep every class, so
+      /* --no-adaptive: skip the rebuild rounds entirely and keep every class, so
        * the answer is the global fit. Isolates what the narrowing is worth. */
       for (uint32_t round = 2; narrow && !o->force_scope && round <= max_round;
            ++round) {
@@ -1827,6 +1827,7 @@ static void d2_emit(FILE *out, const d2ref_t *R, const char *name,
 }
 
 int main_deconv(int argc, char *argv[]) {
+  const char *pos[2]; int npos = 0;
   const char *out_path = NULL, *panel_out = NULL, *pair_spec = NULL;
   const char *force_scope = NULL, *eval_x = NULL, *design_out = NULL;
   const char *scope_out = NULL;
@@ -1916,7 +1917,7 @@ int main_deconv(int argc, char *argv[]) {
       group_thr = atof(argv[++i]);
     else if (!strcmp(a, "--min-frac") && i + 1 < argc)
       min_frac = atof(argv[++i]);
-    else if (!strcmp(a, "--no-narrow")) narrow = 0;
+    else if (!strcmp(a, "--no-adaptive")) narrow = 0;
     else if (!strcmp(a, "--rescue-below") && i + 1 < argc)
       rescue_below = strtoull(argv[++i], NULL, 10);
     else if (!strcmp(a, "--rescue-gap") && i + 1 < argc)
@@ -1964,7 +1965,7 @@ int main_deconv(int argc, char *argv[]) {
 "  rebuilt over that scope and refit: dropping classes relaxes the admission\n"
 "  conjunction, so a narrower scope admits CpGs the full one could not. The\n"
 "  scope only ever narrows, and rounds stop once it stops changing or at\n"
-"  --max-round. --no-narrow keeps the round-1 fit over every class.\n"
+"  --max-round. --no-adaptive keeps the round-1 fit over every class.\n"
 "\n"
 "Arguments:\n"
 "  <ref.msdref>   Deconvolution reference from `deconv-build-ref`. Its index\n"
@@ -2004,8 +2005,6 @@ int main_deconv(int argc, char *argv[]) {
 "                          memory grows by the per-thread workspace (~16 MB),\n"
 "                          not linearly. Needs a <query.cg>.idx to seek by; -v\n"
 "                          and the dump options force a single thread.\n"
-"  --no-narrow             Fit the global panel over every class, skipping the\n"
-"                          per-query rebuild rounds.\n"
 "  --max-round N           Cap on rebuild rounds. Default: 8. Rounds stop early\n"
 "                          once the class set stops changing.\n"
 "  -v                      Report per-record panel size and measured-row count.\n"
@@ -2053,6 +2052,13 @@ int main_deconv(int argc, char *argv[]) {
 "  --rescue-qfilter LO,HI  The wider admission band. Default: 0.40,0.60.\n"
 "\n"
 "Diagnostics:\n"
+"  --no-adaptive           Stop after round 1: fit the frozen global panel\n"
+"                          over every class, skipping the per-query rebuild.\n"
+"                          It is the CONTROL that says what narrowing is\n"
+"                          worth, and the one way to score a cohort on a\n"
+"                          single panel. Not a tuning knob: it measured 9-12x\n"
+"                          worse TVD than the default on the 41-class mouse\n"
+"                          benchmark, at every coverage rung.\n"
 "  --panel-out F           Dump the rebuilt panel: binstring, measured CpGs and\n"
 "                          observed beta, one row per pattern per record.\n"
 "  --scope-out F           Write the settled scope, 1/0 per class per record.\n"
@@ -2086,14 +2092,19 @@ int main_deconv(int argc, char *argv[]) {
       return 0;
     }
     else if (a[0] == '-' && a[1]) d2die("unrecognized option", a);
-    else break;
+    /* Positionals are COLLECTED, not a stop sign: a reader who writes
+     * `deconv ref.msdref mix.cg -o out.tsv` -- the order this command's own
+     * usage string prints -- must not be told the trailing option is a third
+     * file. Scanning continues past a positional for every subcommand. */
+    else if (npos < 2) pos[npos++] = a;
+    else d2die("too many arguments", a);
   }
-  if (argc - i != 2) {
+  if (npos != 2) {
     fprintf(stderr,
-      "Usage: methscope deconv <ref.msdref> <query.cg> -o <out.tsv>\n");
+      "Usage: methscope deconv -o <out.tsv> <ref.msdref> <query.cg>\n");
     return 1;
   }
-  const char *rpath = argv[i], *qpath = argv[i + 1];
+  const char *rpath = pos[0], *qpath = pos[1];
 
   d2ref_t R;
   d2ref_load(rpath, &R);

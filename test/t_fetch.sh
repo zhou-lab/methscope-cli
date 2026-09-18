@@ -20,7 +20,16 @@ case "$out" in *"yame fetch"*) echo "fetch -h leaks 'yame fetch'"; exit 1;; esac
 ## directories, no genome or array knowledgebase rows
 list=$("$MS" fetch -l 2>/dev/null)
 dirs=$(printf '%s\n' "$list" | tail -n +2 | cut -f1 | sort -u | tr '\n' ' ')
-[ "$dirs" = "hg38/data hg38/models mm10/models " ] || { echo "fetch -l directories: '$dirs'"; exit 1; }
+## The catalogue this binary projects: its models, its example .cg, and (since
+## YAME v1.46) the CpG coordinate reference per assembly -- the one thing from
+## the genomes source methscope's own output is read against. Not the array
+## platforms or knowledgebases, which is the point of a per-tool projection.
+[ "$dirs" = "hg38 hg38/data hg38/models mm10 mm10/models mm39 " ] ||
+  { echo "fetch -l directories: '$dirs'"; exit 1; }
+for cr in hg38 mm10 mm39; do
+  printf '%s\n' "$list" | cut -f1,5 | grep -qx "$cr	cpg_nocontig.cr" ||
+    { echo "fetch -l lacks $cr/cpg_nocontig.cr"; exit 1; }
+done
 ## A model the catalogue still carries, named exactly: the classifier the
 ## routing-tree pair was withdrawn IN FAVOUR of at models v10.
 printf '%s\n' "$list" | grep -q "hg38_celltype_full.clfx" ||
@@ -52,3 +61,13 @@ case "$msg" in *"yame fetch"*) echo "advice names yame: '$msg'"; exit 1;; esac
 ## a bad target is an error, not a silent exit 0
 if "$MS" fetch no/such/thing >/dev/null 2>&1; then echo "fetch of a bad name exited 0"; exit 1; fi
 echo "fetch: usage, catalogue, version tag, store state, bad target"
+
+## The BSD/glibc split, which is invisible on this machine without help.
+## `fetch` is YAME's getopt code, and GNU getopt PERMUTES its arguments while
+## BSD getopt (macOS) stops at the first non-option, so `fetch -l NAME -g SRC`
+## works here and fails there. POSIXLY_CORRECT=1 makes glibc behave like BSD,
+## which is the only way to test the macOS path from Linux. YAME v1.46 permutes
+## in `fetch` itself; ENABLE THIS CHECK AT THE SUBMODULE BUMP TO v1.46 -- it
+## ENABLED 2026-09-17 at the bump to v1.46, which permutes in fetch itself.
+POSIXLY_CORRECT=1 "$MS" fetch -l hg38 -g methscope >/dev/null 2>&1 ||
+  { echo "fetch rejects an option after a name under POSIXLY_CORRECT (BSD/macOS order)"; exit 1; }

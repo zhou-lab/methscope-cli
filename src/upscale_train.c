@@ -138,7 +138,15 @@ int main_upscale_train(int argc, char **argv) {
     else if (!strcmp(a, "--units") && i + 1 < argc) index = argv[++i];
     else if (!strcmp(a, "--mrmp") && i + 1 < argc) mrmp = argv[++i];
     else if (!strcmp(a, "-o") && i + 1 < argc) out = argv[++i];
-    else if (!strcmp(a, "--work-dir") && i + 1 < argc) work = argv[++i];
+    else if (!strcmp(a, "--work-dir") && i + 1 < argc) {
+      /* Strip trailing slashes before anything joins onto this. `--work-dir
+       * work/` printed "wrote bare UPDEC2 work//model.updec2"; the path was
+       * valid, the message was not. "/" itself keeps its slash. */
+      char *w = argv[++i];
+      size_t n = strlen(w);
+      while (n > 1 && w[n - 1] == '/') w[--n] = '\0';
+      work = w;
+    }
     else if (!strcmp(a, "--features") && i + 1 < argc) {
       const char *x = argv[++i];
       if (!strcmp(x, "count")) c.feature_mode = MS_UPFEATURE_COUNT;

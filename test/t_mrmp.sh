@@ -70,4 +70,37 @@ fi
 if "$MS" mrmp-export "$d/nope.mrmp" "$d/y.cm" >/dev/null 2>&1; then
   echo "mrmp-export on a missing artifact exited 0"; exit 1
 fi
-echo "ok: flat and tree builds, export shape, refusals"
+## ---- 6. mrmp-summary IS the MRMP average -----------------------------
+## Our featurizer computes per-pattern means itself rather than shelling out to
+## yame (yame's kernel takes one mask per call, so a chain would cost one genome
+## scan per set). That makes the two implementations independent, and this pins
+## them together: the same means over the exported mask must match `yame summary
+## -m`. Tolerance is 1e-3 because yame prints Beta at three decimals.
+## no --with-pna: the Pna background is state 0 in the exported mask and
+## `yame summary -m` does not report it, so asking for it would be an
+## unmatchable row rather than a comparison.
+"$MS" mrmp-summary "$d/ref.cg" "$d/flat.mrmp" > "$d/ms.tsv" 2>/dev/null
+"$YAME" summary -m "$d/flat.cm" "$d/ref.cg" > "$d/yame.tsv" 2>/dev/null
+awk -F'\t' '
+  NR==FNR { if (FNR>1) y[$2 "\t" $4] = $10; next }
+  FNR==1  { next }
+  { k = $1 "\t" $3
+    if (!(k in y)) { miss++; next }
+    n++; dd = $4 - y[k]; if (dd < 0) dd = -dd
+    if (dd > m) { m = dd; worst = k } }
+  END {
+    if (miss) { printf "%d sample/pattern rows have no yame counterpart\n", miss; exit 1 }
+    if (n != 12) { printf "expected 6 cells x 2 patterns = 12 pairs, compared %d\n", n; exit 1 }
+    if (m > 1e-3) { printf "mrmp-summary and yame summary -m disagree by %.5f at %s\n", m, worst; exit 1 }
+    printf "  %d sample/pattern means match yame summary -m (max |diff| %.5f)\n", n, m }' \
+  "$d/yame.tsv" "$d/ms.tsv" || exit 1
+
+## the wide form is the same numbers transposed, so its header must name every
+## set/pattern column as <set>.<pattern> and carry one row per record
+"$MS" mrmp-summary --wide "$d/ref.cg" "$d/flat.mrmp" > "$d/wide.tsv" 2>/dev/null
+head -1 "$d/wide.tsv" | grep -q $'\troot.P1\t' ||
+  { echo "--wide header does not name columns <set>.<pattern>:"; head -1 "$d/wide.tsv"; exit 1; }
+[ "$(wc -l < "$d/wide.tsv")" = "7" ] ||
+  { echo "--wide should be a header plus 6 records, got $(wc -l < "$d/wide.tsv") lines"; exit 1; }
+
+echo "ok: flat and tree builds, export shape, mrmp-summary vs yame, refusals"

@@ -16,6 +16,7 @@
 #include "bmeta.h"
 #include "bundle.h"
 #include "msfm.h"
+#include "cfile.h"  /* read_cdata1 -- the query's row count, for the check below */
 #include "mrmp.h"    /* ms_msfm_to_matrix -- the --data feature path */
 #include "index.h"   /* get_fname_index -- --threads needs the .cg index */
 #include <xgboost/c_api.h>
@@ -27,6 +28,24 @@
       exit(1);                                                      \
     }                                                               \
   } while (0)
+
+/* Rows in the first record of a .cg, or 0 if it cannot be read. Only used to
+ * compare row SPACES, so the first record is enough: a store's records share
+ * one. */
+static uint64_t cg_rows(const char *path) {
+  cfile_t cf = open_cfile((char *)path);
+  if (!cf.fh) return 0;
+  cdata_t c = read_cdata1(&cf);
+  /* A record straight off disk carries the COMPRESSED length in c.n; the row
+   * count only appears after inflating, which is what msfm_build.c does for the
+   * same check. Reading it raw compared a byte count against a CpG count and
+   * made every store look mismatched. */
+  if (c.n) decompress_in_situ(&c);
+  uint64_t n = c.n;
+  free_cdata(&c);
+  bgzf_close(cf.fh);
+  return n;
+}
 
 static void pdie(const char *msg, const char *arg) {
   if (arg) fprintf(stderr, "[methscope] classify: %s: %s\n", msg, arg);
@@ -599,6 +618,7 @@ static int predict_violation(const char *query_cg, const char *ref_mrmp,
 }
 
 int main_predict(int argc, char *argv[]) {
+  const char *pos[4]; int npos = 0;
   const char *out_path = NULL, *data_path = NULL;
   unsigned threads = 1;
   int with_probs = 0;
@@ -637,7 +657,8 @@ int main_predict(int argc, char *argv[]) {
     }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
       pdie("unrecognized or incomplete option", argv[i]);
-    else break;
+    else if (npos < (int)(sizeof pos / sizeof *pos)) pos[npos++] = argv[i];
+    else break;   /* too many positionals: the tail's own check reports it */
   }
   /* With --data the features are prebuilt, so <query.cg> drops out of the
    * positional list; the model forms are otherwise unchanged. This is what
@@ -646,26 +667,47 @@ int main_predict(int argc, char *argv[]) {
   /* Exactly one model argument. The loose <ref.mrmp> <booster.ubj> form went
    * with the flat format: a bare booster has no framework mark and no chain, so
    * there is nothing to route and nothing to check the featurization against. */
-  if (data_path) { if (argc - i != 1) return predict_usage(stderr); }
-  else           { if (argc - i != 2) return predict_usage(stderr); }
+  if (data_path) { if (npos != 1) return predict_usage(stderr); }
+  else           { if (npos != 2) return predict_usage(stderr); }
   /* No index fixup here. a2df9a8 changed argv[i] from meaning the QUERY to
    * meaning the MODEL, but left behind the --i that compensated for the old
    * layout, so `classify --data x.msfm model.clfx` read the argument BEFORE
    * the model and died with "expected a .clfx bundle: x.msfm". With --data
    * there is exactly one positional and it is the model, at argv[i]. */
-  const char *model_arg = argv[i];
-  const char *query_cg  = data_path ? NULL : argv[i + 1];
+  const char *model_arg = pos[0];
+  const char *query_cg  = data_path ? NULL : pos[1];
   const char *ref_mrmp  = NULL;     /* mrmp path (loose arg, or the bundle path itself) */
   const char *model_name;           /* for error messages */
 
   /* --framework violation: the second argument is the .mrmp itself, not a
    * bundle. Nothing is trained, so there is no model file in between. */
   if (fw_violation) {
-    if (argc - i != 2) return predict_usage(stderr);
-    const char *art = argv[i];
+    if (npos != 2) return predict_usage(stderr);
+    const char *art = pos[0];
     if (!ms_mrmp_is_artifact(art))
       pdie("--framework violation needs the MRMPIDX1 artifact (.mrmp); an "
            "exported .cm has no binstrings to read the rule from", art);
+    /* Row spaces, before anything is materialised or featurized. Without this
+     * the mismatch surfaced from inside YAME's summary core as
+     * "[summarize1_queryfmt6_SU:203] mask (N=773477) and query (N=29401795) are
+     * of different lengths" -- an internal symbol and a line number, where the
+     * cause is that the artifact and the query were built on different
+     * references (reported 20260917: the chr20 .mrmp against a whole-genome
+     * query). upscale's featurizer already said this properly; same sentence
+     * here. Checked on `art`, the artifact itself: a few lines below it becomes
+     * a temp .cm and the fact is no longer readable from it. */
+    if (!data_path) {
+      uint64_t a_cpg = ms_mrmp_n_cpg_at(art, 0), q_cpg = cg_rows(query_cg);
+      if (a_cpg && q_cpg && a_cpg != q_cpg) {
+        char msg[512];
+        snprintf(msg, sizeof msg,
+                 "different references: %s spans %" PRIu64 " CpG rows, but the "
+                 "query %s has %" PRIu64 ". Both must be built on the same "
+                 "reference -- a chr20 artifact cannot score a whole-genome "
+                 "query", art, a_cpg, query_cg, q_cpg);
+        pdie(msg, NULL);
+      }
+    }
     viomodel_t *vm = ms_viomodel_from_mrmp(art, vio_top, vio_threshold,
                                            vio_weight, vio_min_patterns);
     /* The matrix builders take a runtime .cm, and ms_mrmp_resolve() would give

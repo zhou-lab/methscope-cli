@@ -69,6 +69,7 @@ static int usage(FILE *out) {
   CMD("classify",     "Classify a methylome -> labels + confidence");
   CMD("classify-train","Fit a label classifier (xgboost / threshold / logistic)");
   CMD("classify-featurize","Prebuild the .msfm feature matrix (parallel, reusable)");
+  CMD("mrmp-summary", "Per-pattern mean methylation as TSV (the MRMP average)");
 
   fprintf(out, "\n%sDeconvolution%s\n", B, R);
   CMD("deconv-build-ref","Pack a cell-type store into the .msdref deconvolution reference");
@@ -78,7 +79,7 @@ static int usage(FILE *out) {
   CMD("upscale",      "Impute genome-wide CpG methylation from a sparse methylome");
   CMD("upscale-featurize", "Build the MSURAW2/3 training msur from a truth .cg");
   CMD("upscale-set-units", "Build the MSUIDX1 processing-unit index from the reference store");
-  CMD("upscale-train","Train the whole-genome upscale decoder (CUDA)");
+  CMD("upscale-train","Train the upscale decoder (CPU, CUDA optional)");
 
   fprintf(out, "\n%sModel bundles%s\n", B, R);
   CMD("bundle",       "Wrap a model + its MRMP into a self-contained bundle");
@@ -106,13 +107,13 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "fetch") == 0) return yame_fetch_main(&ms_cfg, argc - 1, argv + 1);
   if (strcmp(argv[1], "classify")    == 0) return main_predict(argc - 1, argv + 1);
   if (strcmp(argv[1], "classify-featurize") == 0) return main_classify_featurize(argc - 1, argv + 1);
+  if (strcmp(argv[1], "mrmp-summary") == 0) return main_mrmp_summary(argc - 1, argv + 1);
   if (strcmp(argv[1], "deconv-build-ref") == 0) return main_deconv_build_ref(argc - 1, argv + 1);
   if (strcmp(argv[1], "deconv") == 0) return main_deconv(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale")    == 0) return main_upscale(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-train") == 0) return main_upscale_train(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-featurize") == 0) return main_upscale_prepare(argc - 1, argv + 1);
   if (strcmp(argv[1], "upscale-set-units") == 0) return main_upscale_set_units(argc - 1, argv + 1);
-  if (strcmp(argv[1], "_upscale") == 0) return main_upscale_internal(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-build")   == 0) return main_mrmp_build(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-export")  == 0) return main_mrmp_export(argc - 1, argv + 1);
   if (strcmp(argv[1], "mrmp-pool")    == 0) return main_mrmp_pool(argc - 1, argv + 1);

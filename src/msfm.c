@@ -612,6 +612,10 @@ static int usage(FILE *out) {
  * otherwise redundant, since a block inside the chain is byte-identical to the
  * standalone file (verified with mrmp-export --set). */
 static const char *g_only_set = NULL;
+/* Which command the shared chain-expansion reports as. mrmp-summary walks
+ * the same code, and a banner reading 'classify-featurize' over its output
+ * names a command the user did not run. */
+static const char *g_tool = "classify-featurize";
 
 static void expand_mask_args(int n_arg, char *const *arg, uint32_t *n_out,
                              const char ***refs_out, char ***tmps_out,
@@ -674,7 +678,7 @@ static void expand_mask_args(int n_arg, char *const *arg, uint32_t *n_out,
   if (g_only_set && !keep) fdie("no set of that name in the chain", g_only_set);
   n = keep;
   *base_out = base; *len_out = blen; *pat_out = pat;
-  fprintf(stderr, "\n[methscope] classify-featurize\n\n");
+  fprintf(stderr, "\n[methscope] %s\n\n", g_tool);
   fprintf(stderr, "  %-14s %s, %u set(s)\n", "artifact", arg[0], n);
   ms_mrmpset_free(ch);
   *n_out = n; *refs_out = refs; *tmps_out = tmps; *names_out = nms;
@@ -706,6 +710,9 @@ static uint32_t *parse_levels(const char *spec, uint32_t reps, uint32_t *n_out) 
 }
 
 int main_classify_featurize(int argc, char *argv[]) {
+  char **pos = calloc((size_t)argc, sizeof(char *));
+  int npos = 0;
+  if (!pos) fdie("out of memory (positional args)", NULL);
   const char *out = NULL, *labels = NULL, *sample_spec = NULL;
   uint32_t reps = 1, patterns = 0;
   uint64_t seed = 1;
@@ -742,15 +749,15 @@ int main_classify_featurize(int argc, char *argv[]) {
     }
     else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { return usage(stdout); }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-")) fdie("unrecognized option", argv[i]);
-    else break;
+    else pos[npos++] = argv[i];   /* a positional never stops the scan */
   }
   if (!out) return usage(stderr);
 
-  if (argc - i < 2) return usage(stderr);
-  const char *query = argv[i];
+  if (npos < 2) return usage(stderr);
+  const char *query = pos[0];
   uint32_t n_sets; const char **refs; char **tmps; char **snames;
   uint64_t *mbase, *mlen; uint32_t *mpat;
-  expand_mask_args(argc - i - 1, argv + i + 1, &n_sets, &refs, &tmps, &snames,
+  expand_mask_args(npos - 1, pos + 1, &n_sets, &refs, &tmps, &snames,
                    &mbase, &mlen, &mpat);
   const char *ref = refs[0];
 
@@ -864,5 +871,128 @@ int main_classify_featurize(int argc, char *argv[]) {
   for (uint32_t s = 0; s < n_sets; ++s) ms_mrmp_cleanup(tmps[s]);
   for (uint32_t s = 0; s < n_sets; ++s) free(snames[s]);
   free(refs); free(tmps); free(snames);
+  return 0;
+}
+
+/* ------------------------------------------------------- mrmp-summary ---
+ * The MRMP average, readable. Per (sample, pattern) mean beta at native
+ * coverage -- the same numbers classify-featurize --continuous-features puts
+ * in a .msfm, printed instead of packed, because nothing outside methscope
+ * can read a .msfm and an embedding has to leave the tool.
+ *
+ * Why this lives here and not in yame. A .mrmp is a CHAIN: `mrmp-export` on
+ * the shipped human bank writes 178 records, so the yame route
+ * (export -> `yame summary -m`) hands the user a per-set reassembly job that
+ * the artifact already answers, and costs a genome-wide .cm on the way. The
+ * featurizer below walks every set in ONE pass over the query, which is what
+ * the chain is for. It also means no second tool to install, and the pattern
+ * definitions come from the submodule this binary is pinned to rather than
+ * from whatever yame happens to be on PATH.
+ */
+static int summary_usage(FILE *out) {
+  ms_help(out,
+    "Usage: methscope mrmp-summary [options] <query.cg> <ref.mrmp>\n\n"
+    "Purpose:\n"
+    "  Per-pattern mean methylation for every query record: one pass over the\n"
+    "  query, every set of the chain at once. This is the feature matrix a\n"
+    "  classifier would train on, as text -- an embedding for clustering, a\n"
+    "  projection, or a heatmap.\n\n"
+    "Arguments:\n"
+    "  <query.cg>   Query methylome(s), one record per sample or cell.\n"
+    "  <ref.mrmp>   A .mrmp (one set or a chain); a bundle carrying one works.\n\n"
+    "Options:\n"
+    "  -o <out>     Write here instead of stdout.\n"
+    "  --wide       One row per record, one column per pattern (the embedding\n"
+    "               matrix). Default is long: sample, set, pattern, beta.\n"
+    "  --with-pna   Keep the Pna background column. It is the CpGs no pattern\n"
+    "               claims, so it is coverage, not a feature; excluded by\n"
+    "               default to stop it being embedded as one.\n"
+    "  --threads T  Records per worker, each seeking through the .cg index.\n"
+    "  --min-cpgs N A pattern seen at fewer than N CpGs in a record reads NA\n"
+    "               rather than a confident mean (default 1).\n");
+  return out == stdout ? 0 : 1;
+}
+
+int main_mrmp_summary(int argc, char *argv[]) {
+  const char *out_path = NULL, *pos[2]; int npos = 0;
+  int wide = 0, with_pna = 0; unsigned threads = 1; uint32_t min_cpgs = 1;
+  for (int i = 1; i < argc; ++i) {
+    const char *a = argv[i];
+    if      (!strcmp(a, "-o") && i + 1 < argc) out_path = argv[++i];
+    else if (!strcmp(a, "--wide")) wide = 1;
+    else if (!strcmp(a, "--with-pna")) with_pna = 1;
+    else if (!strcmp(a, "--threads") && i + 1 < argc)
+      threads = (unsigned)strtoul(argv[++i], NULL, 10);
+    else if (!strcmp(a, "--min-cpgs") && i + 1 < argc)
+      min_cpgs = (uint32_t)strtoul(argv[++i], NULL, 10);
+    else if (!strcmp(a, "-h") || !strcmp(a, "--help")) return summary_usage(stdout);
+    else if (a[0] == '-' && a[1]) fdie("unrecognized option", a);
+    else if (npos < 2) pos[npos++] = a;
+    else fdie("too many arguments", a);
+  }
+  if (npos != 2) return summary_usage(stderr);
+  g_tool = "mrmp-summary";
+  const char *query = pos[0];
+
+  uint32_t n_sets; const char **refs; char **tmps; char **snames;
+  uint64_t *mbase, *mlen; uint32_t *mpat;
+  expand_mask_args(1, (char *const *)&pos[1], &n_sets, &refs, &tmps, &snames,
+                   &mbase, &mlen, &mpat);
+
+  /* Native coverage, one replicate, continuous features: the plain average, no
+   * draw and no 0.5 cut. binarize=0 and binarize_feat=0 are what make it so. */
+  uint32_t rep_sample[1] = {0};
+  uint32_t *np = xmal(n_sets * sizeof(uint32_t), "pattern counts");
+  for (uint32_t s = 0; s < n_sets; ++s) np[s] = mpat ? mpat[s] : 0;
+  uint32_t *col0 = xmal(n_sets * sizeof(uint32_t), "set offsets");
+  uint16_t *beta = NULL; uint32_t *levels = NULL; char **names = NULL;
+  uint32_t n_cells = 0, ncol = 0;
+  ms_msfm_build_sampled_multi(query, refs, mbase, mlen, np, n_sets, rep_sample,
+                              1, 0, min_cpgs, 1, threads, 0, 0, 0,
+                              &beta, &levels, &names, &n_cells, &ncol, col0);
+
+  FILE *o = out_path ? fopen(out_path, "w") : stdout;
+  if (!o) fdie("cannot open output", out_path);
+
+  /* Which set a column belongs to: col0[] is each set's first column. */
+  uint32_t *set_of = xmal(ncol * sizeof(uint32_t), "column set");
+  for (uint32_t c = 0, s = 0; c < ncol; ++c) {
+    while (s + 1 < n_sets && c >= col0[s + 1]) ++s;
+    set_of[c] = s;
+  }
+  int *keep = xmal(ncol * sizeof(int), "kept columns");
+  for (uint32_t c = 0; c < ncol; ++c) keep[c] = 1;
+  (void)with_pna;   /* the builder emits no background column; see below */
+
+  if (wide) {
+    fputs("sample", o);
+    for (uint32_t c = 0; c < ncol; ++c)
+      if (keep[c]) fprintf(o, "\t%s.P%u", snames[set_of[c]], c - col0[set_of[c]] + 1);
+    fputc('\n', o);
+    for (uint32_t r = 0; r < n_cells; ++r) {
+      fputs(names[r], o);
+      for (uint32_t c = 0; c < ncol; ++c) {
+        if (!keep[c]) continue;
+        uint16_t v = beta[(size_t)r * ncol + c];
+        if (v == MSFM_NA) fputs("\tNA", o);
+        else fprintf(o, "\t%.4f", msfm_decode(v));
+      }
+      fputc('\n', o);
+    }
+  } else {
+    fputs("sample\tset\tpattern\tbeta\n", o);
+    for (uint32_t r = 0; r < n_cells; ++r)
+      for (uint32_t c = 0; c < ncol; ++c) {
+        if (!keep[c]) continue;
+        uint16_t v = beta[(size_t)r * ncol + c];
+        fprintf(o, "%s\t%s\tP%u\t", names[r], snames[set_of[c]],
+                c - col0[set_of[c]] + 1);
+        if (v == MSFM_NA) fputs("NA\n", o);
+        else fprintf(o, "%.4f\n", msfm_decode(v));
+      }
+  }
+  if (o != stdout) fclose(o);
+  fprintf(stderr, "[methscope] mrmp-summary: %u record(s) x %u pattern(s)"
+          " over %u set(s)\n", n_cells, ncol, n_sets);
   return 0;
 }

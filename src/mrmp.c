@@ -1489,6 +1489,8 @@ static int pooled_cmp(const void *a, const void *b) {
 }
 
 int main_mrmp_pool(int argc, char *argv[]) {
+  const char **pos = xcalloc((size_t)argc, sizeof(char *), "positional args");
+  int npos = 0;
   g_cmd = "mrmp-pool";
   int inc_all0 = 0, inc_all1 = 0;
   /* No arguments at all is a question, not an error: print the help rather
@@ -1557,9 +1559,9 @@ int main_mrmp_pool(int argc, char *argv[]) {
       return 0;
     }
     else if (argv[i][0] == '-') die("unrecognized option", argv[i]);
-    else break;
+    else pos[npos++] = argv[i];   /* a positional never stops the scan */
   }
-  if (!out || argc - i < 1) die("need -o OUT and at least one IN.mrmp", NULL);
+  if (!out || npos < 1) die("need -o OUT and at least one IN.mrmp", NULL);
 
   /* Every input is a chain of one or more sets and expands into all of them.
    * That is what makes the four-command workflow close: one `mrmp-build
@@ -1568,13 +1570,13 @@ int main_mrmp_pool(int argc, char *argv[]) {
    * Expanded blocks keep the container's own set names -- those came from the
    * generator that knows what each set is, and are what makes `inspect`'s pooled
    * table readable. So the input count is not the set count. */
-  uint32_t cap = (uint32_t)(argc - i), n = 0;
+  uint32_t cap = (uint32_t)npos, n = 0;
   char **name = xcalloc(cap, sizeof(char *), "set names");
   uint64_t *len = xcalloc(cap, sizeof(uint64_t), "block sizes");
   uint64_t *soff = xcalloc(cap, sizeof(uint64_t), "block offsets");
   const char **path = xcalloc(cap, sizeof(char *), "paths");
-  for (uint32_t k = 0; k < (uint32_t)(argc - i); ++k) {
-    const char *p = argv[i + k];
+  for (uint32_t k = 0; k < (uint32_t)npos; ++k) {
+    const char *p = pos[k];
     ms_mrmpset_t *s = ms_mrmpset_open(p);
     uint32_t take = s->n_sets;
     if (n + take > cap) {

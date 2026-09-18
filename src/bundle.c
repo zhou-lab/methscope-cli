@@ -420,6 +420,7 @@ int ms_path_is_bundle_ext(const char *path) {
 }
 
 int main_bundle(int argc, char *argv[]) {
+  const char *pos[4]; int npos = 0;
   const char *mrmp = NULL, *out = NULL, *outcpg = NULL, *kind = NULL;
   int i = 1;
   for (; i < argc; ++i) {
@@ -432,11 +433,12 @@ int main_bundle(int argc, char *argv[]) {
     }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
       bdie("unrecognized or incomplete option", argv[i]);
-    else break;
+    else if (npos < (int)(sizeof pos / sizeof *pos)) pos[npos++] = argv[i];
+    else break;   /* too many positionals: the tail's own check reports it */
   }
   if (!mrmp || !out) return bundle_usage(stderr);
-  if (argc - i != 1) return bundle_usage(stderr);
-  const char *model = argv[i];
+  if (npos != 1) return bundle_usage(stderr);
+  const char *model = pos[0];
   const char *inner = model;
 
   ms_bundle_pack(out, kind, inner, mrmp, outcpg);   /* kind mark (NULL = omit) */
@@ -501,6 +503,7 @@ static char *derive_sibling(const char *b, const char *suffix) {
 }
 
 int main_unbundle(int argc, char *argv[]) {
+  const char *pos[4]; int npos = 0;
   const char *model_out = NULL, *mrmp_out = NULL;
   int i = 1;
   for (; i < argc; ++i) {
@@ -511,10 +514,11 @@ int main_unbundle(int argc, char *argv[]) {
     }
     else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0)
       bdie("unrecognized or incomplete option", argv[i]);
-    else break;
+    else if (npos < (int)(sizeof pos / sizeof *pos)) pos[npos++] = argv[i];
+    else break;   /* too many positionals: the tail's own check reports it */
   }
-  if (argc - i != 1) return unbundle_usage(stderr);
-  const char *bundle = argv[i];
+  if (npos != 1) return unbundle_usage(stderr);
+  const char *bundle = pos[0];
 
   char *model_def = model_out ? NULL : derive_model_out(bundle);
   char *mrmp_def  = mrmp_out  ? NULL : derive_sibling(bundle, ".mrmp");
