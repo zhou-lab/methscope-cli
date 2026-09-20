@@ -1132,10 +1132,12 @@ head -3 chr20_patterns_wide.tsv | cut -f1-4</code></pre>
   <pre class="res"><code>sample                                        root.P1  root.P2  root.P3
 GSM5652176_Adipocytes-Z000000T7                0.8954   0.9265   0.9347
 GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></pre>
-  <p class="note">The Pna background column is dropped by default: it is the CpGs no pattern
-    claims, which measures coverage rather than biology, and embedding it puts sequencing depth
-    on an axis. <code class="inl">--with-pna</code> keeps it when that is the point. The numbers
-    agree with <code class="inl">yame summary -m</code> over the exported
+  <p class="note">There is no Pna background column. It is the CpGs no pattern claims, which
+    measures coverage rather than biology, so the feature builder never gives it a column and
+    nothing downstream can embed sequencing depth as an axis. Its mean is the query's global
+    beta anyway &mdash; Pna is most of the genome &mdash; which
+    <code class="inl">yame summary</code> already prints. The numbers here agree with
+    <code class="inl">yame summary -m</code> over the exported
     <code class="inl">.cm</code> to within 5&times;10<sup>-4</sup>, the width of yame's printed
     precision.</p>
 </section>
@@ -1903,9 +1905,6 @@ Options:
   -o &lt;out&gt;     Write here instead of stdout.
   --wide       One row per record, one column per pattern (the embedding
                matrix). Default is long: sample, set, pattern, beta.
-  --with-pna   Keep the Pna background column. It is the CpGs no pattern
-               claims, so it is coverage, not a feature; excluded by
-               default to stop it being embedded as one.
   --threads T  Records per worker, each seeking through the .cg index.
   --min-cpgs N A pattern seen at fewer than N CpGs in a record reads NA
                rather than a confident mean (default 1).</code></pre>

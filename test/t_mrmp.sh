@@ -76,9 +76,9 @@ fi
 ## scan per set). That makes the two implementations independent, and this pins
 ## them together: the same means over the exported mask must match `yame summary
 ## -m`. Tolerance is 1e-3 because yame prints Beta at three decimals.
-## no --with-pna: the Pna background is state 0 in the exported mask and
-## `yame summary -m` does not report it, so asking for it would be an
-## unmatchable row rather than a comparison.
+## The Pna background is state 0 in the exported mask and `yame summary -m`
+## does not report it; mrmp-summary has no Pna column either, so the two
+## tables line up with nothing to filter on either side.
 "$MS" mrmp-summary "$d/ref.cg" "$d/flat.mrmp" > "$d/ms.tsv" 2>/dev/null
 "$YAME" summary -m "$d/flat.cm" "$d/ref.cg" > "$d/yame.tsv" 2>/dev/null
 awk -F'\t' '

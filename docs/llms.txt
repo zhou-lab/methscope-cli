@@ -730,9 +730,6 @@ Options:
   -o <out>     Write here instead of stdout.
   --wide       One row per record, one column per pattern (the embedding
                matrix). Default is long: sample, set, pattern, beta.
-  --with-pna   Keep the Pna background column. It is the CpGs no pattern
-               claims, so it is coverage, not a feature; excluded by
-               default to stop it being embedded as one.
   --threads T  Records per worker, each seeking through the .cg index.
   --min-cpgs N A pattern seen at fewer than N CpGs in a record reads NA
                rather than a confident mean (default 1).

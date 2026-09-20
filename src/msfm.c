@@ -30,11 +30,17 @@
 #include "bundle.h"
 #include "index.h"   /* get_fname_index -- the fast path needs the .cg index */
 
+/* Which command the shared code reports as. mrmp-summary walks the same
+ * file, and a banner or an error reading 'classify-featurize' over its
+ * output names a command the user did not run. Each entry point sets this
+ * before touching argv. */
+static const char *g_tool = "classify-featurize";
+
 /* noreturn so the compiler knows an open failure never falls through --
  * otherwise it cannot see that the input array is fully initialized. */
 static void fdie(const char *msg, const char *det) __attribute__((noreturn));
 static void fdie(const char *msg, const char *det) {
-  fprintf(stderr, "[methscope] classify-featurize: %s%s%s\n", msg,
+  fprintf(stderr, "[methscope] %s: %s%s%s\n", g_tool, msg,
           det ? ": " : "", det ? det : "");
   exit(1);
 }
@@ -612,11 +618,6 @@ static int usage(FILE *out) {
  * otherwise redundant, since a block inside the chain is byte-identical to the
  * standalone file (verified with mrmp-export --set). */
 static const char *g_only_set = NULL;
-/* Which command the shared chain-expansion reports as. mrmp-summary walks
- * the same code, and a banner reading 'classify-featurize' over its output
- * names a command the user did not run. */
-static const char *g_tool = "classify-featurize";
-
 static void expand_mask_args(int n_arg, char *const *arg, uint32_t *n_out,
                              const char ***refs_out, char ***tmps_out,
                              char ***names_out, uint64_t **base_out,
@@ -904,9 +905,6 @@ static int summary_usage(FILE *out) {
     "  -o <out>     Write here instead of stdout.\n"
     "  --wide       One row per record, one column per pattern (the embedding\n"
     "               matrix). Default is long: sample, set, pattern, beta.\n"
-    "  --with-pna   Keep the Pna background column. It is the CpGs no pattern\n"
-    "               claims, so it is coverage, not a feature; excluded by\n"
-    "               default to stop it being embedded as one.\n"
     "  --threads T  Records per worker, each seeking through the .cg index.\n"
     "  --min-cpgs N A pattern seen at fewer than N CpGs in a record reads NA\n"
     "               rather than a confident mean (default 1).\n");
@@ -914,13 +912,16 @@ static int summary_usage(FILE *out) {
 }
 
 int main_mrmp_summary(int argc, char *argv[]) {
+  /* Before the argument loop, not after: fdie() inside the loop would
+   * otherwise report an option error as classify-featurize, which shares
+   * this file and owns g_tool's initial value. */
+  g_tool = "mrmp-summary";
   const char *out_path = NULL, *pos[2]; int npos = 0;
-  int wide = 0, with_pna = 0; unsigned threads = 1; uint32_t min_cpgs = 1;
+  int wide = 0; unsigned threads = 1; uint32_t min_cpgs = 1;
   for (int i = 1; i < argc; ++i) {
     const char *a = argv[i];
     if      (!strcmp(a, "-o") && i + 1 < argc) out_path = argv[++i];
     else if (!strcmp(a, "--wide")) wide = 1;
-    else if (!strcmp(a, "--with-pna")) with_pna = 1;
     else if (!strcmp(a, "--threads") && i + 1 < argc)
       threads = (unsigned)strtoul(argv[++i], NULL, 10);
     else if (!strcmp(a, "--min-cpgs") && i + 1 < argc)
@@ -931,7 +932,6 @@ int main_mrmp_summary(int argc, char *argv[]) {
     else fdie("too many arguments", a);
   }
   if (npos != 2) return summary_usage(stderr);
-  g_tool = "mrmp-summary";
   const char *query = pos[0];
 
   uint32_t n_sets; const char **refs; char **tmps; char **snames;
@@ -960,19 +960,19 @@ int main_mrmp_summary(int argc, char *argv[]) {
     while (s + 1 < n_sets && c >= col0[s + 1]) ++s;
     set_of[c] = s;
   }
-  int *keep = xmal(ncol * sizeof(int), "kept columns");
-  for (uint32_t c = 0; c < ncol; ++c) keep[c] = 1;
-  (void)with_pna;   /* the builder emits no background column; see below */
+  /* Every column the builder produced is printed. There is no Pna column to
+   * keep or drop: ms_matrix_build() maps every Pna state to column -1
+   * (src/matrix.c), so the background never enters the layout in the first
+   * place. A --with-pna option used to sit here and do nothing. */
 
   if (wide) {
     fputs("sample", o);
     for (uint32_t c = 0; c < ncol; ++c)
-      if (keep[c]) fprintf(o, "\t%s.P%u", snames[set_of[c]], c - col0[set_of[c]] + 1);
+      fprintf(o, "\t%s.P%u", snames[set_of[c]], c - col0[set_of[c]] + 1);
     fputc('\n', o);
     for (uint32_t r = 0; r < n_cells; ++r) {
       fputs(names[r], o);
       for (uint32_t c = 0; c < ncol; ++c) {
-        if (!keep[c]) continue;
         uint16_t v = beta[(size_t)r * ncol + c];
         if (v == MSFM_NA) fputs("\tNA", o);
         else fprintf(o, "\t%.4f", msfm_decode(v));
@@ -983,7 +983,6 @@ int main_mrmp_summary(int argc, char *argv[]) {
     fputs("sample\tset\tpattern\tbeta\n", o);
     for (uint32_t r = 0; r < n_cells; ++r)
       for (uint32_t c = 0; c < ncol; ++c) {
-        if (!keep[c]) continue;
         uint16_t v = beta[(size_t)r * ncol + c];
         fprintf(o, "%s\t%s\tP%u\t", names[r], snames[set_of[c]],
                 c - col0[set_of[c]] + 1);
