@@ -1230,7 +1230,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
   no model of their own; `inspect --tree` shows them in place.
 
   Score with: methscope classify hg38_celltype_full.clfx query.cg</code></pre>
-    <p class="m">hg38/models · tag v11 · 154 MiB</p>
+    <p class="m">hg38/models · tag v12 · 154 MiB</p>
   </details>
   <details class="model" id="model-hg38_celltype_lite">
     <summary><code class="inl">hg38_celltype_lite.clfx</code> <span class="m">— Cell-type classifier (human, bank-lite) · 21 MiB</span></summary>
@@ -1285,7 +1285,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
   no model of their own; `inspect --tree` shows them in place.
 
   Score with: methscope classify hg38_celltype_lite.clfx query.cg</code></pre>
-    <p class="m">hg38/models · tag v11 · 21 MiB</p>
+    <p class="m">hg38/models · tag v12 · 21 MiB</p>
   </details>
   <details class="model" id="model-hg38_sex">
     <summary><code class="inl">hg38_sex.clfx</code> <span class="m">— Sex classifier · 30 KiB</span></summary>
@@ -1318,7 +1318,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
       features   2
         Xa_lo        weight=-13.9125     mean=0.24253
         Xa_hi        weight=13.6301      mean=0.752643</code></pre>
-    <p class="m">hg38/models · tag v11 · 30 KiB</p>
+    <p class="m">hg38/models · tag v12 · 30 KiB</p>
   </details>
   <details class="model" id="model-mm10_brain_full">
     <summary><code class="inl">mm10_brain_full.clfx</code> <span class="m">— Cell-type classifier (mouse brain, bank-full) · 64 MiB</span></summary>
@@ -1363,7 +1363,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
   no model of their own; `inspect --tree` shows them in place.
 
   Score with: methscope classify mm10_brain_full.clfx query.cg</code></pre>
-    <p class="m">mm10/models · tag v11 · 64 MiB</p>
+    <p class="m">mm10/models · tag v12 · 64 MiB</p>
   </details>
   <details class="model" id="model-mm10_brain_lite">
     <summary><code class="inl">mm10_brain_lite.clfx</code> <span class="m">— Cell-type classifier (mouse brain, bank-lite) · 13 MiB</span></summary>
@@ -1408,14 +1408,14 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
   no model of their own; `inspect --tree` shows them in place.
 
   Score with: methscope classify mm10_brain_lite.clfx query.cg</code></pre>
-    <p class="m">mm10/models · tag v11 · 13 MiB</p>
+    <p class="m">mm10/models · tag v12 · 13 MiB</p>
   </details>
 </section>
 <section class="card">
   <h2>Deconvolution references <span class="m">— <code class="inl">.msdref</code> — run with <code class="inl">deconv</code></span></h2>
   <details class="model" id="model-hg38_33celltypes">
     <summary><code class="inl">hg38_33celltypes.msdref</code> <span class="m">— Deconvolution reference, bulk-pooled · 528 MiB</span></summary>
-    <p><b>What it is.</b> 33 human cell types pooled from donor-resolved normal bulk WGBS, over the 7.9M CpGs that could ever separate some class subset (26.9% of hg38). The earlier companion to hg38_62celltypes and still the right choice when the query is itself sorted bulk; on single-cell-derived queries prefer the 62-type reference, whose immune compartment matches that population. It replaced hg38_65celltypes.refx, which was withdrawn -- the current methscope can neither read nor produce that format. 286 training samples grouped into 33 labels by a donor-resolved control sheet, pooled per class by read count (musum), then packed with deconv-build-ref at its default admission band 0.30,0.70.</p>
+    <p><b>What it is.</b> 33 human cell types pooled from donor-resolved normal bulk WGBS, over the 7.9M CpGs that could ever separate some class subset (26.9% of hg38). The earlier companion to hg38_62celltypes and still the right choice when the query is itself sorted bulk; on single-cell-derived queries prefer the 62-type reference, whose immune compartment matches that population. It replaced hg38_65celltypes.refx, which was withdrawn -- the current methscope can neither read nor produce that format. 286 training samples grouped into 33 labels by a donor-resolved control sheet, pooled per class by read count (musum), then packed with deconv-build-ref at its default admission band 0.30,0.70. Version 3 since model tag v12: it carries a validation confusion matrix, which `deconv --group-threshold` reads to report near-collinear classes under one joined label rather than splitting mass between columns the data cannot separate. It names CD4/CD8 T cells (0.43), macrophage and monocyte (0.23), dendritic cell and monocyte (0.17), bladder and prostate epithelium (0.12), and NK with CD8 T (0.10). The macrophage/monocyte entry is this reference's known limitation made machine-readable: its Macrophage class is in-vitro monocyte-derived, so a tissue-resident macrophage query has no matching column. The matrix was measured on a donor-held-out TWIN -- per label, every 4th donor by sample-id hash held out as mixture components, 480 mixtures of 2-5 classes pooled over 2^16 to 2^22 -- because a shipped build uses every donor and has none left to measure with. The sheet's own split column could not be used: it is a cohort flag, and only 9 of the 33 classes appear in it. The M/U block is byte-identical to the version-2 artifact it replaces; only the version word and the trailer differ.</p>
     <p><b>Source.</b> zhou-lab/methscope on HuggingFace -- bundles published alongside methscope-cli; each carries its own MRMP feature definition</p>
     <p><b>Citation.</b> Loyfer et al. 2023, Nature, doi:10.1038/s41586-022-05580-6; BLUEPRINT consortium; Zhou lab single-cell atlas 2025</p>
     <p><b>What <code class="inl">inspect</code> reports.</b></p>
@@ -1432,11 +1432,11 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
                Macrophage / Monocyte  0.229
                Dendritic.Cell / Monocyte  0.169
   measured     donor-held-out twin: per label every 4th donor by sample-id hash held out as mixture components, the rest pooled into the reference; 480 mixtures of 2-5 classes, pooled over 2^16-2^22; 20260919_human33_deconv</code></pre>
-    <p class="m">hg38/models · tag v11 · 528 MiB</p>
+    <p class="m">hg38/models · tag v12 · 528 MiB</p>
   </details>
   <details class="model" id="model-hg38_62celltypes">
     <summary><code class="inl">hg38_62celltypes.msdref</code> <span class="m">— Deconvolution reference · 1.4 GiB</span></summary>
-    <p><b>What it is.</b> 62 cell types over the 11.8M CpGs that could ever separate some class subset (40.1% of hg38), packed as uint16 M/U. The backbone is the Zhou single-cell atlas -- 60 pseudobulk cell types, early-embryonic syncytio- and villous trophoblast excluded -- plus Loyfer hepatocytes and BLUEPRINT granulocytes for the two compartments single cells do not cover. The single-cell backbone is the point: against a bulk-pooled reference whose immune compartment is sorted BLUEPRINT bulk, single-cell-derived immune mixtures misread badly (a known 70/30 macrophage/monocyte mixture came back 0.14/0.56, with the missing mass on mast cells and stroma), because a tissue-resident macrophage is not the in-vitro monocyte-derived cell the reference calls Macrophage. Here the same mixtures land within a few points of truth, and T cells resolve to memory/naive x CD4/CD8. No pattern budget is baked in: the solver rebuilds its pattern set per query from the CpGs that query measured. Per-class M/U pooled by read count (musum), then packed with deconv-build-ref at its default admission band 0.30,0.70. A row is kept only where at least one callable class is unmethylated AND at least one is methylated -- a necessary condition under every scope, so dropping the rest cannot remove a pattern a later rebuild would have found.</p>
+    <p><b>What it is.</b> 62 cell types over the 11.8M CpGs that could ever separate some class subset (40.1% of hg38), packed as uint16 M/U. The backbone is the Zhou single-cell atlas -- 60 pseudobulk cell types, early-embryonic syncytio- and villous trophoblast excluded -- plus Loyfer hepatocytes and BLUEPRINT granulocytes for the two compartments single cells do not cover. The single-cell backbone is the point: against a bulk-pooled reference whose immune compartment is sorted BLUEPRINT bulk, single-cell-derived immune mixtures misread badly (a known 70/30 macrophage/monocyte mixture came back 0.14/0.56, with the missing mass on mast cells and stroma), because a tissue-resident macrophage is not the in-vitro monocyte-derived cell the reference calls Macrophage. Here the same mixtures land within a few points of truth, and T cells resolve to memory/naive x CD4/CD8. No pattern budget is baked in: the solver rebuilds its pattern set per query from the CpGs that query measured. Per-class M/U pooled by read count (musum), then packed with deconv-build-ref at its default admission band 0.30,0.70. A row is kept only where at least one callable class is unmethylated AND at least one is methylated -- a necessary condition under every scope, so dropping the rest cannot remove a pattern a later rebuild would have found. Version 3 since model tag v12: it carries a validation confusion matrix, which `deconv --group-threshold` reads to report near-collinear classes under one joined label rather than splitting mass between columns the data cannot separate -- a group total is identified where its split is not. The pairs it names are the expected ones: naive CD4/CD8 T cells (0.29), colonic enterocyte and goblet (0.24), the CGE interneurons LAMP5/SNCG/VIP (0.22), muscle fibroblast and its adipogenic progenitor (0.20), NK CD16/CD56 (0.15), adrenal ZG and ZR/ZF (0.14), cortical IT L4/L5 (0.12), AT1/AT2 (0.12) and Beta/Delta (0.11). At a 0.15 threshold five pairs join; at 0.10, thirteen. The matrix was measured on a fold-held-out TWIN -- pools rebuilt from Zhou single cells over folds 1-9 with fold 0 held out as mixture components, Hepatocyte and Granulocyte held out by donor since they have no Zhou cells -- because a shipped build uses every cell and has none left to measure with. The M/U block is byte-identical to the version-2 artifact it replaces; only the version word and the trailer differ.</p>
     <p><b>Source.</b> zhou-lab/methscope on HuggingFace -- bundles published alongside methscope-cli; each carries its own MRMP feature definition</p>
     <p><b>Citation.</b> Loyfer et al. 2023, Nature, doi:10.1038/s41586-022-05580-6; BLUEPRINT consortium; Zhou lab single-cell atlas 2025</p>
     <p><b>What <code class="inl">inspect</code> reports.</b></p>
@@ -1453,7 +1453,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
                Ent_Co / Gob  0.242
                LAMP5 / SNCG  0.219
   measured     fold-held-out twin: Zhou single cells, folds 1-9 pooled into the reference, fold 0 held out as mixture components (Hepatocyte/Granulocyte donor-held-out); 480 mixtures of 2-5 classes, pooled over 2^16-2^22; 20260919_human_deconv</code></pre>
-    <p class="m">hg38/models · tag v11 · 1.4 GiB</p>
+    <p class="m">hg38/models · tag v12 · 1.4 GiB</p>
   </details>
   <details class="model" id="model-mm10_41celltypes">
     <summary><code class="inl">mm10_41celltypes.msdref</code> <span class="m">— Deconvolution reference (mouse brain) · 555 MiB</span></summary>
@@ -1474,7 +1474,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
                ANP / ASC  0.238
                CGE-Lamp5 / Unc5c  0.203
   measured     pooled over 2^16, 2^18, 2^20, 2^22; each class alone, held-out cells, 20260918_mouse_msdref</code></pre>
-    <p class="m">mm10/models · tag v11 · 555 MiB</p>
+    <p class="m">mm10/models · tag v12 · 555 MiB</p>
   </details>
 </section>
 <section class="card">
@@ -1505,7 +1505,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
       n_in       101
       n_hidden   512
       n_out      10000</code></pre>
-    <p class="m">hg38/models · tag v11 · 28 MiB</p>
+    <p class="m">hg38/models · tag v12 · 28 MiB</p>
   </details>
   <details class="model" id="model-hg38_wg">
     <summary><code class="inl">hg38_wg.updecx</code> <span class="m">— Upscaling decoder (whole genome) · 2.7 GiB</span></summary>
@@ -1548,7 +1548,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
       model bytes    2,848,683,944
       index checksum a21ad74e190c803f
       parameter sum  53ab3001c5a767c7</code></pre>
-    <p class="m">hg38/models · tag v11 · 2.7 GiB</p>
+    <p class="m">hg38/models · tag v12 · 2.7 GiB</p>
   </details>
   <details class="model" id="model-mm10_wg">
     <summary><code class="inl">mm10_wg.updecx</code> <span class="m">— Upscaling decoder (whole genome, mouse) · 1.9 GiB</span></summary>
@@ -1590,7 +1590,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
       model bytes    2,046,871,040
       index checksum ffb0a5ac1b36c70c
       parameter sum  3f20e431aeeead67</code></pre>
-    <p class="m">mm10/models · tag v11 · 1.9 GiB</p>
+    <p class="m">mm10/models · tag v12 · 1.9 GiB</p>
   </details>
 </section>
 <section class="card">
