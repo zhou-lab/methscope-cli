@@ -8,17 +8,17 @@
 <style>
   :root{
     --bg:#fcfdfe;--fg:#1a2028;--muted:#5b6672;--line:#e5e9ee;--soft:#eff2f6;--card:#ffffff;
-    --accent:#475569;--accent-2:#64748b;--accent-soft:#e9edf3;--on-accent:#ffffff;--code-bg:#131a24;--code-fg:#e8edf2;--cm:#7c8a99;--ok:#16a34a;--warn:#dc2626;
+    --accent:#9a3412;--accent-2:#c2410c;--accent-soft:#ffedd5;--on-accent:#ffffff;--code-bg:#131a24;--code-fg:#e8edf2;--cm:#7c8a99;--ok:#16a34a;--warn:#dc2626;
     --shadow:0 1px 2px rgba(20,30,45,.04),0 6px 20px rgba(20,30,45,.05);
   }
   @media (prefers-color-scheme:dark){:root{
     --bg:#0b0e13;--fg:#dce3ec;--muted:#8b97a6;--line:#212832;--soft:#11161e;--card:#141a22;
-    --accent:#94a3b8;--accent-2:#cbd5e1;--accent-soft:#1e293b;--on-accent:#0b1220;--code-bg:#0a0f17;--code-fg:#dce3ec;--cm:#6b7688;--ok:#4ade80;--warn:#f87171;
+    --accent:#fdba74;--accent-2:#fed7aa;--accent-soft:#431407;--on-accent:#0b1220;--code-bg:#0a0f17;--code-fg:#dce3ec;--cm:#6b7688;--ok:#4ade80;--warn:#f87171;
     --shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}}
-  :root[data-theme=light]{--bg:#fcfdfe;--fg:#1a2028;--muted:#5b6672;--line:#e5e9ee;--soft:#eff2f6;--card:#fff;--accent:#475569;--accent-2:#64748b;--accent-soft:#e9edf3;--on-accent:#ffffff;--code-bg:#131a24;--code-fg:#e8edf2;--cm:#7c8a99;--ok:#16a34a;--warn:#dc2626;--shadow:0 1px 2px rgba(20,30,45,.04),0 6px 20px rgba(20,30,45,.05);}
-  :root[data-theme=dark]{--bg:#0b0e13;--fg:#dce3ec;--muted:#8b97a6;--line:#212832;--soft:#11161e;--card:#141a22;--accent:#94a3b8;--accent-2:#cbd5e1;--accent-soft:#1e293b;--on-accent:#0b1220;--code-bg:#0a0f17;--code-fg:#dce3ec;--cm:#6b7688;--ok:#4ade80;--warn:#f87171;--shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}
+  :root[data-theme=light]{--bg:#fcfdfe;--fg:#1a2028;--muted:#5b6672;--line:#e5e9ee;--soft:#eff2f6;--card:#fff;--accent:#9a3412;--accent-2:#c2410c;--accent-soft:#ffedd5;--on-accent:#ffffff;--code-bg:#131a24;--code-fg:#e8edf2;--cm:#7c8a99;--ok:#16a34a;--warn:#dc2626;--shadow:0 1px 2px rgba(20,30,45,.04),0 6px 20px rgba(20,30,45,.05);}
+  :root[data-theme=dark]{--bg:#0b0e13;--fg:#dce3ec;--muted:#8b97a6;--line:#212832;--soft:#11161e;--card:#141a22;--accent:#fdba74;--accent-2:#fed7aa;--accent-soft:#431407;--on-accent:#0b1220;--code-bg:#0a0f17;--code-fg:#dce3ec;--cm:#6b7688;--ok:#4ade80;--warn:#f87171;--shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased;font-size:.94rem}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased;font-size:1rem}
   .wrap{max-width:1480px;margin:0 auto;padding:0 22px 44px}
   a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
   header{padding:24px 0 6px;margin:0}
@@ -83,14 +83,14 @@
   #agent-btn.done .ico::before{content:"✓";opacity:1}
   #gpu-btn:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
   #gpu-btn.done{color:var(--on-accent);background:var(--accent)}
-  .expand{color:var(--muted);margin:.5em 0 .4em;font-size:.88rem;max-width:82ch;line-height:1.45}
+  .expand{color:var(--fg);margin:.5em 0 .4em;font-size:.95rem;max-width:76ch;line-height:1.55}
   .expand b{color:var(--fg)}
   .links{font-size:.82rem;color:var(--muted);margin:.2em 0 0}
   .links a{font-weight:600}.links span{opacity:.4;margin:0 7px}
 
   /* --- horizontal tab bar: a page you scan, not one you navigate --- */
   .tabs{display:flex;flex-wrap:wrap;gap:2px;margin:14px 0 18px;border-bottom:1px solid var(--line)}
-  .tab{font:inherit;font-size:.86rem;font-weight:600;cursor:pointer;border:0;
+  .tab{font:inherit;font-size:.9rem;font-weight:600;cursor:pointer;border:0;
      border-bottom:2px solid transparent;background:none;color:var(--muted);
      padding:9px 12px;margin-bottom:-1px;transition:color .12s,border-color .12s}
   .tab:hover{color:var(--fg)}
@@ -119,31 +119,38 @@
      background:var(--card);padding:14px 15px;box-shadow:var(--shadow);
      transition:border-color .12s,transform .12s}
   .card:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));transform:translateY(-2px)}
-  .card h2{font-size:.97rem;margin:0 0 6px;letter-spacing:-.01em}
+  .card h2{font-size:1.04rem;margin:0 0 7px;letter-spacing:-.01em}
   .card h2 .m{color:var(--muted);font-weight:400;font-size:.79rem}
   /* reference tables on the Models tab */
-  .card table{border-collapse:collapse;width:100%;font-size:.84rem;margin:6px 0 10px}
+  .card table{border-collapse:collapse;width:100%;font-size:.88rem;margin:6px 0 10px}
   .card th,.card td{text-align:left;vertical-align:top;padding:4px 8px 4px 0;border-bottom:1px solid var(--line)}
   .card th{color:var(--muted);font-weight:600}
   .card td code,.card th code{font-size:.8rem}
-  .card h3{font-size:.8rem;margin:13px 0 6px;color:var(--fg);font-weight:700}
-  .card p{margin:0 0 9px;color:var(--muted);font-size:.83rem;line-height:1.5}
+  .card h3{font-size:.87rem;margin:14px 0 6px;color:var(--fg);font-weight:700}
+  /* Card prose is the CONTENT, so it takes --fg. It was --muted at .83rem,
+     which greyed out every explanation on the page and left only the bold
+     runs legible. max-width caps the measure: a column of this grid is
+     ~700px, which at this size is well past 100 characters a line. */
+  .card p{margin:0 0 10px;color:var(--fg);font-size:.9rem;line-height:1.62;max-width:74ch}
   .card p b,.card p i{color:var(--fg)}
   .card p+pre{margin-top:2px}
 
   pre,pre code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
   pre{position:relative;background:var(--code-bg);color:var(--code-fg);border-radius:8px;
-     padding:10px 11px;overflow-x:auto;font-size:.76rem;line-height:1.5;margin:0 0 9px}
+     padding:11px 12px;overflow-x:auto;font-size:.79rem;line-height:1.55;margin:0 0 10px}
   pre code{font-size:inherit}
   .card pre.res{background:var(--soft);color:var(--fg);border:1px solid var(--line)}
   /* coloured terminal captures keep the dark palette so a white decile digit
      stays visible; a plain-text result uses the lighter .res background */
   .card pre.res.term{background:var(--code-bg);color:var(--code-fg);border:1px solid var(--line)}
   .cm{color:var(--cm)}
-  .sub{color:#94a3b8;font-weight:700}          /* the methscope subcommand, highlighted */
-  a.sub{text-decoration:none;border-bottom:1px dotted #94a3b8}
-  a.sub:hover{color:#cbd5e1}
-  pre.help{font-size:.74rem}
+  /* The methscope subcommand inside a code block. Both themes keep a dark
+     code background, so this is ONE warm tone rather than a theme variable:
+     --accent goes near-black in light mode and would vanish here. */
+  .sub{color:#fdba74;font-weight:700}
+  a.sub{text-decoration:none;border-bottom:1px dotted #fdba74}
+  a.sub:hover{color:#fed7aa}
+  pre.help{font-size:.78rem}
   details.ref summary{cursor:pointer;font-size:.97rem;font-weight:600;letter-spacing:-.01em;list-style:none}
   details.ref summary::before{content:"▸ ";color:var(--muted)}
   details.ref[open] summary::before{content:"▾ "}
@@ -189,14 +196,14 @@
   .linecopy:hover{opacity:1;background:rgba(42,52,66,.98)}
   pre:has(.ln:hover) .copy{opacity:0}
   /* hover-tooltip on a filename token: the on-disk schematic pops next to it */
-  .tip{cursor:help;border-bottom:1px dotted #94a3b8}
+  .tip{cursor:help;border-bottom:1px dotted var(--accent-2)}
   .tip:hover{border-bottom-style:solid}
   #tipfloat{position:fixed;z-index:70;display:none;max-width:min(94vw,560px);max-height:72vh;
      overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow)}
   #tipfloat.on{display:block}
   #tipfloat figure.dia{margin:0;border:0}
   .note{margin:10px 0 0;padding:9px 11px;border-left:3px solid var(--accent);background:var(--soft);
-     border-radius:0 8px 8px 0;font-size:.79rem;color:var(--muted);line-height:1.5}
+     border-radius:0 8px 8px 0;font-size:.85rem;color:var(--fg);line-height:1.6;max-width:74ch}
   .note b{color:var(--fg)}
   .note.warn{border-left-color:var(--warn)}
 
@@ -207,7 +214,7 @@
   figure.dia pre{margin:0;background:var(--soft);color:var(--fg);border:0;
      border-bottom:1px solid var(--line);border-radius:9px 9px 0 0;padding:9px 11px;
      overflow-x:auto;font-size:.72rem;cursor:inherit}
-  figure.dia figcaption{margin:0;padding:8px 11px;font-size:.75rem;color:var(--muted);line-height:1.45}
+  figure.dia figcaption{margin:0;padding:9px 11px;font-size:.81rem;color:var(--fg);line-height:1.55;max-width:74ch}
   figure.dia figcaption b{color:var(--fg)}
   figure.dia .k{color:var(--accent-2);font-weight:600}
   figure.dia .c{color:var(--cm)}
