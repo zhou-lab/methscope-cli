@@ -15,6 +15,7 @@
 #include "msfm.h"
 #include "mrmp.h"
 #include "methscope.h"
+#include "assets.h"   /* the registry, the store root, per-file state */
 #include "index.h"        /* get_fname_index -- the resolve temp has a sibling .idx */
 
 #define NAMELEN 16
@@ -190,6 +191,61 @@ int ms_bundle_find(const char *path, const char *name, ms_bundle_entry_t *out) {
   }
   free(entries); fclose(fp);
   return found;
+}
+
+/* See bundle.h. Path first, name second -- never the other way round, so a
+ * local file can never be shadowed by a registry entry of the same name. */
+const char *ms_model_resolve(const char *spec, char **owned) {
+  if (owned) *owned = NULL;
+  if (!spec || !*spec) return spec;
+
+  struct stat st;
+  if (stat(spec, &st) == 0 && S_ISREG(st.st_mode)) return spec;
+
+  const yame_fetch_cfg_t *cfg = yame_default_fetch_cfg();
+  if (!cfg || !cfg->files) return spec;       /* no registry in this build */
+
+  /* Exact store_path wins over a basename, so an unambiguous spelling is
+   * always available if a basename ever becomes ambiguous. */
+  const yame_asset_file_t *hit = NULL;
+  int n_base = 0;
+  for (size_t i = 0; i < cfg->n_files; ++i) {
+    const yame_asset_file_t *f = &cfg->files[i];
+    if (!strcmp(f->store_path, spec)) { hit = f; n_base = 1; break; }
+    if (!strcmp(yame_file_name(f), spec)) { if (!hit) hit = f; ++n_base; }
+  }
+  if (!hit) return spec;                      /* not ours to explain */
+  if (n_base > 1) {
+    fprintf(stderr, "[methscope] %s names %d files in the catalogue; "
+            "give the store path instead\n", spec, n_base);
+    return NULL;
+  }
+
+  char root[4096], full[8448], advice[512];
+  yame_assets_root(NULL, cfg->tool_env, root, sizeof root);
+  snprintf(full, sizeof full, "%s/%s", root, hit->store_path);
+
+  switch (yame_file_state(root, hit)) {
+  case YAME_STORE_ABSENT:
+    fprintf(stderr, "[methscope] %s is not in the store yet; fetch it with:\n"
+            "  methscope fetch %s\n", hit->store_path, hit->store_path);
+    return NULL;
+  case YAME_STORE_STALE:
+    /* Warn and proceed. The file IS a model, just from an earlier release,
+     * and refusing would strand a run that was working yesterday. The advice
+     * carries the exact repair, so the choice stays the reader's. */
+    if (yame_store_state(cfg, hit->store_path, advice, sizeof advice),
+        advice[0])
+      fprintf(stderr, "[methscope] %s\n", advice);
+    break;
+  default:
+    break;
+  }
+
+  char *p = strdup(full);
+  if (!p) return NULL;
+  if (owned) *owned = p;
+  return p;
 }
 
 const char *ms_mrmp_resolve(const char *path, char **tmp_out) {

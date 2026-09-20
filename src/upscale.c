@@ -427,7 +427,9 @@ int main_upscale(int argc, char *argv[]) {
     else break;   /* too many positionals: the tail's own check reports it */
   }
   if (npos < 1 || npos > 2) return upscale_usage(stderr);
-  const char *model_path = pos[0];
+  char *model_owned = NULL;
+  const char *model_path = ms_model_resolve(pos[0], &model_owned);
+  if (!model_path) return 1;
   const char *input_path = (npos == 2) ? pos[1] : "-";
   /* A .cg is BGZF; writing it to a terminal fills the screen with binary and can
    * leave the tty in a strange state. A pipe or a redirect is fine and stays

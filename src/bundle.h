@@ -130,6 +130,27 @@ char *ms_bundle_kind(const char *path);
  * governs what a writer accepts as an output name. */
 int ms_path_is_bundle_ext(const char *path);
 
+/**
+ * Resolve a model ARGUMENT to a path to open.
+ *
+ * A spec that names an existing file is used exactly as given -- which is
+ * what every documented workflow does, since the page fetches with -c into
+ * the working directory for reproducibility. Anything else is a NAME: a
+ * basename (hg38_sex.clfx) or a store path (hg38/models/hg38_sex.clfx),
+ * looked up in this build's registry and taken from the shared store.
+ *
+ * The store copy is checked before it is handed back, which is the point: a
+ * model sitting at a digest this build does not pin is reported with the
+ * command that repairs it, and one that is not there at all stops the run
+ * with the line that fetches it rather than an open() failure.
+ *
+ * Returns the path to open, or NULL when it said why and the caller should
+ * stop. *owned, if non-NULL on return, is malloc'd and the caller frees it.
+ * A name this registry does not list is returned unchanged, so the opener
+ * reports it in its own words.
+ */
+const char *ms_model_resolve(const char *spec, char **owned);
+
 /* subcommands */
 int main_bundle(int argc, char *argv[]);
 int main_unbundle(int argc, char *argv[]);

@@ -674,7 +674,9 @@ int main_predict(int argc, char *argv[]) {
    * layout, so `classify --data x.msfm model.clfx` read the argument BEFORE
    * the model and died with "expected a .clfx bundle: x.msfm". With --data
    * there is exactly one positional and it is the model, at argv[i]. */
-  const char *model_arg = pos[0];
+  char *model_owned = NULL;
+  const char *model_arg = ms_model_resolve(pos[0], &model_owned);
+  if (!model_arg) return 1;
   const char *query_cg  = data_path ? NULL : pos[1];
   const char *ref_mrmp  = NULL;     /* mrmp path (loose arg, or the bundle path itself) */
   const char *model_name;           /* for error messages */

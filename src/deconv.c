@@ -88,6 +88,7 @@
 #include <stdio.h>
 #include <limits.h>
 #include "methscope.h"
+#include "bundle.h"   /* ms_model_resolve -- a model name resolves against the store */
 #include "cfile.h"
 #include "cdata.h"
 #include <pthread.h>
@@ -2104,7 +2105,10 @@ int main_deconv(int argc, char *argv[]) {
       "Usage: methscope deconv -o <out.tsv> <ref.msdref> <query.cg>\n");
     return 1;
   }
-  const char *rpath = pos[0], *qpath = pos[1];
+  char *rpath_owned = NULL;
+  const char *rpath = ms_model_resolve(pos[0], &rpath_owned);
+  if (!rpath) return 1;
+  const char *qpath = pos[1];
 
   d2ref_t R;
   d2ref_load(rpath, &R);
