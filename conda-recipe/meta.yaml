@@ -48,6 +48,22 @@ requirements:
     # libxgboost's, zlib's and libcurl's run_exports pin the runtime
     # automatically; listed for clarity
     - libxgboost
+    # The `yame` BINARY, which this package does not ship: methscope links
+    # libyame.a from the pinned submodule and emits no `yame` of its own, yet
+    # the documented Upscale and MRMP workflows call it to index, subset and
+    # view .cg stores. Declaring it here is what lets the docs say
+    # `conda install methscope` and nothing else.
+    #
+    # Floored, not pinned: unpinned, the solver may hand a reader a yame too
+    # old for the names this release's registry publishes -- conda yame 1.38
+    # answered "nothing in the catalogue is called hg38/models/
+    # hg38_62celltypes.msdref" against docs written for a newer one. No upper
+    # bound, so an env always takes the newest yame the channel has.
+    #
+    # 1.50 is the floor because it is the first yame that reads
+    # $METHSCOPE_DATA_HOME: before it, `yame hprint` reports the hg38
+    # coordinate track missing from a store methscope itself resolved.
+    - yame >=1.50
 
 test:
   commands:

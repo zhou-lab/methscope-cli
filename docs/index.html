@@ -293,12 +293,13 @@
     labels), so a query <code class="inl">.cg</code> runs directly — no separate annotation
     files.</p>
   <!-- example:10_install -->
-<pre data-norun="installs packages, run it yourself"><code><span class="cm"># conda — installs the `methscope` binary. Name `yame` too: the Upscale and</span>
-<span class="cm"># MRMP examples below call it to index, subset and view .cg stores, and it is a</span>
-<span class="cm"># separate package — methscope bundles YAME as a LIBRARY and ships no `yame`</span>
-<span class="cm"># binary of its own. (Models and the CpG coordinate reference come from</span>
-<span class="cm"># `methscope fetch`; yame is for handling the stores themselves.)</span>
-conda install -c zhou-lab -c conda-forge methscope <a class="sub" href="#ref-yame">yame</a>
+<pre data-norun="installs packages, run it yourself"><code><span class="cm"># conda — installs the `methscope` binary, and `yame` with it: methscope</span>
+<span class="cm"># declares yame as a runtime dependency, so one install covers both. It is a</span>
+<span class="cm"># separate package because methscope bundles YAME as a LIBRARY and ships no</span>
+<span class="cm"># `yame` binary of its own, and the Upscale and MRMP examples below call that</span>
+<span class="cm"># binary to index, subset and view .cg stores. (Models and the CpG coordinate</span>
+<span class="cm"># reference come from `methscope fetch`; yame is for the stores themselves.)</span>
+conda install -c zhou-lab -c conda-forge methscope
 
 <span class="cm"># optional, linux-64 only: adds a `methscope-cuda` binary with the CUDA</span>
 <span class="cm"># backend for `upscale-train`. Everything else — upscale, classify,</span>

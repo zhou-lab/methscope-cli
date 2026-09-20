@@ -1,12 +1,13 @@
 #!/bin/bash
 ## title: Install
 ## norun: installs packages, run it yourself
-# conda — installs the `methscope` binary. Name `yame` too: the Upscale and
-# MRMP examples below call it to index, subset and view .cg stores, and it is a
-# separate package — methscope bundles YAME as a LIBRARY and ships no `yame`
-# binary of its own. (Models and the CpG coordinate reference come from
-# `methscope fetch`; yame is for handling the stores themselves.)
-conda install -c zhou-lab -c conda-forge methscope yame
+# conda — installs the `methscope` binary, and `yame` with it: methscope
+# declares yame as a runtime dependency, so one install covers both. It is a
+# separate package because methscope bundles YAME as a LIBRARY and ships no
+# `yame` binary of its own, and the Upscale and MRMP examples below call that
+# binary to index, subset and view .cg stores. (Models and the CpG coordinate
+# reference come from `methscope fetch`; yame is for the stores themselves.)
+conda install -c zhou-lab -c conda-forge methscope
 
 # optional, linux-64 only: adds a `methscope-cuda` binary with the CUDA
 # backend for `upscale-train`. Everything else — upscale, classify,

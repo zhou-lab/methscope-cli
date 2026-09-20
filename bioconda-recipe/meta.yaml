@@ -32,6 +32,12 @@ requirements:
     # - ncurses   # uncomment if libyame.a linking pulls in ncurses symbols
   run:
     - libxgboost   # usually auto-added via libxgboost's own run_exports
+    # The `yame` binary this package does not ship but its docs call; see the
+    # in-repo conda-recipe for why the floor is 1.50 and why there is no upper
+    # bound. RELEASE ORDER: bioconda's yame stops at 1.44, so yame >=1.50 must
+    # land in bioconda BEFORE this recipe is submitted, or the package solves
+    # to nothing there.
+    - yame >=1.50
 
 test:
   commands:
