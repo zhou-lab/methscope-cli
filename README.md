@@ -37,7 +37,7 @@ methscope classify hg38_celltype_lite.clfx human_hg38_celltypes.cg
 ```
 
 The catalogue and the model tag are compiled into the binary — `methscope
---version` prints <!-- version:begin -->`(yame v1.49, models v11)`<!-- version:end --> — so a release fetches exactly the
+--version` prints <!-- version:begin -->`(yame v1.50, models v11)`<!-- version:end --> — so a release fetches exactly the
 models it documents, and nothing else needs to be installed. Every entry carries
 a pinned SHA-256, fetching is idempotent, and a `.cg`'s `.cg.idx` sibling rides
 along without being a second name to remember. See `methscope fetch -h` for the

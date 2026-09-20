@@ -51,8 +51,15 @@ case "$v" in *"models $tag)"*) ;; *) echo "--version tag '$v' != registry tag '$
 ## an empty store is silent; a store filled at a tag this binary has never
 ## heard of is reported as ahead, and the advice names methscope, not yame
 [ -z "$("$MS" fetch -l 2>&1 >/dev/null)" ] || { echo "empty store produced a state line"; exit 1; }
+## The FILE has to be on disk, not just named in the manifest. Since YAME
+## v1.50 the check is per file against its own digest: a manifest line for a
+## file you do not have is ABSENT (silent, same as an empty store), and only a
+## file present at a digest this build does not pin is stale. The old
+## directory-anchor check keyed on the manifest alone, so this fixture used to
+## name a file that never existed.
 mkdir -p "$d/store/hg38/models"
-echo "0000000000000000000000000000000000000000000000000000000000000000  nothing.clfx" \
+: > "$d/store/hg38/models/hg38_sex.clfx"
+echo "0000000000000000000000000000000000000000000000000000000000000000  hg38_sex.clfx" \
   > "$d/store/hg38/models/SHA256SUMS"
 msg=$("$MS" fetch -l 2>&1 >/dev/null || true)
 case "$msg" in *"[methscope fetch] hg38/models"*) ;; *) echo "foreign-tag store not reported: '$msg'"; exit 1;; esac

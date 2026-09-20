@@ -112,20 +112,21 @@ These are the mistakes that are not visible in the usage strings.
 
 Usage:
   methscope fetch                              browse the catalogue
-  methscope fetch [options] <name>[@tag] ...
+  methscope fetch [options] <name> ...
   methscope fetch [options] -u <url> -s <sha256> -o <dest>
 
 Naming:
-  A name is what the browser shows: hg38, hg38/KYCG, hg38/data,
-  EPIC. It is a scope -- `hg38` takes the unit and everything under
-  it, `hg38/data` takes the one directory. Narrow within it with -g.
+  A name is a store directory, as the browser shows it: hg38,
+  hg38/KYCG, hg38/data, EPIC. It takes that directory's own files --
+  `hg38` is the genome annotation, not the knowledgebase and models
+  beneath it; name those explicitly. Narrow within one with -g.
   A file resolves too, best written out: `hg38/data/test.cg`. The
   bare name works when only one directory publishes it.
   Several names may be given, separated by spaces or by commas --
   commas so a list fits an option that takes one argument. A
   directory named twice is taken once, and naming it whole absorbs a
   file picked out of it.
-  The registry's own <source>/<target> still resolves.
+  The pre-1.50 <source>/<target> spelling still resolves, for one release.
 
 Browsing:
   With no target on a terminal, opens a tree browser: species, then
@@ -154,17 +155,13 @@ Store:
 Mirror:
   $YAME_ASSETS_MIRROR=<scheme://host[:port]> downloads from a site that
   mirrors the public repositories, keeping each URL's path: the file at
-  https://github.com/zhou-lab/X/raw/v1/f is fetched from <mirror>/zhou-lab/X/raw/v1/f.
+  https://raw.githubusercontent.com/zhou-lab/X/v1/f is fetched from <mirror>/zhou-lab/X/v1/f.
   Every byte is still checked against the compiled-in digest.
 
 Options:
   -d <dir>          Store root, overriding the environment.
-  -t <tag>          Upstream tag, overriding the pinned one. Without a digest
-                    for that tag nothing can be verified, so this needs -k.
-  -k                Accept an unpinned tag (no anchor check). Files are still
-                    verified against the manifest that tag publishes.
-  -f                Re-download what is present, and overwrite a store that
-                    was populated from a different tag.
+  -f                Re-download what is present, and replace a file the store's
+                    manifest records at a different digest than this build pins.
   -l                Dump the registry as TSV and exit: one row per file, with
                     its size, digest, description and whether the store has it.
                     Takes the same <name> and -g a fetch does, so `-l -g
@@ -188,9 +185,9 @@ Options:
   -h                This help.
 
 Notes:
-  * A directory records which upstream tag filled it, in the SHA256SUMS
-    it keeps. A build pinned elsewhere refuses to overwrite it rather
-    than start a re-download war; -f overrules that.
+  * Each file is verified against the digest this build carries for it;
+    the SHA256SUMS a directory keeps records what was verified there.
+    A file recorded at another digest is stale and needs -f to replace.
   * `shasum -a 256 -c SHA256SUMS` in any store directory re-verifies it
     by hand, with none of this code involved.
   * Built with libcurl: fetch available.

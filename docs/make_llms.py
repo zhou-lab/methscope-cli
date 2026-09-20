@@ -104,19 +104,25 @@ These are the mistakes that are not visible in the usage strings.
 
 
 def model_table(ms):
-    """One line per catalogued model: the file, and its title from YAME's
-    assets.tsv. Both come from where the docs page's model cards get them --
-    `fetch -l` for what this binary actually pins, assets.tsv for the prose --
+    """One line per catalogued model: the file, and its title from the suite
+    file table. Both come from where the docs page's model cards get them --
+    `fetch -l` for what this binary actually pins, files.tsv for the prose --
     so this list cannot name a withdrawn file or miss a new one. It rotted
     once: llms.txt sat at the v9 set, naming two files v10 had withdrawn and
     none of the four bank classifiers."""
     import csv, os, subprocess, tempfile
-    tsv = os.path.join(HERE.parent, "YAME", "data", "assets.tsv")
+    ## The suite file table replaced YAME/data/assets.tsv at YAME v1.50: one
+    ## row per file, no header line, fixed columns. `fetch -l` carries no
+    ## title column, which is why the prose still comes from the table.
+    tsv = os.path.join(HERE.parent, "YAME", "tools", "registry", "files.tsv")
     title = {}
     with open(tsv) as fh:
-        for row in csv.DictReader((l for l in fh if not l.startswith("#")),
-                                  delimiter="\t"):
-            title[row["key"]] = row["title"]
+        for line in fh:
+            if line.startswith("#") or not line.strip():
+                continue
+            f = line.rstrip("\n").split("\t")
+            if len(f) >= 7:
+                title[os.path.basename(f[1])] = f[6]
     with tempfile.TemporaryDirectory() as d:
         env = dict(os.environ, METHSCOPE_DATA_HOME=d)
         out = subprocess.run([ms, "fetch", "-l"], env=env, capture_output=True,
@@ -126,8 +132,7 @@ def model_table(ms):
         t = line.split("\t")
         if not t[0].endswith("/models"):
             continue
-        key = t[4].split(".")[0]
-        lines.append("  %-24s %s" % (t[4], title.get(key, "")))
+        lines.append("  %-24s %s" % (t[4], title.get(t[4], "")))
     return "\n".join(lines)
 
 def main():

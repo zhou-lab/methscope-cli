@@ -25,13 +25,29 @@
  * registry.h is projected from the submodule's catalog, so the models the
  * docs name are, by construction, the ones this binary fetches. */
 static const yame_fetch_cfg_t ms_cfg = {
-  YAME_ASSETS, YAME_ASSETS_N, "methscope", "METHSCOPE_DATA_HOME"
+  MS_FILES, MS_FILES_N, "methscope", "METHSCOPE_DATA_HOME"
 };
 
-/* The tag the model directories are pinned at, for --version and the banner. */
+/* The tag the model directories are pinned at, for --version and the banner.
+ *
+ * The registry is a flat file list since YAME v1.50 -- no directory rows, no
+ * per-directory tag -- so the tag comes off any row that lands in
+ * hg38/models: yame_file_dirlen() gives that row's directory and
+ * yame_key_tag() the tag out of its source@tag:path key. Both model
+ * directories are pinned together, so hg38's answers for mm10 too; the
+ * emitter refuses a table where one directory spans two tags. */
 static const char *ms_models_tag(void) {
-  for (size_t i = 0; i < YAME_ASSETS_N; ++i)
-    if (strcmp(YAME_ASSETS[i].target, "hg38/models") == 0) return YAME_ASSETS[i].tag;
+  static const char dir[] = "hg38/models";
+  static char tag[32];
+  for (size_t i = 0; i < MS_FILES_N; ++i) {
+    const yame_asset_file_t *f = &MS_FILES[i];
+    if (yame_file_dirlen(f) != sizeof dir - 1) continue;
+    if (strncmp(f->store_path, dir, sizeof dir - 1)) continue;
+    /* yame_key_tag returns the length it WANTED, so a long tag is caught
+     * rather than silently truncated into the banner. */
+    if (yame_key_tag(f->key, tag, sizeof tag) > sizeof tag - 1) break;
+    return tag;
+  }
   return "?";
 }
 

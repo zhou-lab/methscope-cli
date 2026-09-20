@@ -60,7 +60,7 @@ OBJ += $(CUDA_OBJ)
 DEPFLAGS = -MMD -MP
 DEP = $(SRC:.c=.d)
 
-.PHONY: all clean clean-all dist yame-lib check-xgb check-updec2 test test-docs force-link registry docs
+.PHONY: all clean clean-all dist yame-lib yame-bin check-xgb check-updec2 test test-docs force-link registry docs inspect-snapshots
 
 all: $(PROG)
 
@@ -71,8 +71,9 @@ check-updec2: $(PROG)
 ## packs its own fixtures with yame from inline text, so this needs no network
 ## and no model store. Tests that DO want the shared store skip cleanly when
 ## YAME_DATA_HOME is unset.
-test: $(PROG) yame-lib
+test: $(PROG) yame-lib yame-bin
 	MS=./$(PROG) YAME=$(YAME_DIR)/yame XGB_PREFIX=$(XGB_PREFIX) bash test/run.sh
+	./tools/make_registry.sh --check
 	$(PYTHON) docs/build_models.py --check
 	$(PYTHON) docs/build_examples.py --check
 	$(PYTHON) docs/build_help.py --check
@@ -104,12 +105,23 @@ docs: $(PROG)
 	$(PYTHON) docs/make_llms.py ./$(PROG)
 	$(PYTHON) docs/build_readme.py ./$(PROG)
 
+## Recapture `methscope inspect` for every published model into
+## docs/inspect_snapshots.txt, which build_models.py renders into the Models
+## tab. This is the ONLY docs step that needs the artifacts -- they are 14 GB,
+## so it is deliberately outside `docs` and `test`, which read the committed
+## snapshot and stay offline. Run it after a model tag:
+##   make inspect-snapshots MODELS=/path/to/the/models
+MODELS ?= /mnt/isilon/zhou_lab/projects/20260726_HuggingFace_Models_git
+inspect-snapshots: $(PROG)
+	$(PYTHON) docs/capture_inspect.py $(MODELS)
+	$(PYTHON) docs/build_models.py
+
 ## The documented-workflow gate: runs every runnable docs/examples/*.sh on this
 ## checkout's binary, as a reader would. Needs the network ONCE (the sandbox
 ## persists and later runs only re-verify digests) and ~1.6 GB of memory, so
 ## it is deliberately not part of `make test` and never runs in CI or a conda
 ## build. On the HPC run it under sbatch (release SOP step 4).
-test-docs: $(PROG) yame-lib
+test-docs: $(PROG) yame-lib yame-bin
 	$(PYTHON) test/docs_gate.py
 
 ## The compiled catalogue behind `methscope fetch`. Projected from the
@@ -117,7 +129,7 @@ test-docs: $(PROG) yame-lib
 ## committed -- with every submodule bump; a bumped submodule with a stale
 ## registry.h silently pins the previous model tag. `--version` prints the tag.
 registry:
-	$(YAME_DIR)/tools/make_registry.sh --tool=methscope -o src/registry.h
+	./tools/make_registry.sh
 
 # Always (incrementally) rebuild libyame.a from the pinned submodule so the
 # static lib can never go stale relative to the checked-out YAME source.
@@ -125,6 +137,14 @@ yame-lib:
 	$(MAKE) -C $(YAME_DIR) lib
 
 $(YAME_LIB) $(HTSLIB): yame-lib
+
+# The tests drive the yame BINARY too: test/run.sh packs its fixtures with it,
+# and the docs examples call it. `lib` builds only libyame.a, so the binary has
+# to be asked for separately -- otherwise `make test` on a fresh clone dies at
+# run.sh's "no yame at ..." guard. Only the test targets need this; a plain
+# `make` links the static lib and never wants the binary.
+yame-bin:
+	$(MAKE) -C $(YAME_DIR) build
 
 src/%.o: src/%.c | check-xgb
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
