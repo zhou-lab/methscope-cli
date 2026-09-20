@@ -333,6 +333,28 @@ cd methscope-cli &amp;&amp; make          <span class="cm"># add CUDA=1 for the 
     inside a container build. The catalogue and the model tag are compiled into this binary
     (<code class="inl">methscope --version</code> prints both), so what a release documents is
     exactly what it fetches; no other tool needs to be installed.</p>
+  <p>A name is a <b>store path</b> &mdash; what the browser shows and where the file lands, the
+    same string in both places. A directory takes that directory's own files, so
+    <code class="inl">hg38</code> is the genome annotation and not the models beneath it; name
+    those explicitly.</p>
+  <table>
+    <tr><th>form</th><th>what it does</th></tr>
+    <tr><td><code class="inl">methscope fetch</code></td>
+        <td>browse the catalogue; piped or redirected it dumps TSV instead, so a script never
+            blocks on a keystroke</td></tr>
+    <tr><td><code class="inl">methscope fetch -l</code></td>
+        <td>the registry as TSV, with what the store already has</td></tr>
+    <tr><td><code class="inl">methscope fetch -n hg38/models</code></td>
+        <td>what that would fetch, and stop &mdash; exits 0, so a script can check first</td></tr>
+    <tr><td><code class="inl">methscope fetch -y hg38/models</code></td>
+        <td>the whole directory, unattended. A directory is confirmed first because a short name
+            can reach a lot; <code class="inl">-y</code> is that confirmation</td></tr>
+    <tr><td><code class="inl">methscope fetch hg38/models/hg38_sex.clfx</code></td>
+        <td>one file, no <code class="inl">-y</code> needed &mdash; naming the file IS the
+            confirmation, so a documented fetch line runs in a script as it stands</td></tr>
+    <tr><td><code class="inl">methscope fetch -y -g celltype hg38/models</code></td>
+        <td>only the files in that directory matching every term</td></tr>
+  </table>
   <p class="note"><b>Atomic downloads.</b> Downloads land on a <code class="inl">.part</code>
     sibling and are renamed only once the bytes verify, so an interrupted
     <code class="inl">methscope fetch</code> can never leave a short file that later reads as a
