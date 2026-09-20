@@ -502,6 +502,15 @@ Blood-Monocytes  Mono                0.949018   0.951083</code></pre>
     the model rows so it cannot drift from the cards. The same call runs a sex /
     age / any bundled model. Linear models store per-feature training means, so missing/sparse
     betas are imputed at classify time — accurate even at &lt;1% genome coverage.</p>
+  <p class="note"><b>Two scores, not one.</b> <code class="inl">confidence</code> is P(called
+    class) &mdash; how likely the winner is. <code class="inl">certainty</code> is
+    <code class="inl">1 - H(p)/log(K)</code>: the fraction of the initial ignorance the evidence
+    removed, 0 while the posterior is still flat over the K classes the node was deciding
+    between, 1 once it is settled. The two agree at the top, as all four rows above do, and
+    part company near the middle &mdash; a two-class call at P=0.6 reports confidence 0.600 and
+    certainty 0.029, because 1.96 of the 2 classes are still effectively in play. So read
+    <code class="inl">certainty</code> as how decisive the call was against its alternatives,
+    and threshold on it rather than on a posterior that has merely crossed 0.5.</p>
 </section>
 
 <section class="card">
@@ -655,8 +664,17 @@ identical</code></pre>
     (<code class="inl">hg38_celltype.clfx</code>, <code class="inl">mm10_celltype_brain.clfx</code>)
     are withdrawn at v10; earlier tags keep them for anything that cites them. Both kinds are
     trained across a coverage ladder with reads binarised, so one model spans sparse single cells
-    and deep pseudobulks, and a record too sparse to score comes back
-    <code class="inl">NA</code> rather than guessed.</p>
+    and deep pseudobulks. A bank applies no sparsity gate: a record too thin to score is still
+    given a label, and as coverage falls the call converges on the model's prior instead of
+    coming back <code class="inl">NA</code>. <code class="inl">certainty</code> is what separates
+    the two &mdash; one Loyfer NK cell against <code class="inl">hg38_celltype_lite.clfx</code>
+    reads <code class="inl">NK CD16</code> at certainty 0.988 with 20k covered CpGs, slips to
+    <code class="inl">NK CD56</code> at 0.613 by 2k, is simply wrong at 1k
+    (<code class="inl">B Mem</code>, 0.199), and below ~50 returns one constant prior row
+    (<code class="inl">B Mem</code>, 0.239) that does not change when the query does. One cell
+    at one downsampling seed, so read the shape rather than the thresholds. Only the
+    <code class="inl">violation</code> rule gates on coverage, through
+    <code class="inl">--min-patterns</code>; see below.</p>
   <p><b>The origin claim, on single-cell tumours.</b> Bian 2018 colorectal cancer, scored with
     <code class="inl">hg38_celltype_full.clfx</code> and split by site, because a colorectal cell
     sitting in liver must still read as colon. The 63-class bank separates enterocyte from goblet,
@@ -873,12 +891,15 @@ paste &lt;(yame rowsub -I 1_10000 human_hg38_test_calls.cg | yame unpack -a - | 
 <section class="card">
   <h2>Whole-block view <span class="m">— deciles, coordinate-aware</span></h2>
   <p>See the whole block first. The view is coordinate-aware — <code class="inl">hprint</code>
-    resolves the hg38 coordinate track from the store (fetched below), window-averaging 10,000 CpGs
-    into 60 columns; <code class="inl">-g</code> shows deciles.</p>
+    resolves the hg38 coordinate track from the store, window-averaging 10,000 CpGs
+    into 60 columns; <code class="inl">-g</code> shows deciles. The fetch below has no
+    <code class="inl">-c</code>, unlike the sample files above: this one is read <em>from the
+    store</em>, so putting it in the current directory leaves <code class="inl">hprint</code>
+    asking for <code class="inl">-R</code>.</p>
   <!-- example:44_upscale_view_block -->
 <pre><code>cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg &gt; three.cg
 yame index -s &lt;(printf 'truth\ninput\nreconstructed\n') three.cg
-methscope <a class="sub" href="#ref-fetch">fetch</a> -c hg38/cpg_nocontig.cr
+methscope <a class="sub" href="#ref-fetch">fetch</a> hg38/cpg_nocontig.cr
 yame hprint -g -r chr1:921649-1151482 -w 60 three.cg</code></pre>
 <!-- /example -->
   <pre class="res term"><code>                      chr1:921649-1151482 (10000 CpGs, win=167)
