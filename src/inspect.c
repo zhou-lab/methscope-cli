@@ -43,16 +43,27 @@ typedef struct __attribute__((packed)) {
   uint32_t mincov, reserved;
 } msdref_header_t;
 
+/* One confusable pair, for the summary line. */
+typedef struct { float v; uint32_t a, b; } confpair_t;
+
+static int confpair_cmp(const void *x, const void *y) {
+  float a = ((const confpair_t *)x)->v, b = ((const confpair_t *)y)->v;
+  return a < b ? 1 : a > b ? -1 : 0;   /* descending */
+}
+
 static int inspect_msdref(const char *path) {
   msdref_header_t h;
   struct stat st;
-  int fd = open(path, O_RDONLY);
-  if (fd < 0) idie("cannot open", path);
-  ssize_t got = read(fd, &h, sizeof h);
-  if (fstat(fd, &st) || close(fd)) idie("cannot stat", path);
-  if (got != (ssize_t)sizeof h || memcmp(h.magic, MSDREF_MAGIC, 7) ||
-      (h.version != 1 && h.version != 2) || !h.n_class || !h.n_keep ||
-      h.n_keep > h.n_row)
+  FILE *f = fopen(path, "rb");
+  if (!f) idie("cannot open", path);
+  size_t got = fread(&h, 1, sizeof h, f);
+  if (fstat(fileno(f), &st)) idie("cannot stat", path);
+  /* Version 3 adds the confusion trailer. Accepting only 1 and 2 here made
+     inspect refuse every v3 artifact outright -- including the shipped mouse
+     reference -- while deconv read them fine. */
+  if (got != sizeof h || memcmp(h.magic, MSDREF_MAGIC, 7) ||
+      (h.version != 1 && h.version != 2 && h.version != 3) ||
+      !h.n_class || !h.n_keep || h.n_keep > h.n_row)
     idie("invalid .msdref header", path);
   char rows[32], kept[32], bytes[32];
   printf("deconvolution reference  MSDREF1/v%u, %s bytes\n\n",
@@ -63,6 +74,67 @@ static int inspect_msdref(const char *path) {
   printf("  %-12s %.2f,%.2f\n", "qfilter", h.qlo, h.qhi);
   printf("  %-12s %.2f\n", "beta cut", h.beta_thr);
   printf("  %-12s %u\n", "min coverage", h.mincov);
+
+  /* The trailer sits after the names, the row index and the M/U block. Names
+     are NUL-terminated and variable, so they are read rather than skipped;
+     everything after them has a size the header gives exactly. */
+  if (h.version == 3) {
+    char **name = calloc(h.n_class, sizeof *name);
+    if (!name) idie("out of memory", NULL);
+    for (uint32_t k = 0; k < h.n_class; ++k) {
+      char buf[512]; size_t n = 0; int c;
+      while ((c = fgetc(f)) > 0) {
+        if (n + 1 >= sizeof buf) idie("class name too long", path);
+        buf[n++] = (char)c;
+      }
+      if (c < 0) idie("truncated class names", path);
+      buf[n] = 0;
+      name[k] = strdup(buf);
+    }
+    off_t skip = (off_t)h.n_keep * 4 + (off_t)h.n_class * h.n_keep * 2;
+    char tm[8]; uint32_t nc = 0, flags = 0, plen = 0;
+    if (fseeko(f, skip, SEEK_CUR) ||
+        fread(tm, 1, 8, f) != 8 || memcmp(tm, "MSDCONF1", 8) ||
+        fread(&nc, 4, 1, f) != 1 || fread(&flags, 4, 1, f) != 1 || nc != h.n_class)
+      idie("version 3 reference without a usable confusion trailer", path);
+    float *conf = malloc((size_t)nc * nc * sizeof *conf);
+    if (!conf) idie("out of memory", NULL);
+    if (fread(conf, sizeof *conf, (size_t)nc * nc, f) != (size_t)nc * nc)
+      idie("truncated confusion matrix", path);
+    size_t nz = 0;
+    for (size_t i = 0; i < (size_t)nc * nc; ++i) if (conf[i] > 0) ++nz;
+    printf("  %-12s %u x %u, %zu non-zero\n", "confusion", nc, nc, nz);
+    if (flags) printf("  %-12s 0x%x\n", "conf flags", flags);
+
+    /* The pairs a reader would group: the matrix is row-normalised, and
+       --group-threshold joins a,b when EITHER direction clears the cut. */
+    size_t np = 0;
+    confpair_t *pv = malloc((size_t)nc * nc * sizeof *pv);
+    if (!pv) idie("out of memory", NULL);
+    for (uint32_t a = 0; a < nc; ++a)
+      for (uint32_t b = a + 1; b < nc; ++b) {
+        float v = conf[(size_t)a * nc + b], w = conf[(size_t)b * nc + a];
+        if (w > v) v = w;
+        if (v > 0) { pv[np].v = v; pv[np].a = a; pv[np].b = b; ++np; }
+      }
+    qsort(pv, np, sizeof *pv, confpair_cmp);
+    for (size_t i = 0; i < np && i < 3; ++i)
+      printf("  %-12s %s / %s  %.3f\n", i ? "" : "most alike",
+             name[pv[i].a], name[pv[i].b], pv[i].v);
+
+    if (fread(&plen, 4, 1, f) == 1 && plen && plen < (1u << 20)) {
+      char *prov = malloc(plen + 1);
+      if (prov && fread(prov, 1, plen, f) == plen) {
+        prov[plen] = 0;
+        printf("  %-12s %s\n", "measured", prov);
+      }
+      free(prov);
+    }
+    free(pv); free(conf);
+    for (uint32_t k = 0; k < h.n_class; ++k) free(name[k]);
+    free(name);
+  }
+  fclose(f);
   return 0;
 }
 
@@ -395,7 +467,7 @@ bundle_report:;
     ms_mrmpset_t *ch = ms_mrmpset_open(path);
     printf("\ncontainer  MSBNDL1 (MethScope BuNDLe v1) - %d sections\n\n", nsec);
     printf("  tree     %s\n", path);
-    printf("  %-14s %u node(s) over a %u-set chain\n\n", "format", nsec - 2,
+    printf("  %-14s %u booster(s) over a %u-set chain\n\n", "format", nsec - 2,
            ch->n_sets);
     printf("  %3s  %-15s  %11s  %11s  %s\n", "#", "section", "offset",
            "size", "content");
@@ -421,7 +493,20 @@ bundle_report:;
     uint32_t nsoft = 0;
     for (uint32_t k = 0; k < ch->n_sets; ++k)
       if (ms_set_is_satellite(ch->name[k])) ++nsoft;
-    printf("\n  %-12s %8s %9s %10s  %s\n", "node", "classes", "booster",
+    /* Node names are dotted paths and reach 40+ characters on a deep chain.
+       A fixed %-12s pushed every later column out of line on exactly the rows
+       a reader most needs to compare, so the two name columns are measured
+       first and the table is laid out to fit. */
+    int wn = 4, wp = 6;                      /* "node", "parent" */
+    for (uint32_t k = 0; k < ch->n_sets; ++k) {
+      if (ms_set_is_satellite(ch->name[k])) continue;
+      int ln = (int)strlen(ch->name[k]);
+      const char *d = strrchr(ch->name[k], '.');
+      int lp = d ? (int)(d - ch->name[k]) : 2;
+      if (ln > wn) wn = ln;
+      if (lp > wp) wp = lp;
+    }
+    printf("\n  %-*s %8s %9s %10s  %s\n", wn, "node", "classes", "booster",
            "patterns", "parent");
     for (uint32_t k = 0; k < ch->n_sets; ++k) {
       if (ms_set_is_satellite(ch->name[k])) continue;
@@ -429,7 +514,7 @@ bundle_report:;
       if (ms_bundle_find(path, ch->name[k], &e)) blen = e.length;
       mrmp_top_t *t = ms_mrmp_top_read_at(path, ch->block_off[k], UINT32_MAX);
       const char *dot = strrchr(ch->name[k], '.');
-      char par[64]; snprintf(par, sizeof par, "%.*s",
+      char par[512]; snprintf(par, sizeof par, "%.*s",
                              dot ? (int)(dot - ch->name[k]) : 2,
                              dot ? ch->name[k] : "--");
       /* how much extra evidence its soft children lend it */
@@ -443,8 +528,11 @@ bundle_report:;
         ms_mrmp_top_free(st); ++ns;
       }
       char b1[32], b2[32], b3[32];
-      printf("  %-12s %8u %9s %10s  %s", ch->name[k], t->n_samples,
-             commafmt(blen, b1), commafmt(t->n_patterns, b2), par);
+      /* parent is padded only when a soft-child note follows it; otherwise it
+         is the last column and padding would leave trailing blanks. */
+      printf("  %-*s %8u %9s %10s  %-*s", wn, ch->name[k], t->n_samples,
+             commafmt(blen, b1), commafmt(t->n_patterns, b2),
+             ns ? wp : 0, par);
       if (ns) printf("   + %u soft, %s CpGs", ns, commafmt(scpg, b3));
       putchar('\n');
       ms_mrmp_top_free(t);
