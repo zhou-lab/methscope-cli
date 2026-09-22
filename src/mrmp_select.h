@@ -1,4 +1,8 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: LicenseRef-CHOP-Academic-BSD-2-Clause
+// Use of this software is available to academic and non-profit institutions
+// for research purposes under the 2-Clause BSD License; for use or transfers
+// to commercial entities, inquire with Dr. Wanding Zhou at zhouw3@chop.edu.
+// See the LICENSE file at the root of the repository for the full terms.
 /* Per-CpG selection for one MRMP set, applied PER BINSTRING.
  *
  * This is the cut that used to live outside the binary, as a q-filter in shell

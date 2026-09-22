@@ -46,8 +46,8 @@ test:
 
 about:
   home: https://github.com/zhou-lab/methscope-cli
-  license: AGPL-3.0-or-later
-  license_family: AGPL
+  license: LicenseRef-CHOP-Academic-BSD-2-Clause
+  license_family: OTHER
   license_file: LICENSE
   summary: "Sparse DNA methylome analysis via MRMP encoding (C CLI companion to the MethScope R package)"
   dev_url: https://github.com/zhou-lab/methscope-cli

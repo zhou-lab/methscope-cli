@@ -47,8 +47,8 @@ test:
 
 about:
   home: https://github.com/zhou-lab/methscope-cli
-  license: AGPL-3.0-or-later
-  license_family: AGPL
+  license: LicenseRef-CHOP-Academic-BSD-2-Clause
+  license_family: OTHER
   license_file: LICENSE
   summary: methscope with the CUDA upscale-training backend compiled in
   description: |

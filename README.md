@@ -2,7 +2,7 @@
 
 [![build](https://github.com/zhou-lab/methscope-cli/actions/workflows/conda-build.yml/badge.svg)](https://github.com/zhou-lab/methscope-cli/actions/workflows/conda-build.yml)
 [![conda](https://img.shields.io/conda/vn/zhou-lab/methscope?label=conda)](https://anaconda.org/zhou-lab/methscope)
-[![license](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
+[![license](https://img.shields.io/badge/license-BSD--2--Clause%20(academic)%20%2F%20commercial-blue.svg)](LICENSE)
 [![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fzhou-lab.github.io%2Fmethscope-cli%2Fcoverage.json)](scripts/coverage.sh)
 [![docs](https://img.shields.io/badge/docs-online-blueviolet)](https://zhou-lab.github.io/methscope-cli/)
 
@@ -228,8 +228,11 @@ the probabilities only; it needs a MethScope checkout + R.
 
 ## License
 
-GNU Affero General Public License v3.0 or later. See `LICENSE`.
-Copyright (c) 2025 Hongxiang Fu and Wanding Zhou.
+Use of this software is available to academic and non-profit institutions for
+research purposes under the 2-Clause BSD License; for use or transfers to
+commercial entities, inquire with Dr. Wanding Zhou at <zhouw3@chop.edu>.
+See `LICENSE` for the full terms.
+Copyright (C) 2025-present The Children's Hospital of Philadelphia.
 
 Vendored: `src/nnls.c` — Lawson–Hanson NNLS (C. Lawson & R. Hanson, JPL/SIAM;
 [netlib lawson-hanson](https://www.netlib.org/lawson-hanson/)), f2c-translated,

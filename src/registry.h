@@ -10,8 +10,12 @@
  * There is no directory row here -- a directory is the files whose store_path
  * sits in it -- and no anchor: each file is verified against its own digest.
  *
- * SPDX-License-Identifier: AGPL-3.0-or-later
- * Copyright (C) 2021-present Wanding Zhou
+ * SPDX-License-Identifier: LicenseRef-CHOP-Academic-BSD-2-Clause
+ * Use of this software is available to academic and non-profit institutions
+ * for research purposes under the 2-Clause BSD License; for use or transfers
+ * to commercial entities, inquire with Dr. Wanding Zhou at zhouw3@chop.edu.
+ * See the LICENSE file at the root of the repository for the full terms.
+ * Copyright (C) 2025-present The Children's Hospital of Philadelphia.
  */
 #ifndef _MS_REGISTRY_H
 #define _MS_REGISTRY_H
