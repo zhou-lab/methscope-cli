@@ -1,4 +1,4 @@
-{% set version = "0.10" %}
+{% set version = "0.12" %}
 
 package:
   name: methscope
@@ -13,7 +13,7 @@ source:
   #     --pattern 'methscope-cli-{{ version }}.tar.gz'
   #   sha256sum methscope-cli-{{ version }}.tar.gz
   url: https://github.com/zhou-lab/methscope-cli/releases/download/v{{ version }}/methscope-cli-{{ version }}.tar.gz
-  sha256: f0fa6071feda0ab287c04efa7d11f7ffec97b5efe36d20bf9d10d0ad578fcf9f
+  sha256: 79dc185af8597881ccc95529d0cfaf7e25f7423b1e7b3e55b0e656a86ef32612
 
 build:
   number: 0
@@ -34,9 +34,10 @@ requirements:
     - libxgboost   # usually auto-added via libxgboost's own run_exports
     # The `yame` binary this package does not ship but its docs call; see the
     # in-repo conda-recipe for why the floor is 1.50 and why there is no upper
-    # bound. RELEASE ORDER: bioconda's yame stops at 1.44, so yame >=1.50 must
-    # land in bioconda BEFORE this recipe is submitted, or the package solves
-    # to nothing there.
+    # bound. Satisfiable here since 2026-09-22: bioconda carries yame 1.51.
+    # It did not when the floor was written -- that channel had stopped at
+    # 1.44 -- which would have made this recipe solve to nothing, so check
+    # the channel rather than assuming whenever the floor moves again.
     - yame >=1.50
 
 test:
