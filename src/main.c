@@ -25,7 +25,11 @@
  * registry.h is projected from the submodule's catalog, so the models the
  * docs name are, by construction, the ones this binary fetches. */
 static const yame_fetch_cfg_t ms_cfg = {
-  MS_FILES, MS_FILES_N, "methscope", "METHSCOPE_DATA_HOME"
+  /* no_prompt = 0: on a terminal an ambiguous model name is offered as a
+   * menu rather than refused. Written out rather than left to the zero,
+   * because whether an analysis command may go interactive is a policy.
+   * Resolver-only -- `methscope fetch`'s browser is unaffected either way. */
+  MS_FILES, MS_FILES_N, "methscope", "METHSCOPE_DATA_HOME", 0
 };
 
 /* The tag the model directories are pinned at, for --version and the banner.

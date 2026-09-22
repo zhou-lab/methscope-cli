@@ -336,7 +336,7 @@ cd methscope-cli &amp;&amp; make          <span class="cm"># add CUDA=1 for the 
   <p>A name is a <b>store path</b> &mdash; what the browser shows and where the file lands, the
     same string in both places. A directory takes that directory's own files, so
     <code class="inl">hg38</code> is the genome annotation and not the models beneath it; name
-    those explicitly.</p>
+    those explicitly &mdash; or reach them all at once with <code class="inl">-R</code>.</p>
   <table>
     <tr><th>form</th><th>what it does</th></tr>
     <tr><td><code class="inl">methscope fetch</code></td>
@@ -354,6 +354,12 @@ cd methscope-cli &amp;&amp; make          <span class="cm"># add CUDA=1 for the 
             confirmation, so a documented fetch line runs in a script as it stands</td></tr>
     <tr><td><code class="inl">methscope fetch -y -g celltype hg38/models</code></td>
         <td>only the files in that directory matching every term</td></tr>
+    <tr><td><code class="inl">methscope fetch -y -R hg38</code></td>
+        <td>that directory <i>and everything beneath it</i> &mdash;
+            <code class="inl">hg38</code>, <code class="inl">hg38/data</code> and
+            <code class="inl">hg38/models</code> together, 16 files. Without
+            <code class="inl">-R</code> a bare <code class="inl">hg38</code> is the one
+            coordinate file</td></tr>
   </table>
   <p class="note"><b>Atomic downloads.</b> Downloads land on a <code class="inl">.part</code>
     sibling and are renamed only once the bytes verify, so an interrupted
@@ -1656,7 +1662,6 @@ Naming:
   commas so a list fits an option that takes one argument. A
   directory named twice is taken once, and naming it whole absorbs a
   file picked out of it.
-  The pre-1.50 &lt;source&gt;/&lt;target&gt; spelling still resolves, for one release.
 
 Browsing:
   With no target on a terminal, opens a tree browser: species, then
@@ -1692,6 +1697,10 @@ Options:
   -d &lt;dir&gt;          Store root, overriding the environment.
   -f                Re-download what is present, and replace a file the store's
                     manifest records at a different digest than this build pins.
+  -R                A directory name also takes every directory beneath it:
+                    `-R hg38` is hg38, hg38/KYCG, hg38/data and hg38/models.
+                    Without it a name is one directory's own files. Works
+                    with -l and -n, so `-n -R hg38` says what that reaches.
   -l                Dump the registry as TSV and exit: one row per file, with
                     its size, digest, description and whether the store has it.
                     Takes the same &lt;name&gt; and -g a fetch does, so `-l -g

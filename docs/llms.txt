@@ -126,7 +126,6 @@ Naming:
   commas so a list fits an option that takes one argument. A
   directory named twice is taken once, and naming it whole absorbs a
   file picked out of it.
-  The pre-1.50 <source>/<target> spelling still resolves, for one release.
 
 Browsing:
   With no target on a terminal, opens a tree browser: species, then
@@ -162,6 +161,10 @@ Options:
   -d <dir>          Store root, overriding the environment.
   -f                Re-download what is present, and replace a file the store's
                     manifest records at a different digest than this build pins.
+  -R                A directory name also takes every directory beneath it:
+                    `-R hg38` is hg38, hg38/KYCG, hg38/data and hg38/models.
+                    Without it a name is one directory's own files. Works
+                    with -l and -n, so `-n -R hg38` says what that reaches.
   -l                Dump the registry as TSV and exit: one row per file, with
                     its size, digest, description and whether the store has it.
                     Takes the same <name> and -g a fetch does, so `-l -g
