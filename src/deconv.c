@@ -232,7 +232,11 @@ int main_deconv_build_ref(int argc, char *argv[]) {
     else if (!strcmp(a, "--force")) force = 1;
     else if (!strcmp(a, "--keep-all")) keep_all = 1;
     else if (!strcmp(a, "--confusion") && i + 1 < argc) conf_path = argv[++i];
-    else if (!strcmp(a, "--mincov") && i + 1 < argc)
+    /* --mincov is the pre-0.10 spelling, kept as a silent alias for one
+     * release so recorded drivers keep running. mrmp-build renamed first;
+     * this and upscale-set-units were the two left behind. */
+    else if ((!strcmp(a, "--call-mindepth") || !strcmp(a, "--mincov"))
+             && i + 1 < argc)
       mincov = (uint32_t)strtoul(argv[++i], NULL, 10);
     else if (!strcmp(a, "--beta-threshold") && i + 1 < argc)
       beta_thr = atof(argv[++i]);
@@ -274,7 +278,8 @@ int main_deconv_build_ref(int argc, char *argv[]) {
 "  --qfilter LO,HI    The admission band baked into the row test. Default:\n"
 "                     0.30,0.70. Must match the solver's.\n"
 "  --beta-threshold B Call a class methylated above B. Default: 0.5.\n"
-"  --mincov N         A class is covered at N reads or more. Default: 1.\n"
+"  --call-mindepth N  A class is covered at N reads or more. Default: 1.\n"
+"                     (was --mincov, still accepted.)\n"
 "  --confusion FILE   Embed a validation confusion matrix, which is what\n"
 "                     `deconv --group-threshold` reads to decide which classes\n"
 "                     are reported under one label. Long-form TSV,\n"

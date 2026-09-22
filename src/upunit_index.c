@@ -226,7 +226,8 @@ static int usage(FILE *out) {
     "every CpG has a real membership and coverage is 100% by construction.\n\n"
     "  REF.cg                reference store\n"
     "  OUT.msui              output MSUIDX1 index\n\n"
-    "  --mincov N            min per-class coverage (default 1)\n"
+    "  --call-mindepth N     min per-class coverage (default 1)\n"
+    "                        (was --mincov, still accepted.)\n"
     "  --beta-threshold B    call a class methylated above B (default 0.5).\n"
     "                        Must match mrmp-build's.\n"
     "  --unit-cpgs N         target CpGs per unit (default 16384)\n"
@@ -243,8 +244,11 @@ int main_upscale_set_units(int argc, char **argv) {
   for (int i = 1; i < argc; ++i) {
     if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
       return usage(stdout);
-    } else if (!strcmp(argv[i], "--mincov") && i + 1 < argc) {
-      const char *e; uint64_t x = parse_u64(argv[++i], &e, "--mincov");
+    /* --mincov is the pre-0.10 spelling, kept as a silent alias for one
+     * release so recorded drivers keep running. */
+    } else if ((!strcmp(argv[i], "--call-mindepth") ||
+                !strcmp(argv[i], "--mincov")) && i + 1 < argc) {
+      const char *e; uint64_t x = parse_u64(argv[++i], &e, "--call-mindepth");
       if (*e || !x || x > UINT32_MAX) fail("invalid --mincov");
       mincov = (uint32_t)x;
     } else if (!strcmp(argv[i], "--beta-threshold") && i + 1 < argc) {
