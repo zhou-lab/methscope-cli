@@ -423,9 +423,16 @@ static void *worker(void *arg) {
     net_free(&net); free(best);
     pthread_mutex_lock(&J->lock);
     J->unit_mae[ui] = bestmae; J->unit_step[ui] = beststep; ++J->done;
+    /* Counts only. This used to print `bestmae`, the MAE of whichever unit
+     * happened to finish tenth -- units are handed out dynamically, so with
+     * several threads that is a different unit every run and the number moved
+     * even though the training is deterministic (the .updecx is bit-identical
+     * across thread counts, verified). A value sampled from a race is not a
+     * trend; the summary over every unit is printed after the join, where
+     * completion order cannot matter. */
     if (J->done % 10 == 0 || J->done == J->ih->n_units)
-      fprintf(stderr, "[methscope] upscale-train: units %u/%u (resumed=%u) last_val_mae=%.6f\n",
-              J->done, J->ih->n_units, J->resumed, bestmae);
+      fprintf(stderr, "[methscope] upscale-train: units %u/%u (resumed=%u)\n",
+              J->done, J->ih->n_units, J->resumed);
     pthread_mutex_unlock(&J->lock);
 
   cleanup:
@@ -644,6 +651,33 @@ int ms_upunit_train_cpu(const ms_upunit_config_t *c) {
     if (pthread_create(&tid[t], NULL, worker, &J)) cdie("cannot start worker thread");
   for (unsigned t = 0; t < nth; ++t) pthread_join(tid[t], NULL);
   free(tid); pthread_mutex_destroy(&J.lock);
+
+  /* The validation summary, computed after the join over every unit in index
+   * order, so it cannot depend on which thread finished what. Median as well
+   * as mean because a few hard units drag the mean, and the median is what a
+   * typical unit achieved. */
+  {
+    float *srt = xmal((size_t)ih->n_units * 4);
+    double sum = 0;
+    for (uint32_t ui = 0; ui < ih->n_units; ++ui) {
+      srt[ui] = J.unit_mae[ui];
+      sum += J.unit_mae[ui];
+    }
+    for (uint32_t i = 1; i < ih->n_units; ++i) {   /* insertion sort; n ~ 100 */
+      float v = srt[i]; uint32_t j = i;
+      while (j && srt[j - 1] > v) { srt[j] = srt[j - 1]; --j; }
+      srt[j] = v;
+    }
+    if (ih->n_units) {
+      float med = (ih->n_units % 2) ? srt[ih->n_units / 2]
+                : (srt[ih->n_units / 2 - 1] + srt[ih->n_units / 2]) / 2;
+      fprintf(stderr, "[methscope] upscale-train: val MAE over %u units: "
+              "mean %.6f, median %.6f, worst %.6f\n", ih->n_units,
+              sum / ih->n_units, med, srt[ih->n_units - 1]);
+    }
+    free(srt);
+  }
+
   free(all_bias); free(X);
 
   /* assemble the bare UPDEC2 from the checkpoints */
