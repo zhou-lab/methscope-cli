@@ -8,15 +8,15 @@
 <style>
   :root{
     --bg:#fcfdfe;--fg:#1a2028;--muted:#5b6672;--line:#e5e9ee;--soft:#eff2f6;--card:#ffffff;
-    --accent:#9a3412;--accent-2:#c2410c;--accent-soft:#ffedd5;--on-accent:#ffffff;--code-bg:#131a24;--code-fg:#e8edf2;--cm:#7c8a99;--ok:#16a34a;--warn:#dc2626;
+    --accent:#1e3a8a;--accent-2:#1d4ed8;--accent-soft:#dbeafe;--on-accent:#ffffff;--code-bg:#131a24;--code-fg:#e8edf2;--cm:#7c8a99;--ok:#16a34a;--warn:#dc2626;
     --shadow:0 1px 2px rgba(20,30,45,.04),0 6px 20px rgba(20,30,45,.05);
   }
   @media (prefers-color-scheme:dark){:root{
     --bg:#0b0e13;--fg:#dce3ec;--muted:#8b97a6;--line:#212832;--soft:#11161e;--card:#141a22;
-    --accent:#fdba74;--accent-2:#fed7aa;--accent-soft:#431407;--on-accent:#0b1220;--code-bg:#0a0f17;--code-fg:#dce3ec;--cm:#6b7688;--ok:#4ade80;--warn:#f87171;
+    --accent:#93c5fd;--accent-2:#bfdbfe;--accent-soft:#172554;--on-accent:#0b1220;--code-bg:#0a0f17;--code-fg:#dce3ec;--cm:#6b7688;--ok:#4ade80;--warn:#f87171;
     --shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}}
-  :root[data-theme=light]{--bg:#fcfdfe;--fg:#1a2028;--muted:#5b6672;--line:#e5e9ee;--soft:#eff2f6;--card:#fff;--accent:#9a3412;--accent-2:#c2410c;--accent-soft:#ffedd5;--on-accent:#ffffff;--code-bg:#131a24;--code-fg:#e8edf2;--cm:#7c8a99;--ok:#16a34a;--warn:#dc2626;--shadow:0 1px 2px rgba(20,30,45,.04),0 6px 20px rgba(20,30,45,.05);}
-  :root[data-theme=dark]{--bg:#0b0e13;--fg:#dce3ec;--muted:#8b97a6;--line:#212832;--soft:#11161e;--card:#141a22;--accent:#fdba74;--accent-2:#fed7aa;--accent-soft:#431407;--on-accent:#0b1220;--code-bg:#0a0f17;--code-fg:#dce3ec;--cm:#6b7688;--ok:#4ade80;--warn:#f87171;--shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}
+  :root[data-theme=light]{--bg:#fcfdfe;--fg:#1a2028;--muted:#5b6672;--line:#e5e9ee;--soft:#eff2f6;--card:#fff;--accent:#1e3a8a;--accent-2:#1d4ed8;--accent-soft:#dbeafe;--on-accent:#ffffff;--code-bg:#131a24;--code-fg:#e8edf2;--cm:#7c8a99;--ok:#16a34a;--warn:#dc2626;--shadow:0 1px 2px rgba(20,30,45,.04),0 6px 20px rgba(20,30,45,.05);}
+  :root[data-theme=dark]{--bg:#0b0e13;--fg:#dce3ec;--muted:#8b97a6;--line:#212832;--soft:#11161e;--card:#141a22;--accent:#93c5fd;--accent-2:#bfdbfe;--accent-soft:#172554;--on-accent:#0b1220;--code-bg:#0a0f17;--code-fg:#dce3ec;--cm:#6b7688;--ok:#4ade80;--warn:#f87171;--shadow:0 1px 2px rgba(0,0,0,.25),0 8px 26px rgba(0,0,0,.30);}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased;font-size:1rem}
   .wrap{max-width:1480px;margin:0 auto;padding:0 22px 44px}
@@ -145,11 +145,13 @@
   .card pre.res.term{background:var(--code-bg);color:var(--code-fg);border:1px solid var(--line)}
   .cm{color:var(--cm)}
   /* The methscope subcommand inside a code block. Both themes keep a dark
-     code background, so this is ONE warm tone rather than a theme variable:
-     --accent goes near-black in light mode and would vanish here. */
-  .sub{color:#fdba74;font-weight:700}
-  a.sub{text-decoration:none;border-bottom:1px dotted #fdba74}
-  a.sub:hover{color:#fed7aa}
+     code background, so this is ONE light tint rather than a theme variable:
+     --accent goes near-black in light mode and would vanish here. It is the
+     page's own blue at dark-mode weight, so it belongs to the palette
+     without depending on which theme is active. */
+  .sub{color:#93c5fd;font-weight:700}
+  a.sub{text-decoration:none;border-bottom:1px dotted #93c5fd}
+  a.sub:hover{color:#bfdbfe}
   pre.help{font-size:.78rem}
   details.ref summary{cursor:pointer;font-size:.97rem;font-weight:600;letter-spacing:-.01em;list-style:none}
   details.ref summary::before{content:"▸ ";color:var(--muted)}
