@@ -16,7 +16,7 @@ methscope mrmp-build --bank --resolvers all --min-pattern-cpgs 2000 \
   --anneal-min-seg 10000,3000,1000 --max-depth 24 \
   --resolver-cache $B/cache \
   --cell-store $STORE --cell-labels $CLAB --calib-threads $T \
-  --force $REF $B/bank.mrmp                  # _lite: --min-pattern-cpgs 500 --resolvers 100
+  --force $REF $B/bank.mrmp                  # _lite: --min-pattern-cpgs 500 --resolvers 150
 
 yame subset -l $TRIDS -o $B/train.cg $STORE
 yame index -s $TRIDS $B/train.cg

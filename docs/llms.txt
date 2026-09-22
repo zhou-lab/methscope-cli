@@ -767,7 +767,8 @@ Options:
   --qfilter LO,HI    The admission band baked into the row test. Default:
                      0.30,0.70. Must match the solver's.
   --beta-threshold B Call a class methylated above B. Default: 0.5.
-  --mincov N         A class is covered at N reads or more. Default: 1.
+  --call-mindepth N  A class is covered at N reads or more. Default: 1.
+                     (was --mincov, still accepted.)
   --confusion FILE   Embed a validation confusion matrix, which is what
                      `deconv --group-threshold` reads to decide which classes
                      are reported under one label. Long-form TSV,
@@ -1034,7 +1035,8 @@ every CpG has a real membership and coverage is 100% by construction.
   REF.cg                reference store
   OUT.msui              output MSUIDX1 index
 
-  --mincov N            min per-class coverage (default 1)
+  --call-mindepth N     min per-class coverage (default 1)
+                        (was --mincov, still accepted.)
   --beta-threshold B    call a class methylated above B (default 0.5).
                         Must match mrmp-build's.
   --unit-cpgs N         target CpGs per unit (default 16384)

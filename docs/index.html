@@ -601,7 +601,7 @@ methscope <a class="sub" href="#ref-inspect">inspect</a> hg38_sex.clfx</code></p
     simplified for the page — the flags are load-bearing and a reader who drops them gets a
     different model. The whole difference between <code class="inl">_lite</code> and
     <code class="inl">_full</code> is three flags: <code class="inl">--min-pattern-cpgs 500
-    --resolvers 100</code> on the bank (the 100 class pairs with the thinnest hard-block
+    --resolvers 150</code> on the bank (the 150 class pairs with the thinnest hard-block
     footprint get a resolver, instead of every pair) and <code class="inl">-n 100</code> on
     the booster. The driver writes <code class="inl">bank.clfx</code>; it is renamed when
     staged.</p>
@@ -621,7 +621,7 @@ methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --bank --resolver
   --anneal-min-seg 10000,3000,1000 --max-depth 24 \
   --resolver-cache $B/cache \
   --cell-store $STORE --cell-labels $CLAB --calib-threads $T \
-  --force $REF $B/bank.mrmp                  <span class="cm"># _lite: --min-pattern-cpgs 500 --resolvers 100</span>
+  --force $REF $B/bank.mrmp                  <span class="cm"># _lite: --min-pattern-cpgs 500 --resolvers 150</span>
 
 yame subset -l $TRIDS -o $B/train.cg $STORE
 yame index -s $TRIDS $B/train.cg
@@ -2297,7 +2297,8 @@ Options:
   --qfilter LO,HI    The admission band baked into the row test. Default:
                      0.30,0.70. Must match the solver's.
   --beta-threshold B Call a class methylated above B. Default: 0.5.
-  --mincov N         A class is covered at N reads or more. Default: 1.
+  --call-mindepth N  A class is covered at N reads or more. Default: 1.
+                     (was --mincov, still accepted.)
   --confusion FILE   Embed a validation confusion matrix, which is what
                      `deconv --group-threshold` reads to decide which classes
                      are reported under one label. Long-form TSV,
@@ -2560,7 +2561,8 @@ every CpG has a real membership and coverage is 100% by construction.
   REF.cg                reference store
   OUT.msui              output MSUIDX1 index
 
-  --mincov N            min per-class coverage (default 1)
+  --call-mindepth N     min per-class coverage (default 1)
+                        (was --mincov, still accepted.)
   --beta-threshold B    call a class methylated above B (default 0.5).
                         Must match mrmp-build's.
   --unit-cpgs N         target CpGs per unit (default 16384)
