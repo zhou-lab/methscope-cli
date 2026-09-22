@@ -1,5 +1,11 @@
 # methscope-cli
 
+[![build](https://github.com/zhou-lab/methscope-cli/actions/workflows/conda-build.yml/badge.svg)](https://github.com/zhou-lab/methscope-cli/actions/workflows/conda-build.yml)
+[![conda](https://img.shields.io/conda/vn/zhou-lab/methscope?label=conda)](https://anaconda.org/zhou-lab/methscope)
+[![license](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
+[![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fzhou-lab.github.io%2Fmethscope-cli%2Fcoverage.json)](scripts/coverage.sh)
+[![docs](https://img.shields.io/badge/docs-online-blueviolet)](https://zhou-lab.github.io/methscope-cli/)
+
 Pure-C command-line tool for ultra-fast analysis of sparse DNA methylomes via
 Most Recurrent Methylation Pattern (MRMP) encoding. methscope-cli is the
 command-line counterpart of the [MethScope](https://github.com/zhou-lab/MethScope)
