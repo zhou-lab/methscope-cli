@@ -62,7 +62,8 @@ static int usage(FILE *out) {
   ms_help(out,
     "Usage: methscope upscale-train -i DATA.msur --units UNITS.msui\n"
     "       --mrmp TOP1000.mrmp -o MODEL.updecx --work-dir DIR [options]\n\n"
-    "Train whole-genome UPDEC2 processing units on CUDA. Each MRMP contributes\n"
+    "Train whole-genome UPDEC2 processing units. CPU by default; --device\n"
+    "selects a CUDA device in a CUDA build. Each MRMP contributes\n"
     "beta plus log1p(observed-CpG count); count zero represents missingness.\n"
     "\n"
     "Required:\n"

@@ -90,6 +90,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>   /* isatty -- progress only where it can be redrawn */
 #include <limits.h>
 #include "methscope.h"
 #include "bundle.h"   /* ms_model_resolve -- a model name resolves against the store */
@@ -367,12 +368,18 @@ int main_deconv_build_ref(int argc, char *argv[]) {
       mrow[r] = (uint16_t)((m << 8) | u);
     }
     free_cdata(&c);
-    fprintf(stderr, "\r[methscope] deconv-build-ref: reading %u/%u",
-            k + 1, n_class);
-    fflush(stderr);
+    /* Carriage returns only make sense where something redraws them. Into a
+     * log (2>err.txt) the four updates landed on one unreadable line, so the
+     * progress is skipped entirely when stderr is not a terminal -- the
+     * summary that follows says the same thing once. */
+    if (isatty(2)) {
+      fprintf(stderr, "\r[methscope] deconv-build-ref: reading %u/%u",
+              k + 1, n_class);
+      fflush(stderr);
+    }
   }
   bgzf_close(cf.fh);
-  fputc('\n', stderr);
+  if (isatty(2)) fputc('\n', stderr);   /* close the \r line, if there was one */
   if (n_row > 0xFFFFFFFFull) d2die("row space exceeds uint32", ref);
 
   /* Which rows survive. One pass, and the counters are the build's whole

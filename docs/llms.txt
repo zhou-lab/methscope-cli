@@ -1048,7 +1048,8 @@ every CpG has a real membership and coverage is 100% by construction.
 Usage: methscope upscale-train -i DATA.msur --units UNITS.msui
        --mrmp TOP1000.mrmp -o MODEL.updecx --work-dir DIR [options]
 
-Train whole-genome UPDEC2 processing units on CUDA. Each MRMP contributes
+Train whole-genome UPDEC2 processing units. CPU by default; --device
+selects a CUDA device in a CUDA build. Each MRMP contributes
 beta plus log1p(observed-CpG count); count zero represents missingness.
 
 Required:
