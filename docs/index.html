@@ -559,11 +559,19 @@ methscope <a class="sub" href="#ref-inspect">inspect</a> hg38_sex.clfx</code></p
 <!-- /example -->
   <pre class="res"><code>container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 30,931 bytes
 
+  bundle     hg38_sex.clfx
+
     #  section               offset         size  content
   ---  ---------------  -----------  -----------  --------------------------------
     0  mrmp                       0       30,653  YAME .cm mask, 3 states
     1  kind                  30,761            8  "logistic" framework mark
     2  model                 30,769          154  methscope-linear text spec
+
+  [0] mrmp       MRMP feature definition (YAME .cm)
+      states     3
+
+  [1] kind       bundle framework mark
+      value      logistic
 
   [2] model      logistic linear classifier - run via `classify`
       method     logistic
@@ -799,9 +807,12 @@ methscope <a class="sub" href="#ref-fetch">fetch</a> -c hg38/data/human_hg38_imm
 methscope <a class="sub" href="#ref-fetch">fetch</a> -c hg38/models/hg38_62celltypes.msdref
 methscope <a class="sub" href="#ref-deconv">deconv</a> hg38_62celltypes.msdref human_hg38_immune_mixture.cg</code></pre>
 <!-- /example -->
-  <pre class="res"><code>cell                  class       fraction
+  <pre class="res"><code>deconv: reference v3, 62 classes x 11798286 kept rows (1463 MB incl. depth), qfilter 0.30,0.70
+deconv: confusion trailer present -- fold-held-out twin: Zhou single cells, folds 1-9 …
+cell                  class       fraction
 mac70_mono30_2pow22   Macrophage  0.696336
 mac70_mono30_2pow22   Mono        0.303664
+…
 cd4_70_cd8_30_2pow22  Tmem_CD4    0.498298
 cd4_70_cd8_30_2pow22  Tmem_CD8    0.268361
 …</code></pre>
@@ -994,7 +1005,9 @@ mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
 methscope <a class="sub" href="#ref-fetch">fetch</a> -c hg38/data/human_hg38_40_celltypes_chr20.cg
 methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --force human_hg38_40_celltypes_chr20.cg chr20.mrmp</code></pre>
 <!-- /example -->
-  <pre class="res"><code>root  40 classes | 261 patterns | 3,787 CpGs
+  <pre class="res"><code>mrmp-build: 40 classes, one MRMP over all of them (a tree of one level)
+root  40 classes | 261 patterns | 3,787 CpGs
+  split threshold: none (flat) -> 1 group(s)
   1 node(s), 16,792 bytes -> chr20.mrmp</code></pre>
   <!-- example:51_upscale_train_featurize -->
 <pre><code><span class="cm"># 2. featurize the truth atlas -&gt; sampling/truth msur</span>
@@ -1006,8 +1019,10 @@ wrote chr20.msur and chr20.msur.tsv</code></pre>
 <pre><code><span class="cm"># 3. group CpGs into processing units</span>
 methscope <a class="sub" href="#ref-upscale-set-units">upscale-set-units</a> --unit-cpgs 4096 human_hg38_40_celltypes_chr20.cg <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></code></pre>
 <!-- /example -->
-  <pre class="res"><code>units=109 pure=13 mixed=67 PNA=29 oversized=7
-unit CpGs min=1380 mean=7096.1 max=261816</code></pre>
+  <pre class="res"><code>CpGs=773477 real=657409 PNA=116068 memberships=116450
+units=109 pure=13 mixed=67 PNA=29 oversized=7
+unit CpGs min=1380 mean=7096.1 max=261816
+wrote chr20.msui (5891452 bytes) and chr20.msui.tsv</code></pre>
   <p><code class="inl">inspect</code> reads every build artifact, detected from its magic.</p>
   <!-- example:53_upscale_train_inspect_msui -->
 <pre><code>methscope <a class="sub" href="#ref-inspect">inspect</a> <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span></code></pre>
@@ -1088,8 +1103,9 @@ unit CpGs min=1380 mean=7096.1 max=261816</code></pre>
   <pre class="res"><code>P=261 features=beta+count input=522 trunk=none pure=16 mixed=factor/32 activation=linear
 backend=cpu
 CPU backend; cells=40 reps=20 patterns=261 input=522 units=109 split=28/6/6 threads=8
-units 109/109 (resumed=0) last_val_mae=0.188897
-wrote bare UPDEC2 work//model.updec2 (89885488 bytes), resumed=0</code></pre>
+units 109/109 (resumed=0)
+val MAE over 109 units: mean 0.159952, median 0.168192, worst 0.323179
+wrote bare UPDEC2 work/model.updec2 (89885488 bytes), resumed=0</code></pre>
   <p class="note">The validation MAE moves a little between runs — 0.171 and 0.194 on two
     passes over this same input — so treat it as a scale, not a checksum. The unit count,
     the pattern count and the model size are stable.</p>
