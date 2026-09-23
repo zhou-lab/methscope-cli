@@ -1,40 +1,33 @@
-# methscope-cli
+<h1 align="center">MethScope</h1>
 
-[![build](https://github.com/zhou-lab/methscope-cli/actions/workflows/conda-build.yml/badge.svg)](https://github.com/zhou-lab/methscope-cli/actions/workflows/conda-build.yml)
-[![conda](https://img.shields.io/conda/vn/zhou-lab/methscope?label=conda)](https://anaconda.org/zhou-lab/methscope)
-[![license](https://img.shields.io/badge/license-BSD--2--Clause%20(academic)%20%2F%20commercial-blue.svg)](LICENSE)
-[![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fzhou-lab.github.io%2Fmethscope-cli%2Fcoverage.json)](scripts/coverage.sh)
-[![docs](https://img.shields.io/badge/docs-online-blueviolet)](https://zhou-lab.github.io/methscope-cli/)
+<p align="center">
+<a href="https://github.com/zhou-lab/methscope-cli/actions/workflows/conda-build.yml"><img alt="build" src="https://github.com/zhou-lab/methscope-cli/actions/workflows/conda-build.yml/badge.svg"></a>
+<a href="https://anaconda.org/zhou-lab/methscope"><img alt="conda" src="https://img.shields.io/conda/vn/zhou-lab/methscope?label=conda"></a>
+<a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-BSD--2--Clause%20(academic)%20%2F%20commercial-blue.svg"></a>
+<a href="scripts/coverage.sh"><img alt="coverage" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fzhou-lab.github.io%2Fmethscope-cli%2Fcoverage.json"></a>
+<a href="https://zhou-lab.github.io/methscope-cli/"><img alt="docs" src="https://img.shields.io/badge/docs-online-blueviolet"></a>
+</p>
 
 Pure-C command-line tool for ultra-fast analysis of sparse DNA methylomes via
-Most Recurrent Methylation Pattern (MRMP) encoding. methscope-cli is the
-command-line counterpart of the [MethScope](https://github.com/zhou-lab/MethScope)
-R package: it performs the headline path — query `.cg` + MRMP reference
-→ cell×pattern feature matrix → XGBoost cell-type prediction / NNLS
-deconvolution — with no R runtime.
+Most Recurrent Methylation Pattern (MRMP) encoding. MethScope runs the whole
+path — query `.cg` + MRMP reference → cell×pattern feature matrix → XGBoost
+cell-type prediction / NNLS deconvolution — as one self-contained binary,
+with no interpreter and no runtime beyond `libxgboost`.
 
 It builds [YAME](https://github.com/zhou-lab/YAME) as a static library
 (`libyame.a`) for all `.cg/.cm` I/O and the `summary` computation, and links
 `libxgboost` for inference.
 
-## Models
+**Documentation, with runnable examples for every command:
+<https://zhou-lab.github.io/methscope-cli/>**
 
-Pretrained models are hosted on HuggingFace
-([zhou-lab/methscope](https://huggingface.co/zhou-lab/methscope)) — too large for
-git. They are fetched with **`methscope fetch`**; the
-[methscope_data](https://github.com/zhou-lab/methscope_data) repo holds the query
-`.cg` test fixtures (`test/`) and the reproducibility archive.
+## Install
 
 ```sh
-methscope fetch                                     # browse the catalogue
-methscope fetch hg38/models/hg38_celltype_lite.clfx # one file
-methscope fetch -y hg38/models                      # every human model (-y: a directory is GB)
-methscope fetch -y hg38/data                        # every example .cg fixture
-# -> $METHSCOPE_DATA_HOME, else $YAME_DATA_HOME, else ~/.local/share/yame (-d DIR overrides)
+conda install -c zhou-lab -c conda-forge methscope
 ```
 
-`-c` puts the files in the current directory instead, which is what the
-[examples](https://zhou-lab.github.io/methscope-cli/) do:
+## Quick start
 
 ```sh
 mkdir -p ~/tmp/methscope && cd ~/tmp/methscope
@@ -42,189 +35,42 @@ methscope fetch -c hg38/models/hg38_celltype_lite.clfx hg38/data/human_hg38_cell
 methscope classify hg38_celltype_lite.clfx human_hg38_celltypes.cg
 ```
 
+`methscope fetch` with no arguments browses the catalogue. Pretrained models
+live on HuggingFace ([zhou-lab/methscope](https://huggingface.co/zhou-lab/methscope));
+the query `.cg` fixtures live in
+[methscope_data](https://github.com/zhou-lab/methscope_data).
+
 The catalogue and the model tag are compiled into the binary — `methscope
---version` prints <!-- version:begin -->`(yame v1.53, models v12)`<!-- version:end --> — so a release fetches exactly the
-models it documents, and nothing else needs to be installed. Every entry carries
-a pinned SHA-256, fetching is idempotent, and a `.cg`'s `.cg.idx` sibling rides
-along without being a second name to remember. See `methscope fetch -h` for the
-browser keys, `-g` filtering, and the store rules.
+--version` prints <!-- version:begin -->`(yame v1.54, models v12)`<!-- version:end --> — so a release fetches exactly the
+models it documents. The store is shared with the other zhou-lab tools
+(`yame`, `kycg`) by convention, not by dependency.
 
-The store is shared with the other zhou-lab tools (`yame`, `kycg`) by
-convention, not by dependency: each tool pins its own tag and verifies against
-its own catalogue, and a directory's `SHA256SUMS` records which tag filled it. A
-newer tool upgrades such a directory in place; an older one refuses to overwrite
-it and says so. `methscope fetch -l` reports any directory that is behind this
-binary's tag.
-
-## Build
-
-methscope-cli depends on YAME (vendored as a git submodule) and on `libxgboost`
-(from conda-forge — the one external dependency).
+## Build from source
 
 ```sh
-# 1. clone with the YAME submodule
 git clone --recurse-submodules https://github.com/zhou-lab/methscope-cli.git
 cd methscope-cli
-
-# 2. libxgboost (provides c_api.h + libxgboost.{so,dylib})
-conda create -n methscope -c conda-forge libxgboost
-conda activate methscope        # sets CONDA_PREFIX
-
-# 3. build (links libyame.a + libxgboost)
+conda create -n methscope -c conda-forge libxgboost   # the one external dependency
+conda activate methscope
 make                             # or: make XGB_PREFIX=/path/to/env
 ```
 
 The binary records an rpath to `$XGB_PREFIX/lib`, so at runtime the conda env
-that provided `libxgboost` must be on the library path (activating it is enough).
+that provided `libxgboost` must be on the library path (activating it is
+enough). `make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80` adds the GPU
+backend for `upscale-train`.
 
-Releases are cut from a checklist kept in the lab journal rather than here:
-it covers the YAME submodule pin, the version bump, the tag, conda and the
-shared lab binary, and it names internal paths that would mean nothing outside
-the lab.
+## Development
 
-## Runnable examples
+`make test` runs the test suites and the generator checks offline. The
+documented-workflow gate (`make test-docs`) runs every example on the page and
+needs the network once. `test/parity.sh` compares `classify` probabilities
+against the R `PredictCellType`; it needs an R checkout and is not part of
+`make test`.
 
-Runnable smoke tests — cell-type prediction (cross-atlas concordance),
-deconvolution (self-identity and a simulated whole-body mixture), and upscaling
-from ~0.1% coverage, each with fetch commands and expected outputs — are on the
-**docs page: <https://zhou-lab.github.io/methscope-cli/>**. Models are fetched from
-[HuggingFace](https://huggingface.co/zhou-lab/methscope); the query `.cg` fixtures
-from [methscope_data](https://github.com/zhou-lab/methscope_data) (`test/`).
-
-## Training & internals
-
-### Train the whole-genome upscale model
-
-`upscale-train` trains one unified whole-genome `UPDEC2` model. The MRMP
-averages are deterministic inputs; the feature width is the msur's, which is
-whatever `mrmp-pool` left in the artifact -- selection happens there, once,
-not per consumer. An optional learned 512-dimensional
-decoder trunk can be shared by every membership-first processing unit; it is
-downstream of MRMP aggregation, not a CpG-to-MRMP encoder. Beta-only,
-beta-plus-missing, and beta-plus-count inputs are supported. PyTorch is not
-used.
-
-The `.mrmp` artifact is the feature pipeline's currency: `upscale-featurize`
-and `upscale-train` read the same one, so the msur's per-CpG group map and the
-mask the model ships cannot drift apart. `upscale-set-units` deliberately does
-NOT read it: units are an output partition, so they come from the reference
-store itself (`upscale-set-units REF.cg OUT.msui`), keeping the constant
-binstrings a selected `.mrmp` drops -- those are over half the genome and every
-one of their CpGs still has to be reconstructed. The `.cm` is
-the *runtime* form — `upscale-train` materializes it into `--work-dir` and packs
-it into the bundle. `mrmp-export` stays available for inspection and for
-feeding the `.cm`-based commands, but it is no longer a pipeline step. (An
-already-exported `.cm` is still accepted wherever a `.mrmp` is.)
-
-```sh
-methscope upscale-train \
-  -i training.msur \
-  --units processing_units_16k.msui \
-  --mrmp zhou_major_p1000.mrmp \
-  -o hg38_upscale.updecx \
-  --work-dir ~/tmp/hg38_upscale_train \
-  --features beta \
-  --pure-bottleneck 16 \
-  --mixed-bottleneck 32 \
-  --activation leaky \
-  --device 0
-# -> one self-contained .updecx plus a training manifest
-```
-
-By default the source cells are shuffled by `--seed` and cut 70/15/15. Pass
-`--split FILE` to pin the assignment instead — rows of
-`<cell_index>TAB<train|val|test>`, one per cell, indexed by the sample order of
-the truth `.cg` the msur was prepared from (a trailing sample-name column is
-ignored, and one non-numeric header row is allowed). Use it when a random cut
-would strand a whole cell type outside training, or to train against the exact
-held-out cells an external baseline used. The split is validated before CUDA is
-claimed, is recorded in the training manifest, and is folded into the checkpoint
-run checksum, so one work directory cannot resume across two different splits.
-
-Training runs on CPU by default, threaded over units with `--threads N` — units
-are independent, which is what makes the run resumable. `make CUDA=1
-CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80` adds the GPU backend, chosen
-automatically when a device answers (`--device cpu` forces the portable one).
-
-The two backends share the UPUCK1 checkpoint and the emitted UPDEC2, so a run
-can start on CPU and finish on a GPU node. They are not bit-identical and
-cannot be: the CUDA gradient accumulates with `atomicAdd`, whose summation
-order is not fixed, so two GPU runs already differ in the last bits. On the
-40-cell-type chr20 reference (109 units) the two agree on `best_step` for every
-unit and on validation MAE to at most 3.7e-08.
-
-The three build steps are public commands: `upscale-featurize` (MSURAW2
-msur, from the truth `.cg` + a pooled `.mrmp`), `upscale-set-units` (MSUIDX1
-unit index, from the reference store), then `upscale-train`. Only
-the research trunk trainer and the Zhou 2018 evaluator remain under
-`methscope _upscale`; the latter is invoked by the
-non-public `analysis/zhou2018_upscale_eval.sh` script. See the MethScope lab journal (`20251216_methscope.org`) and the
-[docs page](https://zhou-lab.github.io/methscope-cli/).
-
-**Visualize it.** Because the tracks are all whole-genome `.cg`, just stack them,
-slice a 50-CpG window with one `rowsub -I <block>_<size>` (block 232 at size 50
-sits inside block 10k1, and carries one observed input CpG), and let `yame hprint` colour the calls (`1`=methylated, `0`=unmethylated,
-`2`=NA — colour on by default in a recent YAME; pass `-c` to disable):
-
-```sh
-# the whole block, window-averaged into 60 columns of deciles
-cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg > three.cg
-yame index -s <(printf 'truth\ninput\nreconstructed\n') three.cg
-yame hprint -g -R cpg_nocontig.cr -r chr1:921649-1151482 -w 60 three.cg
-# truth          104523059802945587792005953275337999952335758999995168975689
-# input          ...0.....5.0...........09...............9..0....9...9....9..
-# reconstructed  106634049802945687893006953285447999952536758999995168975789
-# each column averages 167 CpGs; the input's few digits are one or two observed
-# CpGs standing in for a whole window, so they read differently from the truth
-# because they sample it thinly, not because they contradict it.
-
-# then single CpGs over the same block (-c because cut counts bytes)
-cat human_hg38_test.truth.cg human_hg38_test.cg human_hg38_test_reconstructed.cg \
-  | yame rowsub -I 1_10000 - | yame hprint -c - | cut -c1621-1680
-# truth  111111010111111111111110111100000010000000000000000000000000
-# input  222222222222222221222222222222222222222222220222222222222222
-# recon  111111010111111111111110111100000010000000000000000000000000
-```
-
-Two CpGs were observed in that 60-CpG window, and the reconstruction matches
-the truth at all 60 — including the isolated 0 and the lone 1 inside the
-unmethylated run. `--probs` emits per-CpG probabilities as TSV instead of a
-`.cg`. (Rebuild the bundle: `export_upscale_model.py … -o 10k1.updec`, then
-`bundle -m mrmp100.cm -O outcpg.cm -o 10k1.updecx 10k1.updec`, where
-`outcpg.cm` is a genome-wide YAME mask marking the block's CpGs.)
-
-No-download smoke (self-contained, no torch): build a tiny toy `.updec`
-(`n_in=3, n_hidden=2, n_out=4`, identity preprocessing/BatchNorm) and run it:
-
-```sh
-python3 - <<'PY'
-import struct, array
-def f32(a): return array.array('f', a).tobytes()
-with open("toy.updec","wb") as f:
-    f.write(b"UPDEC1\x00\x00")
-    f.write(struct.pack("<iii", 3, 2, 4)); f.write(struct.pack("<f", 1e-5))
-    f.write(f32([0,0,0])); f.write(f32([0,0,0])); f.write(f32([1,1,1]))  # identity pre
-    f.write(f32([1,0,0, 0,1,0])); f.write(f32([0,0]))                    # W1 -> h=[x1,x2]
-    f.write(f32([1,1])); f.write(f32([0,0])); f.write(f32([0,0])); f.write(f32([1,1]))  # BN id
-    f.write(f32([1,0, 0,1, 1,1, -1,0])); f.write(f32([0,0,0,0]))         # W2, b2
-PY
-printf 'feat_1\tfeat_2\tfeat_3\n2\t-1\t5\nNA\t0\t1\n' > toy_feats.tsv
-methscope upscale --probs toy.updec toy_feats.tsv
-# 0.880796  0.5  0.880796  0.119204    # row1: h=[relu(2),relu(-1)]=[2,0]
-# 0.5       0.5  0.5       0.5          # row2: NA imputed to 0 -> all sigmoid(0)
-```
-
-### Note on row order
-
-`classify` and `deconv` emit one row per query record **in query-file order**
-(the MethScope R package instead sorts rows by cell name). When you supply labels
-to `classify-train`, give them in that same query-record order.
-
-### Advanced: parity against the R package
-
-`classify` reproduces the R `PredictCellType` output. The feature-matrix leg of
-that comparison is gone with the `matrix` command, so `test/parity.sh` now checks
-the probabilities only; it needs a MethScope checkout + R.
+Releases are cut from a checklist kept in the lab journal rather than here: it
+covers the YAME submodule pin, the version bump, the tag, conda and the shared
+lab binary, and it names internal paths that would mean nothing outside the lab.
 
 ## License
 
