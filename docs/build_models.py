@@ -75,14 +75,12 @@ def registry_models():
             yield t[0], t[4], t[2], int(t[5])
 
 def human(b):
-    """Binary units, LABELLED binary. This divided by 1024 and wrote "MB", so a
-    29,075,778-byte file read as "28 MB" on the page beside a row whose prose
-    said 29 MB (decimal) and a disk that shows 27.7 MiB -- one file, three
-    numbers, reported 2026-09-17. `fetch` reports binary too, so the unit is
-    right and only the label was wrong."""
-    for u in ("B", "KiB", "MiB", "GiB"):
-        if b < 1024 or u == "GiB":
-            return ("%.0f %s" if u != "GiB" else "%.1f %s") % (b, u)
+    """1024 steps labelled KB/MB/GB -- the `ls -h` and `df -h` convention, and
+    the one YAME's fetch prints, so the page and the tool agree digit for
+    digit. Settled 2026-09-22: one spelling everywhere, and it is this one."""
+    for u in ("B", "KB", "MB", "GB"):
+        if b < 1024 or u == "GB":
+            return ("%.0f %s" if u != "GB" else "%.1f %s") % (b, u)
         b /= 1024.0
 
 N = r"[0-9.]+(?: \+/- [0-9.]+)?"           # a number, optionally with its +/- spread

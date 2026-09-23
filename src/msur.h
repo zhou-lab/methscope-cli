@@ -56,7 +56,7 @@ typedef struct {
  * observed CpGs a bitmap over the whole genome is smaller AND turns the
  * membership test from a binary search into one bit read. Deciding per
  * replicate keeps the sparse levels cheap and caps the dense ones: on the D2
- * ladder (500 reps, 71 -> 10% of hg38) records go 194.7 -> 127.2 GiB with only
+ * ladder (500 reps, 71 -> 10% of hg38) records go 194.7 -> 127.2 GB with only
  * the top 104 replicates switching.
  *
  * v2 files, and any v3 file written before this existed, carry flags == 0 ==

@@ -512,8 +512,8 @@ int main_upscale_prepare(int argc, char *argv[]) {
     free_cdata(&cm);
   }
 
-  /* A full continuous hg38 x 207-cell store inflates to about 46 GiB.  On the
-   * 120-GiB training node this trades ~750 GiB of repeated filesystem reads
+  /* A full continuous hg38 x 207-cell store inflates to about 46 GB.  On the
+   * 120-GB training node this trades ~750 GB of repeated filesystem reads
    * for one read and makes the 100-replicate cache build CPU-bound. */
   cdata_t *memory_cells = NULL;
   uint32_t **memory_eligible = NULL;
@@ -587,7 +587,7 @@ int main_upscale_prepare(int argc, char *argv[]) {
     }
     if (n_bitmap)
       fprintf(stderr, "[methscope] upscale-featurize: bitmap observed-set for "
-              "%u/%u replicates (>= %" PRIu64 " CpGs); records %.1f GiB\n",
+              "%u/%u replicates (>= %" PRIu64 " CpGs); records %.1f GB\n",
               n_bitmap, total_reps, bmb / sizeof(uint32_t),
               (double)(at - hp->records_offset) / (1024.0 * 1024.0 * 1024.0));
   } else {

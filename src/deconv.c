@@ -445,7 +445,10 @@ int main_deconv_build_ref(int argc, char *argv[]) {
   if (ferror(out)) d2die("error writing output", out_path);
   fclose(out);
 
-  double mb = (double)((size_t)n_class * n_keep * 2 + (size_t)n_keep * 4) / 1e6;
+  /* 1024 steps, labelled MB/GB -- the ls -h convention this tool uses
+   * everywhere, so a figure here compares with one from fetch. */
+  double mb = (double)((size_t)n_class * n_keep * 2 + (size_t)n_keep * 4)
+              / 1048576.0;
   fprintf(stderr,
     "[methscope] deconv-build-ref: %u classes x %llu rows -> %llu kept "
     "(%.2f%%)\n"
@@ -457,7 +460,7 @@ int main_deconv_build_ref(int argc, char *argv[]) {
     n_row ? 100.0 * (double)n_keep / (double)n_row : 0.0,
     (unsigned long long)n_uncov, (unsigned long long)n_amb,
     (unsigned long long)n_const,
-    mb, (double)n_class * n_row * 8.0 / 1e9, out_path);
+    mb, (double)n_class * n_row * 8.0 / 1073741824.0, out_path);
 
   free(buf); free(keep); free(beta); free(mup); free(voff);
   for (uint32_t k = 0; k < n_class; ++k) free(name[k]);
