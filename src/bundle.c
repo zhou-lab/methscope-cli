@@ -448,6 +448,50 @@ void ms_bundle_pack_tree(const char *out, const char *chain_path,
   if (fclose(fp)) bdie("write error", out);
 }
 
+void ms_bundle_repack(const char *out, const char *mrmp_path, const char *src) {
+  FILE *in = fopen(src, "rb");
+  if (!in) bdie("cannot open bundle", src);
+  uint64_t total, coff; uint32_t n;
+  entry_t *e = bundle_directory(in, src, &total, &coff, &n);
+  uint64_t rlen = path_bytes(mrmp_path);
+  /* every section but the prefix travels; count them and size the table */
+  uint32_t nsec = 1;
+  for (uint32_t i = 0; i < n; ++i) if (strcmp(e[i].name, "mrmp")) ++nsec;
+  uint64_t hdr = CONTAINER_HDR_BYTES + (uint64_t)nsec * sizeof(entry_t);
+  FILE *fp = fopen(out, "wb");
+  if (!fp) bdie("cannot open output", out);
+  stream_path(fp, mrmp_path, rlen, out);
+  if (fwrite(MS_BUNDLE_MAGIC, 1, 8, fp) != 8) bdie("write error", out);
+  if (fwrite(&nsec, sizeof(nsec), 1, fp) != 1) bdie("write error", out);
+  uint64_t off = rlen + hdr;
+  entry_t w;
+  memset(&w, 0, sizeof(w)); strncpy(w.name, "mrmp", NAMELEN - 1);
+  w.offset = 0; w.length = rlen;
+  if (fwrite(&w, sizeof(w), 1, fp) != 1) bdie("write error", out);
+  for (uint32_t i = 0; i < n; ++i) {
+    if (!strcmp(e[i].name, "mrmp")) continue;
+    memset(&w, 0, sizeof(w)); memcpy(w.name, e[i].name, NAMELEN);
+    w.offset = off; w.length = e[i].length; off += e[i].length;
+    if (fwrite(&w, sizeof(w), 1, fp) != 1) bdie("write error", out);
+  }
+  char *buf = malloc(1 << 20);
+  if (!buf) bdie("out of memory", out);
+  for (uint32_t i = 0; i < n; ++i) {
+    if (!strcmp(e[i].name, "mrmp")) continue;
+    if (fseeko(in, (off_t)e[i].offset, SEEK_SET)) bdie("cannot seek", src);
+    uint64_t left = e[i].length;
+    while (left) {
+      size_t chunk = left < (1 << 20) ? (size_t)left : (1 << 20);
+      if (fread(buf, 1, chunk, in) != chunk) bdie("truncated section", e[i].name);
+      if (fwrite(buf, 1, chunk, fp) != chunk) bdie("write error", out);
+      left -= chunk;
+    }
+  }
+  free(buf); free(e); fclose(in);
+  if (fwrite(&rlen, sizeof(rlen), 1, fp) != 1) bdie("write error", out);
+  if (fclose(fp)) bdie("write error", out);
+}
+
 char *ms_bundle_kind(const char *path) {
   size_t len; void *buf = ms_bundle_section_opt(path, "kind", &len);
   if (!buf) return NULL;

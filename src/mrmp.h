@@ -452,6 +452,18 @@ typedef struct {
   uint64_t  *block_bytes;  /* n_sets */
 } ms_mrmpset_t;
 
+/* Re-index every block of IN's chain onto a target row space and write the
+ * chain to OUT. `cpg_of_row[t]` is the source CpG row that target row t
+ * takes its membership from, or -1 for a target row under no source CpG
+ * (which lands on PNA). Pattern keys, binstrings and midpoints are copied;
+ * per-pattern CpG counts are recomputed over the target; the reference name
+ * becomes `refname` so `inspect` says what row space the artifact is in.
+ * Prints one summary line per block. Returns the number of patterns, over
+ * every block, that keep fewer than `min_retained` CpGs (0 with the floor
+ * off), so the caller can refuse a lift that emptied a feature. */
+uint64_t ms_mrmp_lift(const char *in, const char *out, const int64_t *cpg_of_row,
+                      uint64_t n_rows, const char *refname, uint64_t min_retained);
+
 /* Walk PATH's chain. Fatal on a bad magic or a block running past EOF. */
 ms_mrmpset_t *ms_mrmpset_open(const char *path);
 void ms_mrmpset_free(ms_mrmpset_t *s);

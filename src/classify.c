@@ -688,7 +688,10 @@ int main_predict(int argc, char *argv[]) {
   /* --framework violation: the second argument is the .mrmp itself, not a
    * bundle. Nothing is trained, so there is no model file in between. */
   if (fw_violation) {
-    if (npos != 2) return predict_usage(stderr);
+    /* One positional with --data (the artifact), two without (artifact +
+     * query); a fixed 2 here contradicted the --data check above and made
+     * `--framework violation --data` print usage every time. */
+    if (npos != (data_path ? 1 : 2)) return predict_usage(stderr);
     const char *art = pos[0];
     if (!ms_mrmp_is_artifact(art))
       pdie("--framework violation needs the MRMPIDX1 artifact (.mrmp); an "
@@ -755,7 +758,15 @@ int main_predict(int argc, char *argv[]) {
         pdie("--data is xgboost-only; the linear frameworks featurize their own "
              "query", model_name);
       size_t blen; void *bbuf = ms_bundle_section(model_name, "model", &blen);
-      int rc = predict_linear(query_cg, ref_mrmp, bbuf, blen, out_path, with_probs, no_header);
+      /* classify-train bundles the .mrmp ARTIFACT (self-describing, keeps set
+       * names), so the bundle prefix is MRMPIDX1 and the matrix builder cannot
+       * read it as a mask -- every logistic model trained from a .mrmp came
+       * back "not a readable CX stream". Materialise it as the trainer did; a
+       * .cm-front bundle (the shipped hg38_sex.clfx) passes through as is. */
+      char *tmp_cm = NULL;
+      const char *cm = ms_mrmp_resolve(ref_mrmp, &tmp_cm);
+      int rc = predict_linear(query_cg, cm, bbuf, blen, out_path, with_probs, no_header);
+      ms_mrmp_cleanup(tmp_cm);
       free(bbuf); free(kind);
       return rc;
     }

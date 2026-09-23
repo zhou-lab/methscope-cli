@@ -25,7 +25,12 @@ root=$(cd "$here/.." && pwd)
 ##   */cpg_nocontig.cr    every coordinate stream -- hg38 AND mm10 AND mm39.
 ##                        The mouse models need mm10's row space; mm39 has
 ##                        been offered since the old `coordinates` unit.
-PATTERNS=( 'hg38/data/*' 'hg38/models/*' 'mm10/models/*' '*/cpg_nocontig.cr' )
+##   */*.coord.tsv.gz     every platform's per-probe genome coordinates, the
+##                        table `mliftover --to <platform>` joins on
+##   */*.ordering.tsv.gz  and its probe IDs in row order, which decide the
+##                        probe TYPE: only cg probes are joined
+PATTERNS=( 'hg38/data/*' 'hg38/models/*' 'mm10/models/*' '*/cpg_nocontig.cr'
+           '*/*.coord.tsv.gz' '*/*.ordering.tsv.gz' )
 
 emit() {
   cat <<'EOF'

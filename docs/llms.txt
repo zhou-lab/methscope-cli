@@ -102,6 +102,7 @@ These are the mistakes that are not visible in the usage strings.
   relabel           Rename a class label in a trained model, no retraining
   unbundle          Unpack a bundle into its model, MRMP, and outcpg mask
   inspect           Describe any artifact: bundle, .mrmp, .msui, .msur, or .msfm
+  mliftover         Re-index a model onto an array platform's row space
 
 
 ## Models & data
@@ -581,21 +582,10 @@ Options:
                    Default: every non-'Pna' state.
   --framework <f>  Model framework (default: xgboost):
                      xgboost    gradient-boosted trees (multiclass).
-                     logistic   binary L2-regularized logistic regression.
-                     violation  multiclass, UNFITTED. Calls the class the query
-                                contradicts least, straight from the MRMP's own
-                                binstrings. Takes ONE positional, <ref.mrmp>:
-                                no training data, no -l, nothing to overfit.
-                   logistic is binary-only; both need a .clfx out.
-  --call-threshold <t>    violation only: beta cutoff for calling a pattern
-                   methylated (default 0.5).
-  --pattern-weight <w>    violation only: sqrt|log1p|linear|flat weighting of each
-                   pattern by its CpG count (default sqrt). CpGs inside one MRMP
-                   are strongly correlated, so effective sample size saturates and
-                   'linear' lets the largest patterns decide every call.
-  --min-patterns <n>      violation only: observed patterns required on each of
-                   the expected-1 and expected-0 sides before a call (default 20);
-                   below it the record is reported NA rather than guessed.
+                     logistic   binary L2-regularized logistic regression;
+                                needs a .clfx out.
+                   The violation rule is unfitted, so it is a scoring mode:
+                   `classify --framework violation ref.mrmp query.cg`.
   -n <nrounds>     Boosting rounds, xgboost only (default: round(sqrt(n_cells))).
   --eval-every <N> Report training mlogloss every N rounds, as a rolling
                    window of the last 5. Default: nrounds/20, about 5%%
@@ -1211,3 +1201,51 @@ Options:
   --patterns   .mrmp only: list the top-ranked patterns
   --top K      .mrmp only: how many to list (default 20)
   -h           Show this help message.
+
+
+### methscope mliftover -- Re-index a model onto an array platform's row space
+
+Usage:
+  methscope mliftover --to <platform> [options] <model> -o <out>
+
+Purpose:
+  Re-index a model onto an array platform's row space, so array data is
+  scored in its own space by a model built genome-wide: "lift the model,
+  use the data as it is". The model itself -- boosters, weights, the
+  deconvolution trailer -- is copied untouched; only the CpG index moves.
+  Reads any .clfx (the bundled .mrmp chain or .cm mask), a loose .mrmp or
+  .cm, or a .msdref deconvolution reference.
+
+  It refuses an upscaler (.updecx): its output is the genome, so it does
+  not lift. Carry the DATA the other way instead --
+  `sesame mliftover --to hg38 --simulated-depth 100 beta.cg beta.hg38.cg`
+  -- and run the original model on that.
+
+Options:
+  --to <platform>    Target platform (MSA, EPIC, HM450, ...). Its ordering
+                     (<platform>.ordering.tsv.gz: the probe IDs, in row
+                     order), its coordinate table (<platform>.<genome>
+                     .coord.tsv.gz) and the genome's cpg_nocontig.cr come
+                     from the store; `methscope fetch` names all three.
+  --genome <g>       The model's genome (default hg38).
+  --coord <file>     Coordinate table to use instead of the store's.
+  --ordering <file>  Ordering to use instead of the store's.
+  --cr <file>        Row-coordinate track to use instead of the store's.
+  -o <out>           Output path (required).
+  --pna-label <s>    The background key of a .cm mask (default Pna).
+  --min-retained N   Refuse if any pattern keeps fewer than N CpGs on the
+                     platform. Default 0: report and continue -- an emptied
+                     pattern stays a column and reads as missing.
+  --force            Overwrite an existing output.
+  -h                 Show this help message.
+
+Output:
+  The same kind of artifact, in the platform's row space (one row per
+  probe, ordering order), with its reference named after the platform.
+  Only cg probes are joined, decided by Probe_ID: an rs, nv or ch probe
+  that maps onto a CpG site carries a genotype or a non-CpG call, not
+  methylation, so it takes the background state whatever its coordinate
+  says. Those are counted separately from cg probes with no CpG row.
+  Per-set retained-CpG counts go to stderr: a feature that keeps 4% of
+  its CpGs is still an estimate of the same mean, but the reader should
+  see that number before trusting a call made on it.

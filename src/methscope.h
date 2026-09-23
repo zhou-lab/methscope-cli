@@ -150,7 +150,6 @@ typedef struct viomodel_t {
 viomodel_t *ms_viomodel_from_mrmp(const char *artifact, uint32_t top_k,
                                   double threshold, const char *weighting,
                                   int min_patterns);
-void        ms_viomodel_write(const viomodel_t *vm, const char *path);
 viomodel_t *ms_viomodel_parse(const char *buf, size_t len);
 /* Per-label violation totals into out[n_label]; INFINITY where too sparse. */
 void ms_viomodel_scores(const viomodel_t *vm, const double *betas, double *out);
@@ -169,6 +168,7 @@ int main_predict(int argc, char *argv[]);
 int main_train(int argc, char *argv[]);
 int main_train_tree(int argc, char *argv[]);
 int main_deconv_build_ref(int argc, char *argv[]);
+int main_mliftover(int argc, char *argv[]);
 int main_deconv(int argc, char *argv[]);
 /* Embed labels from a meta.tsv into a raw booster (used by `bundle -l`). */
 int main_upscale(int argc, char *argv[]);

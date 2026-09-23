@@ -912,6 +912,118 @@ static void prune_block(const char *path, uint64_t base, uint64_t blk_bytes,
   *img_out = img; *bytes_out = img_bytes;
 }
 
+/* One block, re-indexed onto a target row space. The image is built the way
+ * prune_block builds one -- same layout, same writer -- because a lift is the
+ * same operation with the pattern table left alone: no rank moves, so the
+ * booster's columns and the binstrings still mean what they meant. Only the
+ * membership is rewritten (target row t takes source row cpg_of_row[t]) and
+ * the counts are recomputed over it.
+ *
+ * content_checksum is carried over on purpose, as prune_block carries it:
+ * it identifies how the reference RESOLVED, and no CpG is re-resolved here.
+ * The new reference name is what says the row space changed. */
+static void lift_block(const char *path, uint64_t base, uint64_t blk_bytes,
+                       const int64_t *cpg_of_row, uint64_t n_rows,
+                       const char *refname, uint64_t min_retained,
+                       uint64_t *n_below, void **img_out, uint64_t *bytes_out) {
+  mrmp_reader_t r; mrmp_open_at(&r, path, base, blk_bytes);
+  const mrmp_header_t *h = r.h;
+  const uint32_t ns = h->n_samples, nw = r.nw;
+  const uint64_t n_cand = h->n_candidates, n_src = h->n_cpg;
+  const char *set_name = h->name_offset ? r.blk + h->name_offset : "set";
+
+  const uint32_t *memb = mrmp_membership(&r);
+  uint32_t *memb2 = xcalloc(n_rows ? n_rows : 1, sizeof(uint32_t), "lifted membership");
+  uint64_t *count = xcalloc(n_cand ? n_cand : 1, sizeof(uint64_t), "lifted counts");
+  uint64_t pna_cpg = 0;
+  for (uint64_t t = 0; t < n_rows; ++t) {
+    int64_t src = cpg_of_row[t];
+    uint32_t rank = (src < 0 || (uint64_t)src >= n_src) ? MRMP_PNA_MEMBERSHIP
+                                                        : memb[src];
+    if (rank == MRMP_PNA_MEMBERSHIP || rank >= n_cand) {
+      memb2[t] = MRMP_PNA_MEMBERSHIP; ++pna_cpg;
+    } else { memb2[t] = rank; ++count[rank]; }
+  }
+  uint64_t memb_n = 0;
+  uint8_t *memb_rle = memb_compress(memb2, n_rows, n_cand, &memb_n);
+  if (memb_n > UINT32_MAX) die("compressed membership exceeds 4 GB", path);
+
+  /* what the lift kept, per pattern, so a reader sees the footprint shrink
+   * before trusting a call made on it */
+  uint64_t kept_min = UINT64_MAX, kept_max = 0, kept_sum = 0, empty = 0, below = 0;
+  for (uint64_t p = 0; p < n_cand; ++p) {
+    if (count[p] < kept_min) kept_min = count[p];
+    if (count[p] > kept_max) kept_max = count[p];
+    kept_sum += count[p];
+    if (!count[p]) ++empty;
+    if (min_retained && count[p] < min_retained) ++below;
+  }
+  if (!n_cand) kept_min = 0;
+  fprintf(stderr, "[methscope] mliftover: %s: %" PRIu64 " pattern(s) over %" PRIu64
+          " of %" PRIu64 " target rows (was %" PRIu64 " of %" PRIu64 " CpGs); "
+          "CpGs per pattern min %" PRIu64 " mean %.1f max %" PRIu64 "%s\n",
+          set_name, n_cand, kept_sum, n_rows, n_src - h->pna_cpg, n_src, kept_min,
+          n_cand ? (double)kept_sum / (double)n_cand : 0.0, kept_max,
+          empty ? " -- EMPTY patterns present" : "");
+  if (empty)
+    fprintf(stderr, "[methscope] mliftover: %s: %" PRIu64 " pattern(s) keep no "
+            "CpG on this platform; they stay as columns and read as missing\n",
+            set_name, empty);
+  *n_below += below;
+
+  const float *thr = (h->flags & MRMP_FLAG_THRESH)
+                   ? (const float *)(const void *)(r.blk + h->thresh_offset) : NULL;
+  mrmp_header_t hd = *h;
+  hd.n_cpg = n_rows;
+  hd.pna_cpg = pna_cpg;
+  hd.membership_bytes = (uint32_t)memb_n;
+  hd.flags |= MRMP_FLAG_MEMB_RLE | MRMP_FLAG_MEMB_BGZF;
+
+  uint64_t off = sizeof(hd);
+  hd.refname_offset = off;    off += strlen(refname) + 1;
+  hd.name_offset = (uint32_t)off; off += strlen(set_name) + 1;
+  hd.names_offset = off;      for (uint32_t k = 0; k < ns; ++k) off += strlen(r.names[k]) + 1;
+  hd.patterns_offset = off;   off += n_cand * mrmp_pattern_stride(ns);
+  hd.membership_offset = off; off += memb_n;
+  if (thr) { hd.thresh_offset = off; off += n_cand * sizeof(float); }
+  const uint64_t img_bytes = (off + 7u) & ~7ull;
+
+  char *img = xcalloc(img_bytes, 1, "lifted block");
+  uint64_t at = 0;
+  img_put(img, &at, &hd, sizeof(hd));
+  img_put(img, &at, refname, strlen(refname) + 1);
+  img_put(img, &at, set_name, strlen(set_name) + 1);
+  for (uint32_t k = 0; k < ns; ++k)
+    img_put(img, &at, r.names[k], strlen(r.names[k]) + 1);
+  for (uint64_t p = 0; p < n_cand; ++p) {
+    img_put(img, &at, pat_key(&r, p), (size_t)nw * sizeof(uint64_t));
+    img_put(img, &at, &count[p], sizeof(uint64_t));
+  }
+  img_put(img, &at, memb_rle, (size_t)memb_n);
+  if (thr) img_put(img, &at, thr, (size_t)n_cand * sizeof(float));
+
+  free(memb_rle); free(memb2); free(count);
+  mrmp_close(&r);
+  *img_out = img; *bytes_out = img_bytes;
+}
+
+uint64_t ms_mrmp_lift(const char *in, const char *out, const int64_t *cpg_of_row,
+                      uint64_t n_rows, const char *refname, uint64_t min_retained) {
+  ms_mrmpset_t *s = ms_mrmpset_open(in);
+  const uint32_t n = s->n_sets;
+  void **img = xcalloc(n, sizeof(void *), "lifted images");
+  uint64_t *bytes = xcalloc(n, sizeof(uint64_t), "lifted sizes");
+  uint64_t below = 0;
+  for (uint32_t k = 0; k < n; ++k)
+    lift_block(in, s->block_off[k], s->block_bytes[k], cpg_of_row, n_rows,
+               refname, min_retained, &below, &img[k], &bytes[k]);
+  ms_mrmp_chain_write(out, n, (const void *const *)img, bytes);
+  for (uint32_t k = 0; k < n; ++k) free(img[k]);
+  free(img); free(bytes);
+  ms_mrmpset_free(s);
+  return below;
+}
+
 static void chain_write_streamed(const char *out, uint32_t n_sets,
                                 const char *const *src, const uint64_t *src_off,
                                 const uint64_t *block_bytes,

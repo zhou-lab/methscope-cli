@@ -116,6 +116,13 @@ void ms_mrmp_cleanup(char *tmp);
 void ms_bundle_pack(const char *out, const char *kind, const char *model_path,
                     const char *mrmp_path, const char *outcpg_path);
 
+/* Write `src`'s container over a NEW prefix: `mrmp_path` becomes the file
+ * prefix and every other section of `src` -- kind, model, the per-node
+ * boosters of a tree, an outcpg mask -- is copied byte for byte in its
+ * original order. This is what a row-space lift needs: the model is untouched
+ * and only the MRMP in front of it changes. Exits on I/O error. */
+void ms_bundle_repack(const char *out, const char *mrmp_path, const char *src);
+
 /* Read the framework mark (the "kind" section) as a malloc'd NUL-terminated
  * string, or NULL if the bundle has no kind section. (`classify` requires a kind
  * and rejects an unmarked bundle; upscale/deconv dispatch by subcommand.) */

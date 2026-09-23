@@ -673,6 +673,43 @@ identical</code></pre>
 </section>
 
 <section class="card">
+  <h2>Lift a model onto an array <span class="m">— score array data in its own row space</span></h2>
+  <p>Every model is positional over the genome's CpG rows and refuses a
+    query built on another row space. An array is another row space: one row
+    per probe, in the platform's ordering. <code class="inl">mliftover</code>
+    re-indexes the model onto it -- the booster, the weights and the
+    deconvolution trailer are copied untouched, only the CpG index moves -- so
+    array data is scored as it is, by a model built genome-wide. It takes a
+    <code class="inl">.clfx</code>, a loose <code class="inl">.mrmp</code> or
+    <code class="inl">.cm</code>, or a <code class="inl">.msdref</code>; it
+    refuses an upscaler, whose output is the genome (carry the data the other
+    way instead: <code class="inl">sesame mliftover --to hg38 --simulated-depth 100</code>).
+    Only <code class="inl">cg</code> probes are joined, decided by Probe_ID from
+    the ordering, never by where a probe maps: an <code class="inl">rs</code>
+    probe on a CpG site carries a genotype, not methylation. The per-set
+    summary says how much of each feature survives -- here 1,184 of 25,967 and
+    550 of 13,826 CpGs, enough to estimate the same means: on 168 MSA primary
+    tissues with reported sex this lifted model scores 97.0%, and the model
+    lifted here is byte-identical to one built by hand with
+    <code class="inl">unbundle</code>, <code class="inl">sesame mliftover</code>
+    and <code class="inl">bundle -k</code>.</p>
+  <!-- example:29_classify_mliftover -->
+<pre><code><span class="cm"># the platform's probe list and coordinates, and the genome's CpG rows</span>
+methscope <a class="sub" href="#ref-fetch">fetch</a> -c MSA/MSA.ordering.tsv.gz MSA/MSA.hg38.coord.tsv.gz hg38/cpg_nocontig.cr
+methscope <a class="sub" href="#ref-mliftover">mliftover</a> --to MSA --ordering MSA.ordering.tsv.gz \
+  --coord MSA.hg38.coord.tsv.gz --cr cpg_nocontig.cr \
+  hg38_sex.clfx -o hg38_sex.MSA.clfx
+methscope <a class="sub" href="#ref-inspect">inspect</a> hg38_sex.MSA.clfx | head -3</code></pre>
+<!-- /example -->
+  <pre class="res"><code>mliftover: MSA: 274041 of 284309 probes sit on a CpG row of hg38 (29401795 rows); 9656 not lifted by type (not cg), 612 cg probes with no CpG row
+mliftover: mask: 3 states over 284309 target rows; Pna 282575 Xa_lo 1184 Xa_hi 550
+mliftover: hg38_sex.clfx -&gt; hg38_sex.MSA.clfx (MSA row space, 284309 rows)
+container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 45,617 bytes
+
+  bundle     hg38_sex.MSA.clfx</code></pre>
+</section>
+
+<section class="card">
   <h2 id="bank-classifiers">Bank classifiers <span class="m">— <code class="inl">_full</code>, <code class="inl">_lite</code>, and what they replaced</span></h2>
   <p>A <b>bank</b> classifier does not route: its MRMP is a flat set of hierarchical LCA
     binstrings plus redrawn, LOO-calibrated <i>resolvers</i> for close class pairs, all scored by
@@ -2130,21 +2167,10 @@ Options:
                    Default: every non-'Pna' state.
   --framework &lt;f&gt;  Model framework (default: xgboost):
                      xgboost    gradient-boosted trees (multiclass).
-                     logistic   binary L2-regularized logistic regression.
-                     violation  multiclass, UNFITTED. Calls the class the query
-                                contradicts least, straight from the MRMP's own
-                                binstrings. Takes ONE positional, &lt;ref.mrmp&gt;:
-                                no training data, no -l, nothing to overfit.
-                   logistic is binary-only; both need a .clfx out.
-  --call-threshold &lt;t&gt;    violation only: beta cutoff for calling a pattern
-                   methylated (default 0.5).
-  --pattern-weight &lt;w&gt;    violation only: sqrt|log1p|linear|flat weighting of each
-                   pattern by its CpG count (default sqrt). CpGs inside one MRMP
-                   are strongly correlated, so effective sample size saturates and
-                   'linear' lets the largest patterns decide every call.
-  --min-patterns &lt;n&gt;      violation only: observed patterns required on each of
-                   the expected-1 and expected-0 sides before a call (default 20);
-                   below it the record is reported NA rather than guessed.
+                     logistic   binary L2-regularized logistic regression;
+                                needs a .clfx out.
+                   The violation rule is unfitted, so it is a scoring mode:
+                   `classify --framework violation ref.mrmp query.cg`.
   -n &lt;nrounds&gt;     Boosting rounds, xgboost only (default: round(sqrt(n_cells))).
   --eval-every &lt;N&gt; Report training mlogloss every N rounds, as a rolling
                    window of the last 5. Default: nrounds/20, about 5%%
@@ -2748,6 +2774,53 @@ Options:
   --patterns   .mrmp only: list the top-ranked patterns
   --top K      .mrmp only: how many to list (default 20)
   -h           Show this help message.</code></pre>
+  </details>
+  <details class="ref" id="ref-mliftover">
+    <summary><code class="inl">methscope mliftover</code> <span class="m">— Re-index a model onto an array platform's row space</span></summary>
+    <pre class="help"><code>Usage:
+  methscope mliftover --to &lt;platform&gt; [options] &lt;model&gt; -o &lt;out&gt;
+
+Purpose:
+  Re-index a model onto an array platform's row space, so array data is
+  scored in its own space by a model built genome-wide: "lift the model,
+  use the data as it is". The model itself -- boosters, weights, the
+  deconvolution trailer -- is copied untouched; only the CpG index moves.
+  Reads any .clfx (the bundled .mrmp chain or .cm mask), a loose .mrmp or
+  .cm, or a .msdref deconvolution reference.
+
+  It refuses an upscaler (.updecx): its output is the genome, so it does
+  not lift. Carry the DATA the other way instead --
+  `sesame mliftover --to hg38 --simulated-depth 100 beta.cg beta.hg38.cg`
+  -- and run the original model on that.
+
+Options:
+  --to &lt;platform&gt;    Target platform (MSA, EPIC, HM450, ...). Its ordering
+                     (&lt;platform&gt;.ordering.tsv.gz: the probe IDs, in row
+                     order), its coordinate table (&lt;platform&gt;.&lt;genome&gt;
+                     .coord.tsv.gz) and the genome's cpg_nocontig.cr come
+                     from the store; `methscope fetch` names all three.
+  --genome &lt;g&gt;       The model's genome (default hg38).
+  --coord &lt;file&gt;     Coordinate table to use instead of the store's.
+  --ordering &lt;file&gt;  Ordering to use instead of the store's.
+  --cr &lt;file&gt;        Row-coordinate track to use instead of the store's.
+  -o &lt;out&gt;           Output path (required).
+  --pna-label &lt;s&gt;    The background key of a .cm mask (default Pna).
+  --min-retained N   Refuse if any pattern keeps fewer than N CpGs on the
+                     platform. Default 0: report and continue -- an emptied
+                     pattern stays a column and reads as missing.
+  --force            Overwrite an existing output.
+  -h                 Show this help message.
+
+Output:
+  The same kind of artifact, in the platform's row space (one row per
+  probe, ordering order), with its reference named after the platform.
+  Only cg probes are joined, decided by Probe_ID: an rs, nv or ch probe
+  that maps onto a CpG site carries a genotype or a non-CpG call, not
+  methylation, so it takes the background state whatever its coordinate
+  says. Those are counted separately from cg probes with no CpG row.
+  Per-set retained-CpG counts go to stderr: a feature that keeps 4% of
+  its CpGs is still an estimate of the same mean, but the reader should
+  see that number before trusting a call made on it.</code></pre>
   </details>
 </section>
 <!-- help:end -->

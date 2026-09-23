@@ -109,6 +109,7 @@ static int usage(FILE *out) {
   CMD("relabel",      "Rename a class label in a trained model, no retraining");
   CMD("unbundle",     "Unpack a bundle into its model, MRMP, and outcpg mask");
   CMD("inspect",      "Describe any artifact: bundle, .mrmp, .msui, .msur, or .msfm");
+  CMD("mliftover",    "Re-index a model onto an array platform's row space");
 
   fprintf(out, "\n%sRun 'methscope <command> -h' for command-specific options.%s\n\n",
           D, R);
@@ -145,6 +146,7 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "bundle")     == 0) return main_bundle(argc - 1, argv + 1);
   if (strcmp(argv[1], "relabel")    == 0) return main_relabel(argc - 1, argv + 1);
   if (strcmp(argv[1], "unbundle")   == 0) return main_unbundle(argc - 1, argv + 1);
+  if (strcmp(argv[1], "mliftover")  == 0) return main_mliftover(argc - 1, argv + 1);
 
   fprintf(stderr, "[methscope] unrecognized command '%s'\n", argv[1]);
   return 1;

@@ -20,12 +20,21 @@ case "$out" in *"yame fetch"*) echo "fetch -h leaks 'yame fetch'"; exit 1;; esac
 ## directories, no genome or array knowledgebase rows
 list=$("$MS" fetch -l 2>/dev/null)
 dirs=$(printf '%s\n' "$list" | tail -n +2 | cut -f1 | sort -u | tr '\n' ' ')
-## The catalogue this binary projects: its models, its example .cg, and (since
-## YAME v1.46) the CpG coordinate reference per assembly -- the one thing from
-## the genomes source methscope's own output is read against. Not the array
-## platforms or knowledgebases, which is the point of a per-tool projection.
-[ "$dirs" = "hg38 hg38/data hg38/models mm10 mm10/models mm39 " ] ||
+## The catalogue this binary projects: its models, its example .cg, the CpG
+## coordinate reference per assembly (since YAME v1.46) and, since mliftover,
+## two files per array platform: the per-probe coordinate table it joins on
+## and the ordering whose probe IDs decide which probes are cg. Nothing else
+## from a platform -- no mask, no knowledgebase -- which is the point of a
+## per-tool projection.
+[ "$dirs" = "EPIC EPICv2 hg38 hg38/data hg38/models HM27 HM450 Mammal40 mm10 mm10/models MM285 mm39 MSA " ] ||
   { echo "fetch -l directories: '$dirs'"; exit 1; }
+for plat in EPIC EPICv2 HM27 HM450 Mammal40 MM285 MSA; do
+  files=$(printf '%s\n' "$list" | awk -F'\t' -v p="$plat" '$1 == p { print $5 }' | sort | tr '\n' ' ')
+  case "$files" in
+    "$plat."*".coord.tsv.gz $plat.ordering.tsv.gz ") ;;
+    *) echo "$plat should offer its coordinate table and ordering only, offers: '$files'"; exit 1 ;;
+  esac
+done
 for cr in hg38 mm10 mm39; do
   printf '%s\n' "$list" | cut -f1,5 | grep -qx "$cr	cpg_nocontig.cr" ||
     { echo "fetch -l lacks $cr/cpg_nocontig.cr"; exit 1; }

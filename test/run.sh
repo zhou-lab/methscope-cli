@@ -7,6 +7,12 @@
 ## platform. Tests that DO need the shared store skip cleanly when
 ## YAME_DATA_HOME is unset -- a laptop without it must not fail the suite.
 ##
+## Never pipe the binary straight into `grep -q` or `head`: they close the
+## pipe on the first match, the writer takes SIGPIPE (exit 141) and, under
+## pipefail, a passing assertion reads as a failure. It only shows on a slow
+## build -- the -O0 --coverage copy scripts/coverage.sh runs failed t_tree
+## this way while the -O3 binary passed every time. Write to a file, then grep.
+##
 ##   make test        # or: MS=/path/to/methscope bash test/run.sh
 set -uo pipefail
 

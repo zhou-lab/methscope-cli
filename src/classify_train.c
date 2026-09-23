@@ -25,7 +25,7 @@
 #include "bmeta.h"
 #include "bundle.h"    /* ms_mrmp_resolve / ms_bundle_pack / ms_path_is_bundle_ext */
 #include "msfm.h"      /* ms_msfm_to_matrix -- the --data feature path */
-#include "mrmp.h"      /* ms_mrmp_is_artifact / ms_mrmp_write_mask (violation) */
+#include "mrmp.h"
 #include <xgboost/c_api.h>
 
 #define XGCHK(call) do {                                          \
@@ -119,18 +119,6 @@ static int bundle_model(const char *out, const char *kind, const char *inner_tmp
   return trimmed;
 }
 
-/* thousands separators; buf >= 32 bytes */
-static const char *commafmt_tr(uint64_t v, char *buf) {
-  char tmp[24]; int n = snprintf(tmp, sizeof tmp, "%llu", (unsigned long long)v);
-  int o = 0;
-  for (int i = 0; i < n; ++i) {
-    if (i && (n - i) % 3 == 0) buf[o++] = ',';
-    buf[o++] = tmp[i];
-  }
-  buf[o] = '\0';
-  return buf;
-}
-
 static int train_usage(FILE *out) {
   ms_help(out,
     "\n"
@@ -173,21 +161,10 @@ static int train_usage(FILE *out) {
     "                   Default: every non-'Pna' state.\n"
     "  --framework <f>  Model framework (default: xgboost):\n"
     "                     xgboost    gradient-boosted trees (multiclass).\n"
-    "                     logistic   binary L2-regularized logistic regression.\n"
-    "                     violation  multiclass, UNFITTED. Calls the class the query\n"
-    "                                contradicts least, straight from the MRMP's own\n"
-    "                                binstrings. Takes ONE positional, <ref.mrmp>:\n"
-    "                                no training data, no -l, nothing to overfit.\n"
-    "                   logistic is binary-only; both need a .clfx out.\n"
-    "  --call-threshold <t>    violation only: beta cutoff for calling a pattern\n"
-    "                   methylated (default 0.5).\n"
-    "  --pattern-weight <w>    violation only: sqrt|log1p|linear|flat weighting of each\n"
-    "                   pattern by its CpG count (default sqrt). CpGs inside one MRMP\n"
-    "                   are strongly correlated, so effective sample size saturates and\n"
-    "                   'linear' lets the largest patterns decide every call.\n"
-    "  --min-patterns <n>      violation only: observed patterns required on each of\n"
-    "                   the expected-1 and expected-0 sides before a call (default 20);\n"
-    "                   below it the record is reported NA rather than guessed.\n"
+    "                     logistic   binary L2-regularized logistic regression;\n"
+    "                                needs a .clfx out.\n"
+    "                   The violation rule is unfitted, so it is a scoring mode:\n"
+    "                   `classify --framework violation ref.mrmp query.cg`.\n"
     "  -n <nrounds>     Boosting rounds, xgboost only (default: round(sqrt(n_cells))).\n"
     "  --eval-every <N> Report training mlogloss every N rounds, as a rolling\n"
     "                   window of the last 5. Default: nrounds/20, about 5%%\n"
@@ -556,52 +533,23 @@ int main_train(int argc, char *argv[]) {
 
   const char *labels_path = NULL, *out_path = NULL, *framework = "xgboost";
   const char *data_path = NULL;
-  int npattern = 0, nrounds = 0;
-  int nthread = 0;                    /* 0 = derive; see ms_train_threads() */
-  int eval_every = -1;                /* -1 = auto (nrounds/20); 0 = off */
-  /* xgboost tree-shape knobs. Default max_depth stays xgboost's 6; the point of
-   * exposing it is that a redundant training set -- one pseudobulk replicated
-   * across a coverage ladder -- makes every split look far more confident than
-   * its effective sample size warrants, so trees grow deep and a class can end
-   * up decided by a single feature. Capping depth is the direct remedy. */
-  int max_depth = 0, min_child = 0; double colsample = 0.0;
-  /* violation-framework constants. The defaults are the validated ones: a 0.5
-   * call cutoff (in held-out tumour single cells, 0 of 1106 colorectal cancer
-   * cells put an expected-1 pattern below it), sqrt(n_cpg) weighting, and 20
-   * observed patterns per side before a call is allowed. */
-  double vio_threshold = 0.5; const char *vio_weight = "sqrt";
-  int vio_min_patterns = 20;
+  int npattern = 0;
   int i = 1;
   for (; i < argc; ++i) {
     if      (strcmp(argv[i], "-l") == 0 && i+1 < argc) labels_path = argv[++i];
     else if (strcmp(argv[i], "--data") == 0 && i+1 < argc) data_path = argv[++i];
-    else if (strcmp(argv[i], "--eval-every") == 0 && i+1 < argc)
-      eval_every = parse_nonneg_int(argv[++i], "--eval-every expects a non-negative integer");
-    else if (strcmp(argv[i], "--threads") == 0 && i+1 < argc)
-      nthread = parse_nonneg_int(argv[++i], "--threads expects a non-negative integer");
-    /* Undocumented on purpose: both legs were already closed before the flat
-     * path went away -- without --data it dies below, and with --data every
-     * xgboost run goes to the tree, which never parses it. Kept so the error
-     * names the flag instead of "unrecognized option". */
     else if (strcmp(argv[i], "-o") == 0 && i+1 < argc) out_path    = argv[++i];
+    /* xgboost knobs. Every xgboost run is routed to main_train_tree() above,
+     * which parses these itself; here they are accepted and ignored so a
+     * flag the shared -h documents never dies as "unrecognized" on the
+     * logistic path. */
+    else if ((!strcmp(argv[i], "-n") || !strcmp(argv[i], "--threads")
+              || !strcmp(argv[i], "--eval-every") || !strcmp(argv[i], "--max-depth")
+              || !strcmp(argv[i], "--min-child-weight") || !strcmp(argv[i], "--colsample"))
+             && i+1 < argc) ++i;
     else if (strcmp(argv[i], "-p") == 0 && i+1 < argc)
       npattern = parse_nonneg_int(argv[++i], "-p expects a non-negative integer");
     else if (strcmp(argv[i], "--framework") == 0 && i+1 < argc) framework = argv[++i];
-    else if (strcmp(argv[i], "--max-depth") == 0 && i+1 < argc)
-      max_depth = parse_nonneg_int(argv[++i], "--max-depth expects a non-negative integer");
-    else if (strcmp(argv[i], "--min-child-weight") == 0 && i+1 < argc)
-      min_child = parse_nonneg_int(argv[++i], "--min-child-weight expects a non-negative integer");
-    else if (strcmp(argv[i], "--colsample") == 0 && i+1 < argc)
-      colsample = atof(argv[++i]);
-    else if (strcmp(argv[i], "--call-threshold") == 0 && i+1 < argc)
-      vio_threshold = atof(argv[++i]);
-    else if (strcmp(argv[i], "--pattern-weight") == 0 && i+1 < argc)
-      vio_weight = argv[++i];
-    else if (strcmp(argv[i], "--min-patterns") == 0 && i+1 < argc)
-      vio_min_patterns = parse_nonneg_int(argv[++i],
-        "--min-patterns expects a non-negative integer");
-    else if (strcmp(argv[i], "-n") == 0 && i+1 < argc)
-      nrounds = parse_nonneg_int(argv[++i], "-n expects a non-negative integer");
     else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
       return train_usage(stdout);
     }
@@ -616,62 +564,18 @@ int main_train(int argc, char *argv[]) {
          "`classify --framework violation ref.mrmp query.cg` "
          "(verified identical to transcribe-then-score, 0 of 1,201 cells)",
          framework);
-  int fw_xgb = strcmp(framework, "xgboost") == 0;
-  int fw_lin = (strcmp(framework, "logistic") == 0);
-  int fw_vio = strcmp(framework, "violation") == 0;
-  if (!fw_xgb && !fw_lin && !fw_vio)
-    tdie("unknown --framework (xgboost|violation|logistic)", framework);
-
-  /* ---- violation framework: transcribe, do not train ----
-   * The MRMP artifact already states each class's expected methylation at every
-   * pattern, so the classifier is fully determined by the reference. There is
-   * nothing to fit, hence no training data, no labels file, and one positional:
-   * the artifact itself (a .cm cannot serve -- it carries the per-CpG mask but
-   * not the binstrings). Writing the mask at exactly the model's pattern count
-   * is what keeps the shipped mask and the model dimension from drifting. */
-  if (fw_vio) {
-    if (!out_path || npos != 1) return train_usage(stderr);
-    if (!ms_path_is_bundle_ext(out_path))
-      tdie("the violation framework requires a .clfx output (bundled with the MRMP)",
-           out_path);
-    const char *artifact = pos[0];
-    if (!ms_mrmp_is_artifact(artifact))
-      tdie("the violation framework needs the MRMPIDX1 artifact (.mrmp), not an "
-           "exported .cm -- the .cm has no binstrings", artifact);
-    uint32_t top_k = npattern > 0 ? (uint32_t)npattern : 1000u;
-    viomodel_t *vm = ms_viomodel_from_mrmp(artifact, top_k, vio_threshold,
-                                           vio_weight, vio_min_patterns);
-    const char *vtd = getenv("TMPDIR");
-    char mtmp[4096];
-    snprintf(mtmp, sizeof mtmp, "%s/methscope_vio_XXXXXX.vio",
-             vtd && *vtd ? vtd : "/tmp");
-    int mfd = mkstemps(mtmp, 4);
-    if (mfd < 0) tdie("cannot create temp violation model file", NULL);
-    close(mfd);
-    ms_viomodel_write(vm, mtmp);
-    char ctmp[4096];
-    snprintf(ctmp, sizeof ctmp, "%s/methscope_viomask_XXXXXX.cm",
-             vtd && *vtd ? vtd : "/tmp");
-    int cfd = mkstemps(ctmp, 3);
-    if (cfd < 0) tdie("cannot create temp mask file", NULL);
-    close(cfd);
-    ms_mrmp_write_mask(artifact, ctmp, "Pna", (uint32_t)vm->n_feat);
-    ms_bundle_pack(out_path, "violation", mtmp, ctmp, NULL);
-    unlink(mtmp); unlink(ctmp);
-    fprintf(stderr, "[methscope] transcribed violation model: %d class(es) x %d "
-            "pattern(s), t=%g, weight=%s, min_patterns=%d -> %s\n",
-            vm->n_label, vm->n_feat, vm->threshold, vm->weighting,
-            vm->min_patterns, out_path);
-    ms_viomodel_free(vm);
-    return 0;
-  }
+  /* xgboost never arrives here (routed to the tree above), so from this point
+   * the framework is logistic: the one fitted model that still takes a raw
+   * <query.cg> <ref.cm> and features it itself. */
+  if (strcmp(framework, "logistic"))
+    tdie("unknown --framework (xgboost|logistic)", framework);
 
   /* With --data the features are already built, so <query.cg> drops out and
    * only <ref.cm> stays positional -- the bundle still has to carry the MRMP. */
   int want_pos = data_path ? 1 : 2;
   if (!out_path || npos != want_pos) return train_usage(stderr);
   if (!data_path && !labels_path) return train_usage(stderr);
-  if (fw_lin && !ms_path_is_bundle_ext(out_path))
+  if (!ms_path_is_bundle_ext(out_path))
     tdie("the logistic framework requires a .clfx output (bundled with the MRMP)", out_path);
   const char *query_cg = data_path ? NULL : pos[0];
   char *tmp_mrmp = NULL;
@@ -729,7 +633,7 @@ int main_train(int argc, char *argv[]) {
   }
   if (n_feat <= 0) tdie("the artifact has no patterns", NULL);
   /* Rebuild the matrix around the selection so every consumer below -- xgboost,
-   * the linear frameworks, the violation model, and the trim path that reads
+   * the linear framework and the trim path that reads
    * pattern_names -- indexes features correctly without knowing any of this. */
   ms_matrix_select(m, feat_idx, n_feat);
   free(feat_idx);
@@ -760,7 +664,7 @@ int main_train(int argc, char *argv[]) {
     if (j == 0 || strcmp(uniq[j], uniq[K-1]) != 0) uniq[K++] = uniq[j];
   if (K < 2) tdie("need at least two classes", NULL);
 
-  if (fw_lin && K != 2)
+  if (K != 2)
     tdie("the logistic framework is binary (needs exactly 2 classes)", NULL);
 
   /* per-record class index (0..K-1) = position in the sorted unique set */
@@ -780,10 +684,9 @@ int main_train(int argc, char *argv[]) {
     yidx[r] = idx;
   }
 
-  int bundled = ms_path_is_bundle_ext(out_path);
   int trimmed = 0;
 
-  if (fw_lin) {
+  {
     /* ---- linear framework (logistic): interpretable binary rule ---- */
     linmodel_t *lm = ms_linmodel_fit(m, npattern, yidx, uniq[0], uniq[1], framework);
     char tmpl[4096];
@@ -801,153 +704,6 @@ int main_train(int argc, char *argv[]) {
     fprintf(stderr, "[methscope] trained %s model (2-class) on %d cells x %d feature(s) "
                     "-> %s (linear+MRMP bundle%s)\n", framework, m->n_cells, npattern,
                     out_path, trimmed ? ", trimmed mrmp" : "");
-  } else {
-    /* ---- xgboost framework ---- */
-    float *ylab = malloc((size_t)m->n_cells * sizeof(float));
-    if (!ylab) tdie("out of memory", NULL);
-    for (int r = 0; r < m->n_cells; ++r) ylab[r] = (float)yidx[r];
-    bst_ulong nrow = (bst_ulong)m->n_cells;
-    bst_ulong ncol = (bst_ulong)npattern;
-    float *data = malloc((size_t)nrow * ncol * sizeof(float));
-    if (!data) tdie("out of memory", NULL);
-    for (int r = 0; r < m->n_cells; ++r) {
-      const double *src = m->M + (size_t)r * m->n_patterns;
-      float        *dst = data + (size_t)r * ncol;
-      for (int c = 0; c < npattern; ++c) dst[c] = (float)src[c];
-    }
-    const int nrounds_auto = (nrounds <= 0);
-    if (nrounds <= 0) nrounds = (int)(sqrt((double)m->n_cells) + 0.5);
-    if (nrounds < 1) nrounds = 1;
-
-    DMatrixHandle dtrain; BoosterHandle booster;
-    XGCHK(XGDMatrixCreateFromMat(data, nrow, ncol, NAN, &dtrain));
-    XGCHK(XGDMatrixSetFloatInfo(dtrain, "label", ylab, nrow));
-    XGCHK(XGBoosterCreate(&dtrain, 1, &booster));
-    char kbuf[16]; snprintf(kbuf, sizeof(kbuf), "%d", K);
-    XGCHK(XGBoosterSetParam(booster, "booster", "gbtree"));
-    XGCHK(XGBoosterSetParam(booster, "objective", "multi:softprob"));
-    XGCHK(XGBoosterSetParam(booster, "eval_metric", "mlogloss"));
-    XGCHK(XGBoosterSetParam(booster, "num_class", kbuf));
-    /* Thread pool. Prefer what the batch system granted, then what the kernel
-     * will actually schedule us on, and only then the machine's core count --
-     * an unpinned pool sized from a 94-core node while holding 24 of them is a
-     * confound in every timing taken from a shared queue. */
-    int nt = nthread;
-    if (nt <= 0) {
-      const char *e = getenv("SLURM_CPUS_PER_TASK");
-      if (e && *e) nt = atoi(e);
-    }
-#ifdef __linux__
-    if (nt <= 0) {
-      cpu_set_t set;
-      if (sched_getaffinity(0, sizeof(set), &set) == 0) nt = CPU_COUNT(&set);
-    }
-#endif
-    if (nt <= 0) nt = (int)sysconf(_SC_NPROCESSORS_ONLN);
-    if (nt > 0) {
-      char tbuf[16]; snprintf(tbuf, sizeof(tbuf), "%d", nt);
-      XGCHK(XGBoosterSetParam(booster, "nthread", tbuf));
-      { char c1[32], c2[32];
-        fprintf(stderr, "\n[methscope] classify-train\n\n");
-        fprintf(stderr, "  %-14s %s records x %s patterns, %d classes\n", "data",
-                commafmt_tr((uint64_t)m->n_cells, c1),
-                commafmt_tr((uint64_t)npattern, c2), K);
-        fprintf(stderr, "  %-14s gbtree, multi:softprob, mlogloss\n", "booster");
-        fprintf(stderr, "  %-14s %d%s\n", "rounds", nrounds,
-                nrounds_auto ? " (round(sqrt(records)))" : "");
-        fprintf(stderr, "  %-14s %d\n", "threads", nt); }
-    }
-    char pbuf[32];
-    if (max_depth > 0) {
-      snprintf(pbuf, sizeof(pbuf), "%d", max_depth);
-      XGCHK(XGBoosterSetParam(booster, "max_depth", pbuf));
-    }
-    if (min_child > 0) {
-      snprintf(pbuf, sizeof(pbuf), "%d", min_child);
-      XGCHK(XGBoosterSetParam(booster, "min_child_weight", pbuf));
-    }
-    if (colsample > 0.0) {
-      snprintf(pbuf, sizeof(pbuf), "%g", colsample);
-      XGCHK(XGBoosterSetParam(booster, "colsample_bytree", pbuf));
-    }
-    /* Periodic training mlogloss, so a run that is not converging is visible
-     * while it happens rather than after.
-     *
-     * XGBoosterEvalOneIter predicts over the whole training matrix, so it is
-     * not free -- evaluating every round would roughly double the cost. Every
-     * nrounds/20 keeps the overhead near 5% and still shows the shape of the
-     * curve. --eval-every 0 turns it off, 1 evaluates every round.
-     *
-     * The rolling window is the point: a single number says nothing, five in a
-     * row say whether it is still descending. */
-    int estep = eval_every >= 0 ? eval_every : (nrounds >= 20 ? nrounds / 20 : 1);
-    const int tty = isatty(STDERR_FILENO);
-    double hist[5]; int nh = 0;
-    for (int it = 0; it < nrounds; ++it) {
-      XGCHK(XGBoosterUpdateOneIter(booster, it, dtrain));
-      if (!estep || (it + 1) % estep != 0) continue;
-      const char *ev = NULL;
-      const char *nm = "train";
-      if (XGBoosterEvalOneIter(booster, it, &dtrain, &nm, 1, &ev) || !ev) continue;
-      const char *c = strrchr(ev, ':');
-      if (!c) continue;
-      if (nh < 5) hist[nh++] = atof(c + 1);
-      else { for (int k = 0; k < 4; ++k) hist[k] = hist[k + 1]; hist[4] = atof(c + 1); }
-      char buf[160]; int at = 0;
-      for (int k = 0; k < nh; ++k)
-        at += snprintf(buf + at, sizeof buf - at, "%s%.4f", k ? " " : "", hist[k]);
-      fprintf(stderr, "%s  %-14s round %d/%d  mlogloss %s%s",
-              tty ? "\r\033[K" : "", "training", it + 1, nrounds, buf,
-              tty ? "" : "\n");
-      if (tty) fflush(stderr);
-    }
-    if (tty) fprintf(stderr, "\r\033[K");
-    /* One final evaluation regardless of --eval-every: the number a reader
-     * actually wants is where it ended up, and it costs one pass. */
-    { const char *ev = NULL, *nm = "train";
-      if (!XGBoosterEvalOneIter(booster, nrounds - 1, &dtrain, &nm, 1, &ev) && ev) {
-        const char *c = strrchr(ev, ':');
-        if (c) fprintf(stderr, "  %-14s %.4f  (train mlogloss after %d rounds)\n",
-                       "final loss", atof(c + 1), nrounds);
-      } }
-
-    /* embed labels; save as loose .ubj or a (trimmed-mrmp) .ubjx bundle */
-    ms_booster_set_meta(booster, uniq, K);
-    /* Carry the feature coding, taken from the artifact rather than from a CLI
-     * flag: the coding is decided at featurize time and baked into the .msfm,
-     * so the artifact is the only thing that actually knows. */
-    if (data_path) {
-      uint32_t ff = ms_msfm_flags(data_path);
-      if (ff & MSFM_FLAG_BIN_FLAT)      ms_booster_set_binarize(booster, "0.5");
-      else if (ff & MSFM_FLAG_BIN_PAT)  ms_booster_set_binarize(booster, "pattern");
-    }
-    {   /* the exact columns, by name, so `classify` gathers the same ones */
-      char **fn = malloc((size_t)npattern * sizeof(char *));
-      if (!fn) tdie("out of memory", NULL);
-      for (int c = 0; c < npattern; ++c) fn[c] = m->pattern_names[c];
-      ms_booster_set_features(booster, fn, npattern);
-      free(fn);
-    }
-    if (bundled) {
-      char tmpl[4096];
-      const char *td = getenv("TMPDIR");
-      snprintf(tmpl, sizeof tmpl, "%s/methscope_ubj_XXXXXX.ubj",
-               td && *td ? td : "/tmp");
-      int fd = mkstemps(tmpl, 4);
-      if (fd < 0) tdie("cannot create temp booster file", NULL);
-      close(fd);
-      XGCHK(XGBoosterSaveModel(booster, tmpl));
-      trimmed = bundle_model(out_path, "xgboost", tmpl, ref_arg,
-                             m->pattern_names, npattern, n_nonpna);
-      unlink(tmpl);
-    } else {
-      XGCHK(XGBoosterSaveModel(booster, out_path));
-    }
-    fprintf(stderr, "  %-14s %s%s%s\n\n", "wrote", out_path,
-            bundled ? " (booster + MRMP bundle" : "",
-            bundled ? (trimmed ? ", trimmed mrmp)" : ")") : "");
-    XGDMatrixFree(dtrain); XGBoosterFree(booster);
-    free(data); free(ylab);
   }
 
   free(yidx); free(uniq);

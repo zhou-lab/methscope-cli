@@ -116,27 +116,6 @@ viomodel_t *ms_viomodel_from_mrmp(const char *artifact, uint32_t top_k,
   return vm;
 }
 
-/* ------------------------------- write ------------------------------- */
-void ms_viomodel_write(const viomodel_t *vm, const char *path) {
-  FILE *fp = fopen(path, "w");
-  if (!fp) vdie("cannot open violation model output", path);
-  fprintf(fp, "methscope-violation\t1\n");
-  fprintf(fp, "threshold\t%.9g\n", vm->threshold);
-  fprintf(fp, "weight\t%s\n", vm->weighting);
-  fprintf(fp, "min_patterns\t%d\n", vm->min_patterns);
-  fputs("labels", fp);
-  for (int i = 0; i < vm->n_label; ++i) fprintf(fp, "\t%s", vm->labels[i]);
-  fputc('\n', fp);
-  /* The weight is written as the CpG count, not the derived w, so the spec
-   * stays inspectable and a reader can re-derive under a different weighting. */
-  for (int j = 0; j < vm->n_feat; ++j)
-    fprintf(fp, "pattern\t%s\t%s\t%.0f\n", vm->names[j], vm->bin[j],
-            !strcmp(vm->weighting, "sqrt")   ? vm->w[j] * vm->w[j]
-          : !strcmp(vm->weighting, "log1p")  ? expm1(vm->w[j])
-          : !strcmp(vm->weighting, "linear") ? vm->w[j] : 1.0);
-  fclose(fp);
-}
-
 /* ------------------------------- parse ------------------------------- */
 viomodel_t *ms_viomodel_parse(const char *buf, size_t len) {
   char *copy = malloc(len + 1);

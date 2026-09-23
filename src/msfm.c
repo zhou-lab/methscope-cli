@@ -867,11 +867,18 @@ int main_classify_featurize(int argc, char *argv[]) {
     return 0;
   }
 
-  ms_matrix_t *m = ms_matrix_build(query, ref);
+  /* expand_mask_args() hands a chain over BY REFERENCE -- refs[0] is the
+   * .mrmp itself, which the matrix builder cannot read as a mask, so this
+   * path died "not a readable CX stream" on any artifact input. Materialise
+   * its first block (all this path ever used); a loose .cm passes through. */
+  char *scan_tmp = NULL;
+  const char *scan_ref = ms_mrmp_resolve(ref, &scan_tmp);
+  ms_matrix_t *m = ms_matrix_build(query, scan_ref);
   char **lab = labels ? read_labels(labels, m->n_cells) : NULL;
   write_msfm(out, m, lab);
   if (lab) { for (int r = 0; r < m->n_cells; ++r) free(lab[r]); free(lab); }
   ms_matrix_free(m);
+  ms_mrmp_cleanup(scan_tmp);
   /* the legacy scan path uses only the first mask; release the rest */
   for (uint32_t s = 0; s < n_sets; ++s) ms_mrmp_cleanup(tmps[s]);
   for (uint32_t s = 0; s < n_sets; ++s) free(snames[s]);

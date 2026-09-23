@@ -48,7 +48,6 @@
  * the attribute is absent -- which is how a pre-2026-08 model is recognised.
  * Caller frees each string and the array. */
 void   ms_booster_set_features(BoosterHandle b, char *const *names, int n_feat);
-char **ms_booster_get_features(BoosterHandle b, int *n_feat);
 
 /* Record / read the feature coding (see MS_ATTR_BINARIZE). The getter returns
  * a malloc'd string or NULL when the attribute is absent. */
