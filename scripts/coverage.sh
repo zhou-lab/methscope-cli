@@ -1,5 +1,6 @@
 #!/bin/sh
-# scripts/coverage.sh -- line coverage of test/run.sh over methscope's own sources.
+# scripts/coverage.sh -- line coverage of test/run.sh (+ test/nnls_check) over
+# methscope's own sources.
 #
 #   scripts/coverage.sh            measure, print the table, rewrite docs/coverage.json
 #   scripts/coverage.sh --check    measure and fail if the badge is stale by more
@@ -35,6 +36,9 @@ export LD_LIBRARY_PATH="$XGB/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 MS=./methscope YAME=YAME/yame XGB_PREFIX="$XGB" sh test/run.sh >/dev/null 2>&1 || true
 python3 test/check_updec2.py ./methscope >/dev/null 2>&1 || true
+## the NNLS harness links the instrumented src/nnls.o, so its runs count
+make CC="cc -O0 -g --coverage" LDFLAGS="--coverage" XGB_PREFIX="$XGB" test/nnls_check >/dev/null 2>&1 &&
+  ./test/nnls_check >/dev/null 2>&1 || true
 
 python3 - "$TOLERANCE" "$here" "${1:-}" <<'PY'
 import subprocess, re, glob, sys, json, os
@@ -50,7 +54,7 @@ for m in re.finditer(r"File '([^']+)'\nLines executed:([\d.]+)% of (\d+)", out):
 pct = 100 * tc / tl
 for p, n, f in sorted(rows):
     print("  %-28s %5d %6.1f%%" % (f, n, p))
-print("coverage: %.1f%% of %d executable lines (gcov, line coverage: test/run.sh)"
+print("coverage: %.1f%% of %d executable lines (gcov, line coverage: test/run.sh + nnls_check)"
       % (pct, tl))
 
 badge = os.path.join(repo, "docs", "coverage.json")

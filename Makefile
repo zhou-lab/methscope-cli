@@ -71,14 +71,23 @@ check-updec2: $(PROG)
 ## packs its own fixtures with yame from inline text, so this needs no network
 ## and no model store. Tests that DO want the shared store skip cleanly when
 ## YAME_DATA_HOME is unset.
-test: $(PROG) yame-lib yame-bin
+test: $(PROG) yame-lib yame-bin test/nnls_check
 	MS=./$(PROG) YAME=$(YAME_DIR)/yame XGB_PREFIX=$(XGB_PREFIX) bash test/run.sh
+	./test/nnls_check
 	./tools/make_registry.sh --check
 	$(PYTHON) docs/build_models.py --check
 	$(PYTHON) docs/build_examples.py --check
 	$(PYTHON) docs/build_help.py --check
 	$(PYTHON) docs/make_llms.py ./$(PROG) --check
 	$(PYTHON) docs/build_readme.py ./$(PROG) --check
+
+## The NNLS solver behind `deconv`, tested on its own: the command tests
+## never make it backtrack (their references are well conditioned), so the
+## harness feeds it near-collinear problems and checks the KKT conditions and
+## an enumeration oracle. Links the same src/nnls.o the binary does, so an
+## instrumented build (scripts/coverage.sh) counts it toward nnls.c.
+test/nnls_check: test/nnls_check.c src/nnls.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
 
 ## docs/index.html is prose around three generated parts: the example blocks
 ## (docs/examples/*.sh, build_examples.py), the model table (YAME's
@@ -198,7 +207,7 @@ dist:
 
 clean:
 	rm -f $(OBJ) $(DEP) src/upunit_cuda.o \
-	      src/updec_cuda.o src/updec_nn.o src/updec_train.o $(PROG)
+	      src/updec_cuda.o src/updec_nn.o src/updec_train.o $(PROG) test/nnls_check
 
 # Also clean the YAME submodule build artifacts.
 clean-all: clean

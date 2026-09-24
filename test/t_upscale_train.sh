@@ -92,4 +92,33 @@ info=$("$YAME" info rec.cg 2>/dev/null | tail -1)
 [ "$(head -1 probs.tsv | tr '\t' '\n' | wc -l)" = 400 ] || { echo "--probs should be 400 columns"; exit 1; }
 "$MS" upscale --binary -o recb.cg mdl.updecx train.cg >/dev/null 2>&1
 [ "$("$YAME" info recb.cg 2>/dev/null | tail -1 | cut -f5)" = 6 ] || { echo "--binary is not format 6"; exit 1; }
-echo "ok: featurize, set-units, train (split/threads/modes/pilot), upscale"
+
+## ---- 6. featurize: the log-spaced coverage ladder ------------------------
+## --sample-logrange is how the shipped decoders were trained: --reps is the
+## TOTAL replicate count and each replicate draws its own sample size, spread
+## in log space over [MIN,MAX] (skew 1 = plain log-uniform). Six cells x 4
+## replicates = 24 rows, every sample size inside the range.
+"$MS" upscale-featurize --reps 4 --sample-logrange 50,300 --sample-skew 1 \
+      --manifest lr.tsv train.cg m.mrmp lr.msur > lr.log 2>&1
+grep -q "wrote lr.msur and lr.tsv" lr.log || { echo "featurize --sample-logrange:"; cat lr.log; exit 1; }
+"$MS" inspect lr.msur > lr.txt 2>&1
+grep -qE "rows +24" lr.txt || { echo "4 log-range replicates over 6 cells should be 24 rows:"; cat lr.txt; exit 1; }
+grep -qi "logrange\|log-range\|50.*300" lr.txt lr.tsv || { echo "the ladder is not recorded in the msur or its manifest:"; cat lr.txt; exit 1; }
+if "$MS" upscale-featurize --reps 4 --sample-logrange 300,50 train.cg m.mrmp x.msur >/dev/null 2>&1; then
+  echo "featurize accepted an inverted log range"; exit 1
+fi
+
+## ---- 7. featurize on a CHAIN: one column per pattern per set --------------
+## A bank MRMP is a chain of sets. The featurizer maps every set's patterns
+## to its own columns (ms_mrmp_group_map_chain), so a resolver's pattern is a
+## column its hard block cannot express. The 6-class bank fixture builds 18
+## sets; the truth here is the reference itself.
+ms_ref_bank "$d"
+"$MS" mrmp-build --bank --anneal-min-seg 100,5 --min-pattern-cpgs 1 --resolvers all --force \
+      bankref.cg bank.mrmp > bank.log 2>&1 || { echo "bank build:"; cat bank.log; exit 1; }
+"$MS" upscale-featurize --reps 1 --sample 100 bankref.cg bank.mrmp chain.msur > chain.log 2>&1
+grep -q "chain of 18 sets -> 28 columns" chain.log ||
+  { echo "chain featurize did not map 18 sets to 28 columns:"; cat chain.log; exit 1; }
+"$MS" inspect chain.msur > chain.txt 2>&1
+grep -qE "rows +6" chain.txt || { echo "1 rep over 6 cells should be 6 rows:"; cat chain.txt; exit 1; }
+echo "ok: featurize (levels, log-range ladder, chain), set-units, train (split/threads/modes/pilot), upscale"

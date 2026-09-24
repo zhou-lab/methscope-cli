@@ -75,12 +75,13 @@ def registry_models():
             yield t[0], t[4], t[2], int(t[5])
 
 def human(b):
-    """1024 steps labelled KB/MB/GB -- the `ls -h` and `df -h` convention, and
-    the one YAME's fetch prints, so the page and the tool agree digit for
-    digit. Settled 2026-09-22: one spelling everywhere, and it is this one."""
+    """1024 steps labelled KB/MB/GB, one decimal above bytes -- the rule of
+    YAME's yame_human_size() and of its Catalogue page, so a model's size
+    reads the same on both pages (153.8 MB, not 154 MB here and 153.8 there).
+    Settled 2026-09-22 (the ladder) and 2026-09-24 (the decimal)."""
     for u in ("B", "KB", "MB", "GB"):
         if b < 1024 or u == "GB":
-            return ("%.0f %s" if u != "GB" else "%.1f %s") % (b, u)
+            return ("%d %s" if u == "B" else "%.1f %s") % (b, u)
         b /= 1024.0
 
 N = r"[0-9.]+(?: \+/- [0-9.]+)?"           # a number, optionally with its +/- spread
@@ -116,6 +117,33 @@ SNAPS = snapshots()
 def para(label, text):
     return "    <p><b>%s.</b> %s</p>" % (label, html.escape(text, quote=False)) if text and text != "?" else ""
 
+def linked(text):
+    """Escape, then link every `doi:10.x/y` -- the same rule as YAME's
+    Catalogue page, so a citation is clickable on both."""
+    return re.sub(r"doi:(10\.\S+?)(?=[,;)]|\s|$)",
+                  lambda m: '<a href="https://doi.org/%s" rel="noopener">%s</a>'
+                  % (html.escape(m.group(1), quote=True), m.group(0)),
+                  html.escape(text, quote=False))
+
+def citation(text):
+    return "    <p><b>Citation.</b> %s</p>" % linked(text) if text and text != "?" else ""
+
+## A description is one TSV field, so it cannot hold a line break; its
+## sections are marked inline instead, as a bracketed label at a sentence
+## start -- "... 2 s per sample. [Training] Trained on the 152/45/10 split
+## ...". The text before the first label is what the model IS. Plain-text
+## readers (`fetch -l`, yame's Catalogue tab) see the same brackets and read
+## them as labels; here each section becomes its own labelled paragraph.
+SECTION = re.compile(r"(?:^|\s)\[([A-Z][A-Za-z ]{1,30})\] ")
+
+def sections(text):
+    """[(label, text)] for one description: 'What it is' first, then one
+    entry per [Label] in the order written. Empty sections are dropped."""
+    parts = SECTION.split(text)
+    out = [("What it is", parts[0].strip())]
+    out += [(parts[i], parts[i + 1].strip()) for i in range(1, len(parts), 2)]
+    return [(l, t) for l, t in out if t]
+
 def inspect_block(f):
     """What the file actually contains, as `methscope inspect` reports it.
 
@@ -133,9 +161,13 @@ def entry(d, f, tag, size, r):
     key = f.split(".", 1)[0]
     title = r.get("title") or "—"
     acc = accuracy(r)
-    body = [para("What it is", r.get("description", "")),
-            "    <p><b>Accuracy.</b> %s</p>" % html.escape(acc, quote=False) if acc != "—" else "",
-            para("Source", r.get("source", "")), para("Citation", r.get("citation", "")),
+    secs = sections(r.get("description", ""))
+    ## The regex-found accuracy line stands in only while a row has no
+    ## [Accuracy] section of its own; with one, the sentence is already there.
+    body = [para(l, t) for l, t in secs]
+    body += ["    <p><b>Accuracy.</b> %s</p>" % html.escape(acc, quote=False)
+             if acc != "—" and not any(l == "Accuracy" for l, _ in secs) else "",
+            para("Source", r.get("source", "")), citation(r.get("citation", "")),
             inspect_block(f),
             "    <p class=\"m\">%s · tag %s · %s</p>" % (html.escape(d), html.escape(tag), human(size))]
     return ('  <details class="model" id="model-%s">\n    <summary><code class="inl">%s</code> '
@@ -165,40 +197,31 @@ def build():
     return "\n".join(out)
 
 def bank_table(rows, size_of):
-    """The four bank classifiers, from their files.tsv rows.
+    """The four bank classifiers, sized from their captured `inspect` output.
 
-    A _full row states both counts ("1,981 sets, 1,953 resolvers"); a _lite row
-    states only its resolvers ("the 150 class pairs with the thinnest ..."). The
-    difference between a full's two numbers IS its hard-block count, and a lite
-    keeps the same hard blocks -- that is what "one flag apart" means -- so the
-    lite's set count is resolvers + hard blocks. Checked against `inspect`:
-    human 1,981-1,953 = 28 -> 150+28 = 178; mouse 837-820 = 17 -> 100+17 = 117.
+    The set count is the chain ("over a 1981-set chain") and the resolver
+    count is the soft-children line ("1953 soft child(ren) lend columns ...").
+    Both used to be parsed out of the files.tsv prose, which broke the first
+    time the prose was rewritten for readers; the snapshot is captured from
+    the artifact, so it cannot drift by a rewording. A model without a
+    snapshot is an error here, not a blank row: run `make inspect-snapshots`.
     """
     import re
-    pair  = re.compile(r"\(([\d,]+) sets, ([\d,]+) resolvers\)")
-    lite  = re.compile(r"resolver for the ([\d,]+) class pairs")
+    chain = re.compile(r"over a ([\d,]+)-set chain")
+    soft  = re.compile(r"([\d,]+) soft child")
     num   = lambda t: int(t.replace(",", ""))
-    out, blocks = [], {}
+    out = []
     for key in ("hg38_celltype_full", "hg38_celltype_lite",
                 "mm10_brain_full", "mm10_brain_lite"):
-        row = rows.get(key + (".clfx" if not key.endswith(".clfx") else ""))
-        if not row: continue
-        bio, species = row.get("description", ""), key.split("_")[0]
-        m = pair.search(bio)
-        if m:
-            sets, res = num(m.group(1)), num(m.group(2))
-            blocks[species] = sets - res
-            note = "every class pair"
-        else:
-            m = lite.search(bio)
-            if not m:
-                sys.exit("build_models.py: %s states neither a (sets, resolvers) "
-                         "pair nor a resolver count; fix its files.tsv row" % key)
-            res = num(m.group(1))
-            if species not in blocks:
-                sys.exit("build_models.py: %s comes before its _full row" % key)
-            sets = res + blocks[species]
-            note = "the thinnest-footprint pairs"
+        f = key + ".clfx"
+        if f not in rows: continue
+        t = SNAPS.get(f, "")
+        m1, m2 = chain.search(t), soft.search(t)
+        if not (m1 and m2):
+            sys.exit("build_models.py: no set/resolver counts in the inspect "
+                     "snapshot for %s; run `make inspect-snapshots`" % f)
+        sets, res = num(m1.group(1)), num(m2.group(1))
+        note = "every class pair" if key.endswith("_full") else "the thinnest-footprint pairs"
         out.append("    <tr><td><code>%s.clfx</code></td><td>%s</td>"
                    "<td>%s &mdash; %s</td><td>%s</td></tr>"
                    % (key, format(sets, ","), format(res, ","), note,
@@ -221,9 +244,9 @@ def main():
     block = ("%s\n  <table>\n"
              "    <tr><th></th><th>sets</th><th>resolvers</th><th>size</th></tr>\n"
              "%s\n  </table>\n"
-             "  <p class=\"m\">Sizes are the catalogue's; sets and resolvers come from each "
-             "model's row in the file table, the same rows the cards below "
-             "use, so the two cannot disagree.</p>\n  %s"
+             "  <p class=\"m\">Sizes are the catalogue's; sets and resolvers are read from "
+             "each model's captured <code class=\"inl\">inspect</code> output, the same "
+             "block the cards below show, so the two cannot disagree.</p>\n  %s"
              % (BANK_BEGIN, bank_table(rows, size_of), BANK_END))
     new = new[:bi] + block + new[bj + len(BANK_END):]
     if "--check" in sys.argv:
