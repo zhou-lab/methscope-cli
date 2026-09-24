@@ -41,7 +41,7 @@ the query `.cg` fixtures live in
 [methscope_data](https://github.com/zhou-lab/methscope_data).
 
 The catalogue and the model tag are compiled into the binary — `methscope
---version` prints <!-- version:begin -->`(yame v1.54, models v12)`<!-- version:end --> — so a release fetches exactly the
+--version` prints <!-- version:begin -->`(yame v1.57, models v12)`<!-- version:end --> — so a release fetches exactly the
 models it documents. The store is shared with the other zhou-lab tools
 (`yame`, `kycg`) by convention, not by dependency.
 

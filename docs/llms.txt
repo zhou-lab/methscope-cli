@@ -40,16 +40,16 @@ when nothing can answer -- a script, a batch job -- which is what `-y` settles.
 with no argument browses; `methscope fetch -l` dumps the catalogue as TSV, which
 is the machine-readable form to read before fetching anything.
 
-  hg38_10k1.updecx         Upscaling decoder (one block)
-  hg38_wg.updecx           Upscaling decoder (whole genome)
-  hg38_celltype_full.clfx  Cell-type classifier (human, bank-full)
-  hg38_celltype_lite.clfx  Cell-type classifier (human, bank-lite)
-  hg38_sex.clfx            Sex classifier
-  hg38_33celltypes.msdref  Deconvolution reference, bulk-pooled
-  hg38_62celltypes.msdref  Deconvolution reference
-  mm10_wg.updecx           Upscaling decoder (whole genome, mouse)
-  mm10_brain_full.clfx     Cell-type classifier (mouse brain, bank-full)
-  mm10_brain_lite.clfx     Cell-type classifier (mouse brain, bank-lite)
+  hg38_10k1.updecx         Upscaling decoder (human, one-block demo)
+  hg38_wg.updecx           Upscaling decoder (human, whole genome)
+  hg38_celltype_full.clfx  Cell-type classifier (human, full)
+  hg38_celltype_lite.clfx  Cell-type classifier (human, lite)
+  hg38_sex.clfx            Sex classifier (human)
+  hg38_33celltypes.msdref  Deconvolution reference (human, bulk)
+  hg38_62celltypes.msdref  Deconvolution reference (human)
+  mm10_wg.updecx           Upscaling decoder (mouse, whole genome)
+  mm10_brain_full.clfx     Cell-type classifier (mouse brain, full)
+  mm10_brain_lite.clfx     Cell-type classifier (mouse brain, lite)
   mm10_41celltypes.msdref  Deconvolution reference (mouse brain)
 
 Example queries with KNOWN answers live beside the models in hg38/data:
@@ -178,9 +178,11 @@ Options:
                     script can check first. -l gives the same set as TSV.
   -y                Fetch a whole folder without asking. A folder is confirmed
                     first, since a short name can reach a lot -- `hg38` is 3.5
-                    GB. A name that picks out ONE file needs no -y: naming the
-                    file is the confirmation, so a documented fetch line runs
-                    in a script as it stands.
+                    GB. On a terminal the browser is the confirmation: it opens
+                    on the folder with exactly those files checked, f fetches,
+                    q leaves. Off one, a folder needs -y. A name that picks out
+                    ONE file needs neither: naming the file is the confirmation,
+                    so a documented fetch line runs in a script as it stands.
   -q                No progress output.
   -u <url>          Single-file form: what to download.
   -s <sha256>       Single-file form: the digest it must have.
