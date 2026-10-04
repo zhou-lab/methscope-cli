@@ -1,0 +1,23 @@
+name: pages-rebuild
+
+## Pages serves main:/docs in legacy mode, and its automatic build after a
+## push sometimes never happens (missed for 0.7, 0.8, 0.11, 0.12, 1.1.0).
+## This asks for the build explicitly on every push that touches docs/.
+## The release SOP's sha check stays as the verification.
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**']
+  workflow_dispatch:
+
+permissions:
+  pages: write
+
+jobs:
+  request:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request a Pages build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds"
