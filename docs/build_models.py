@@ -72,17 +72,25 @@ def registry_models():
     for line in out.splitlines()[1:]:
         t = line.split("\t")
         if t[0].endswith("/models"):
-            yield t[0], t[4], t[2], int(t[5])
+            yield t[0], t[4], t[2], int(t[5]) if t[5].isdigit() else 0
 
 def human(b):
     """1024 steps labelled KB/MB/GB, one decimal above bytes -- the rule of
     YAME's yame_human_size() and of its Catalogue page, so a model's size
     reads the same on both pages (153.8 MB, not 154 MB here and 153.8 there).
-    Settled 2026-09-22 (the ladder) and 2026-09-24 (the decimal)."""
+    Settled 2026-09-22 (the ladder) and 2026-09-24 (the decimal).
+    0 or missing means "size not published" and returns "", as
+    yame_human_size() does; shown() puts a dash there, never "0 B"
+    (settled 2026-10-04)."""
+    if not b: return ""
     for u in ("B", "KB", "MB", "GB"):
         if b < 1024 or u == "GB":
             return ("%d %s" if u == "B" else "%.1f %s") % (b, u)
         b /= 1024.0
+
+def shown(b):
+    """The size as a card or table prints it: a dash when unpublished."""
+    return human(b) or "\u2014"
 
 N = r"[0-9.]+(?: \+/- [0-9.]+)?"           # a number, optionally with its +/- spread
 ACC = re.compile(r"(class-balanced %s[ /,]+micro %s|micro %s[ /,]+class-balanced %s"
@@ -169,10 +177,10 @@ def entry(d, f, tag, size, r):
              if acc != "—" and not any(l == "Accuracy" for l, _ in secs) else "",
             para("Source", r.get("source", "")), citation(r.get("citation", "")),
             inspect_block(f),
-            "    <p class=\"m\">%s · tag %s · %s</p>" % (html.escape(d), html.escape(tag), human(size))]
+            "    <p class=\"m\">%s · tag %s · %s</p>" % (html.escape(d), html.escape(tag), shown(size))]
     return ('  <details class="model" id="model-%s">\n    <summary><code class="inl">%s</code> '
             '<span class="m">— %s · %s</span></summary>\n%s\n  </details>'
-            % (key, html.escape(f), html.escape(title, quote=False), human(size), "\n".join(b for b in body if b)))
+            % (key, html.escape(f), html.escape(title, quote=False), shown(size), "\n".join(b for b in body if b)))
 
 def build():
     tsv = read_tsv(TSV)
@@ -237,7 +245,7 @@ def main():
     ## the bank table and the one sentence that repeats its lite size
     rows = read_tsv(TSV)
     sizes = {f: b for _, f, _, b in registry_models()}
-    size_of = lambda f: human(sizes[f]) if f in sizes else "\u2014"
+    size_of = lambda f: shown(sizes.get(f))
     bi, bj = new.find(BANK_BEGIN), new.find(BANK_END)
     if bi < 0 or bj < 0:
         sys.exit("build_models.py: bank markers not found in docs/index.html")
