@@ -21,29 +21,94 @@ It builds [YAME](https://github.com/zhou-lab/YAME) as a static library
 **Documentation, with runnable examples for every command:
 <https://zhou-lab.github.io/methscope-cli/>**
 
-## Install
+## System requirements
+
+**Operating systems.** Linux x86-64 (glibc 2.17 or newer) and macOS on Apple
+silicon (macOS 11 or newer). Conda packages are built for `linux-64` and
+`osx-arm64`. Tested on macOS 26.6 (Apple M2 Pro, 10 cores, 16 GB RAM) and
+Red Hat Enterprise Linux 9.1 (glibc 2.34; Intel Xeon Platinum 8380, 4 cores and
+8 GB allocated).
+
+**Software dependencies.** All are installed by conda with the package.
+
+| dependency   | version                         | role                                   |
+|--------------|---------------------------------|----------------------------------------|
+| libxgboost   | 3.4.2 tested (conda-forge)      | classifier inference, the one external runtime library |
+| zlib         | 1.3.2 tested                    | `.cg` / `.cm` compression              |
+| libcurl      | 8.22.0 tested                   | `methscope fetch`                      |
+| yame         | >= 1.50 (1.59 tested)           | the `yame` binary used by the Upscale and MRMP examples |
+
+YAME is compiled into the binary from a pinned submodule; `methscope --version`
+prints the YAME version and the model tag; at this commit it prints
+<!-- version:begin -->`(yame v1.58, models v12)`<!-- version:end -->.
+
+**Versions tested.** methscope v1.1.1 with models v12, libxgboost 3.4.2 and
+yame 1.59, on macOS 26.6 (osx-arm64) and RHEL 9.1 (linux-64).
+
+**Hardware.** No non-standard hardware is required. Classification,
+deconvolution and upscaling run on a standard laptop or desktop CPU, in pure C,
+with no GPU, CUDA or BLAS. A GPU is optional and is used only by
+`upscale-train`, to train a new decoder faster, through the separate
+`methscope-cuda` package (linux-64 only). Whole-genome upscaling uses about
+3 GB of memory; the whole-genome human decoder is a 2.7 GB download.
+
+## Installation
 
 ```sh
 conda install -c zhou-lab -c conda-forge methscope
+methscope --version
 ```
 
-## Quick start
+Typical install time on a standard desktop or server: under 1 min into a
+fresh conda environment with an empty package cache (15 s on a Mac M2 Pro,
+43 s on a RHEL 9.1 Xeon node), not counting the installation of conda itself.
+
+## Demo
+
+The demo classifies four cells of known type with the shipped human
+cell-type classifier; the two downloads total about 27 MB.
 
 ```sh
 mkdir -p ~/tmp/methscope && cd ~/tmp/methscope
-methscope fetch -c hg38/models/hg38_celltype_lite.clfx hg38/data/human_hg38_celltypes.cg
+methscope fetch -c hg38/data/human_hg38_celltypes.cg
+methscope fetch -c hg38/models/hg38_celltype_lite.clfx
 methscope classify hg38_celltype_lite.clfx human_hg38_celltypes.cg
 ```
 
-`methscope fetch` with no arguments browses the catalogue. Pretrained models
-live on HuggingFace ([zhou-lab/methscope](https://huggingface.co/zhou-lab/methscope));
-the query `.cg` fixtures live in
-[methscope_data](https://github.com/zhou-lab/methscope_data).
+Expected output (`confidence` is the probability of the called class;
+`certainty` is how decisively the evidence chose it over the alternatives):
 
-The catalogue and the model tag are compiled into the binary — `methscope
---version` prints <!-- version:begin -->`(yame v1.58, models v12)`<!-- version:end --> — so a release fetches exactly the
-models it documents. The store is shared with the other zhou-lab tools
-(`yame`, `kycg`) by convention, not by dependency.
+```
+cell             prediction_label  confidence  certainty
+Oligodendrocyte  ODC                 0.999991   0.999971
+Pancreas-Beta    Beta                0.999998   0.999992
+Blood-NK         NK CD16             0.925882   0.935428
+Blood-Monocytes  Mono                0.949018   0.951083
+```
+
+All four calls agree with the known cell types. Expected run time on a normal
+desktop or server: under 10 s in total, with peak memory under 1 GB. On a Mac
+M2 Pro the two downloads took 2.6 s and `classify` 1.3 s; on a RHEL 9.1 Xeon
+node, 2.3 s and 3.3 s on one thread, with 581 MB peak memory.
+
+The documentation page gives a runnable example with its expected output for
+every command, including deconvolution of simulated mixtures with exact known
+proportions (`hg38/data/human_hg38_immune_mixture.cg`) and genome-wide
+upscaling; `make test-docs` runs all of them.
+
+## Running on your own data
+
+Convert your methylation calls to a YAME `.cg` store (see the
+[YAME documentation](https://github.com/zhou-lab/YAME)), fetch the model for your task
+with `methscope fetch`, and run `classify`, `deconv` or `upscale` on the store.
+Each command's options are documented at
+<https://zhou-lab.github.io/methscope-cli/> and by `methscope <command> -h`.
+
+## Reproducing the manuscript
+
+TBD: instructions for regenerating the published figures and numbers from
+public sources (methscope_data, the pinned HuggingFace model tag, and the
+figure scripts), to be added before publication.
 
 ## Build from source
 
