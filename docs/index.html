@@ -844,7 +844,8 @@ predict argmin_class (v1 + v0), needing ≥20 observed patterns per side</code><
   <h2>Deconvolve — shipped reference <span class="m">— cell-type proportions</span></h2>
   <p>Solve a mixture against a signature panel by non-negative least squares. The solver
     rebuilds its pattern set per query from the CpGs that query measured, so it is robust to
-    extreme sparsity and works at cfDNA-scale coverage.</p>
+    extreme sparsity and works at cfDNA-scale coverage. <a href="#deconv-scope">How the
+    adaptive scope works</a> walks one record through the rounds.</p>
   <!-- example:30_deconv -->
 <pre><code><span class="cm"># a scratch dir for the outputs</span>
 mkdir -p ~/tmp/methscope &amp;&amp; cd ~/tmp/methscope
@@ -893,6 +894,42 @@ tnaive_cd4_70_cd8_30_2pow16: Tnaive_CD4 66.7%; Tnaive_CD8 32.0%; Endo_Lym 0.7%; 
     hepatocytes and BLUEPRINT granulocytes.</p>
 </section>
 
+<section class="card" id="deconv-scope">
+  <h2>How the adaptive scope works <span class="m">— one record, round by round</span></h2>
+  <figure class="dia">
+<pre><span class="c">cd4_70_cd8_30_2pow22 · 2^22 binarized CpGs · hg38_62celltypes.msdref</span>
+
+<span class="k">round 1</span>   62 classes   patterns built from the CpGs this query measured
+          1,897 patterns over 39,489 CpGs  ──►  NNLS, row weight √n
+            │  keep classes with mass ≥ 0.005, then pull back any class
+            │  the panel separates from a survivor by ≤ 200 CpGs
+            ▼
+<span class="k">round 2</span>    5 classes   Tmem_CD4 Tmem_CD8 Tnaive_CD4 Tnaive_CD8 NK_CD56
+          30 patterns over 79,210 CpGs  ──►  NNLS
+            │  <span class="c">a CpG now only has to split these 5, not all 62</span>
+            ▼
+<span class="k">round 3</span>    4 classes   NK_CD56 dropped
+          14 patterns over 52,300 CpGs, pair rescue on 2 weak pairs
+          ──►  99,235 CpGs  ──►  NNLS
+            │  scope unchanged: stop
+            ▼
+<span class="k">final</span>      NNLS on the settled 4, rebuilt once more
+          Tmem_CD4 0.50 · Tmem_CD8 0.27 · Tnaive_CD4 0.21 · Tnaive_CD8 0.03
+
+<span class="k">.msfm</span>      the same rounds over the embedding's FIXED patterns
+          878 of 880 usable at 62 classes  ──►  50 that still vary at 4
+          <span class="c">no rebuild: the CpGs per pattern never grow</span></pre>
+<figcaption><b>Adaptive scope.</b> Each round rebuilds the pattern set over the classes
+  still in play, so a narrower scope admits CpGs the wide one had to reject: here the
+  evidence grows from 39,489 to 99,235 CpGs as 62 classes narrow to 4. The pair rescue
+  then admits CpGs that split a weakly separated pair on its own beta gap. An
+  <code class="inl">.msfm</code> query runs the same rounds but can only drop patterns
+  that stop varying; it cannot regroup CpGs. Numbers from
+  <code class="inl">deconv -v</code> on the shipped immune-mixture fixture, the same
+  record as above.</figcaption>
+  </figure>
+</section>
+
 <section class="card">
   <h2>Deconvolve an MRMP embedding <span class="m">— an <code class="inl">.msfm</code> query</span></h2>
   <p>The query can be an MRMP <i>embedding</i> instead of a <code class="inl">.cg</code>: per
@@ -924,7 +961,7 @@ tnaive_cd4_70_cd8_30_2pow18: Tnaive_CD4 78.5%; Tnaive_CD8 21.5%
 tnaive_cd4_70_cd8_30_2pow16: Tnaive_CD4 71.5%; Tnaive_CD8 19.6%; Hema_Mast 7.2%; NP 1.0%; ODC 0.7%</code></pre>
   <p>At 2<sup>22</sup> CpGs this matches the <code class="inl">.cg</code> run above to within
     two points; at 2<sup>16</sup> it drifts further. The embedding fixes the pattern set, so
-    this is a <b>fixed-panel</b> mode. The adaptive rounds still run: each one drops the
+    this is a <b>fixed-panel</b> mode. The <a href="#deconv-scope">adaptive rounds</a> still run: each one drops the
     classes without mass, keeps only the MRMPs that still vary across the classes left in
     scope, and refits. What they cannot do is regroup the query's CpGs. On a
     <code class="inl">.cg</code> query, a narrower scope rebuilds the patterns from the

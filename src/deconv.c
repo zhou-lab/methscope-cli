@@ -2067,6 +2067,7 @@ static void d2m_record(const d2ref_t *R, const d2mref_t *M, const d2opt_t *o,
  * the embedding are shared read-only, results land in per-record slots. */
 typedef struct {
   const d2ref_t *R; const d2mref_t *M; const d2opt_t *o; const ms_msfm_t *F;
+  char *const *names;                 /* record names as reported */
   double *xall;
   uint32_t next; pthread_mutex_t lock;
 } d2mjob_t;
@@ -2082,7 +2083,7 @@ static void *d2m_worker(void *arg) {
     if (rec == UINT32_MAX) break;
     d2m_record(J->R, J->M, J->o, &w, J->F->beta + (size_t)rec * np,
                J->F->counts ? J->F->counts + (size_t)rec * np : NULL,
-               J->F->record_names[rec], J->xall + (size_t)rec * J->R->n_class);
+               J->names[rec], J->xall + (size_t)rec * J->R->n_class);
   }
   d2mws_free(&w);
   return NULL;
@@ -2141,12 +2142,6 @@ static int d2m_main(const d2ref_t *R, d2opt_t *opt, const char *qpath,
   double *xall = d2alloc((size_t)nr * nc, sizeof(double), "results");
   if (nthreads < 1) nthreads = 1;
   if ((uint32_t)nthreads > nr) nthreads = nr ? (int)nr : 1;
-  d2mjob_t J = { R, &M, opt, &F, xall, 0, PTHREAD_MUTEX_INITIALIZER };
-  pthread_t *th = d2alloc(nthreads, sizeof(pthread_t), "threads");
-  for (int t = 0; t < nthreads; ++t)
-    if (pthread_create(&th[t], NULL, d2m_worker, &J) != 0)
-      d2die("cannot create thread", NULL);
-  for (int t = 0; t < nthreads; ++t) pthread_join(th[t], NULL);
   /* classify-featurize names every row <cell>-R<draw>. With one draw per cell
    * (every name ends -R1) the tag says nothing, so report the cell's own name,
    * the one the .cg carried; a coverage ladder keeps its tags. */
@@ -2155,13 +2150,22 @@ static int d2m_main(const d2ref_t *R, d2opt_t *opt, const char *qpath,
     size_t L = strlen(F.record_names[r]);
     strip = L > 3 && !strcmp(F.record_names[r] + L - 3, "-R1");
   }
+  char **names = d2alloc(nr ? nr : 1, sizeof(char *), "record names");
   for (uint32_t r = 0; r < nr; ++r) {
-    char nm[1024];
-    snprintf(nm, sizeof nm, "%s", F.record_names[r]);
-    if (strip) nm[strlen(nm) - 3] = '\0';
-    d2_emit(out, R, nm, xall + (size_t)r * nc, outmode, min_frac, G);
+    names[r] = strdup(F.record_names[r]);
+    if (!names[r]) d2die("out of memory", "record names");
+    if (strip) names[r][strlen(names[r]) - 3] = '\0';
   }
-  free(th); free(xall);
+  d2mjob_t J = { R, &M, opt, &F, names, xall, 0, PTHREAD_MUTEX_INITIALIZER };
+  pthread_t *th = d2alloc(nthreads, sizeof(pthread_t), "threads");
+  for (int t = 0; t < nthreads; ++t)
+    if (pthread_create(&th[t], NULL, d2m_worker, &J) != 0)
+      d2die("cannot create thread", NULL);
+  for (int t = 0; t < nthreads; ++t) pthread_join(th[t], NULL);
+  for (uint32_t r = 0; r < nr; ++r)
+    d2_emit(out, R, names[r], xall + (size_t)r * nc, outmode, min_frac, G);
+  for (uint32_t r = 0; r < nr; ++r) free(names[r]);
+  free(names); free(th); free(xall);
   free(M.mean); free(M.rcpg);
   ms_msfm_close(&F);
   return 0;
