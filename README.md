@@ -151,6 +151,9 @@ research purposes under the 2-Clause BSD License; for use or transfers to
 commercial entities, inquire with Dr. Wanding Zhou at <zhouw3@chop.edu>.
 See `LICENSE` for the full terms.
 Copyright (C) 2025-present The Children's Hospital of Philadelphia.
+The pretrained models on [HuggingFace](https://huggingface.co/zhou-lab/methscope)
+are under the same academic BSD-2 terms; the test data in
+[methscope_data](https://github.com/zhou-lab/methscope_data) are under CC BY 4.0.
 
 Vendored: `src/nnls.c` — Lawson–Hanson NNLS (C. Lawson & R. Hanson, JPL/SIAM;
 [netlib lawson-hanson](https://www.netlib.org/lawson-hanson/)), f2c-translated,
