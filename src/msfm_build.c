@@ -160,6 +160,7 @@ typedef struct {
   uint64_t        seed;
   uint16_t       *beta;        /* (n_reps * n_cells) x ncol */
   uint32_t       *levels;      /* n_reps * n_cells */
+  uint32_t       *counts;      /* rows x ncol_out measured CpGs, or NULL */
   uint32_t        cursor;      /* next cell to claim */
   pthread_mutex_t lock;
   int             progress;
@@ -333,6 +334,21 @@ static void *worker(void *arg) {
 
       uint64_t row = (uint64_t)rep * J->n_cells + cell;
       uint16_t *out = J->beta + row * J->ncol_out;
+      /* --with-n: the CpGs behind each emitted column, before any NA rule, so
+       * a reader can tell "unobserved" (0) from "observed but too thin". */
+      if (J->counts) {
+        uint32_t *cn = J->counts + row * J->ncol_out;
+        for (uint32_t j = 0; j < J->ncol_out; ++j) {
+          if (J->em_a[j] < 0) {                    /* RANK: both sides */
+            uint64_t s = 0;
+            for (uint32_t k = J->rk_off[j]; k < J->rk_off[j + 1]; ++k)
+              s += cnt[J->rk_idx[k]];
+            cn[j] = s > UINT32_MAX ? UINT32_MAX : (uint32_t)s;
+          } else if (J->em_b[j] >= 0) {            /* CONTRAST: both sides */
+            cn[j] = cnt[J->em_a[j]] + cnt[J->em_b[j]];
+          } else cn[j] = cnt[J->em_a[j]];
+        }
+      }
       /* Thin evidence is recorded as MISSING, not as a confident beta. A beta
        * from one CpG can only be 0 or 1, so after the 0.5 threshold it is always
        * a maximally-confident call and never a borderline one -- and it carries
@@ -535,7 +551,7 @@ void ms_msfm_build_sampled(const char *query, const char *mrmp, uint32_t pattern
   ms_msfm_build_sampled_multi(query, one, NULL, NULL, np, 1, rep_sample, n_reps, binarize,
                               min_cpgs, seed, threads, binarize_feat, 0, 0,
                               beta_out, levels_out,
-                              names_out, n_cells_out, ncol_out, NULL);
+                              names_out, n_cells_out, ncol_out, NULL, NULL);
 }
 
 /* Columns a single set contributes under a given feature mode. The rules are
@@ -649,7 +665,8 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
                            int contrast, int rank,
                            uint16_t **beta_out, uint32_t **levels_out,
                            char ***names_out, uint32_t *n_cells_out,
-                           uint32_t *ncol_out, uint32_t *set_col0_out) {
+                           uint32_t *ncol_out, uint32_t *set_col0_out,
+                           uint32_t **counts_out) {
   const char *mrmp = mrmps[0];
   uint32_t patterns = patterns_in[0];
   /* record offsets from the .cg index -- the same mechanism `yame subset -l`
@@ -1082,8 +1099,12 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
    * read them at another. */
   uint16_t *beta = bmal(n_rows * n_emit * sizeof(uint16_t), "beta matrix");
   uint32_t *levels = bmal(n_rows * sizeof(uint32_t), "levels");
+  uint32_t *counts = counts_out
+                   ? bmal(n_rows * n_emit * sizeof(uint32_t), "count matrix")
+                   : NULL;
 
   job_t J = {0};
+  J.counts = counts;
   J.query = query; J.n_cells = n_cells; J.n_cpg = n_cpg;
   J.col_thresh = col_thresh;
   J.cpg_off = cpg_off; J.cpg_col = cpg_col;
@@ -1129,5 +1150,6 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
   if (set_col0_out) memcpy(set_col0_out, set_col0, n_sets * sizeof(uint32_t));
   free(set_col0);
   *beta_out = beta; *levels_out = levels; *names_out = names;
+  if (counts_out) *counts_out = counts;
   *n_cells_out = n_cells; *ncol_out = n_emit;
 }

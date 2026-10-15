@@ -481,7 +481,8 @@ static int predict_tree(const char *query_cg, const char *bundle,
                               (mode & MSFM_FLAG_CONTRAST_ADD)  ? 1 : 0,
                               (mode & MSFM_FLAG_RANK_ONLY) ? 2 :
                               (mode & MSFM_FLAG_RANK_ADD)  ? 1 : 0,
-                              &beta, &levels, &cellname, &ncells, &ncol, col0);
+                              &beta, &levels, &cellname, &ncells, &ncol, col0,
+                              NULL);
   free(base); free(blen2); free(np); free((void *)rr); free(col0);
   /* The --data path checks this; the .cg path did not, which is how a matrix
    * missing whole sets scored 766 cells wrong without a word. Both paths feed
