@@ -72,7 +72,7 @@ def registry_models():
     for line in out.splitlines()[1:]:
         t = line.split("\t")
         if t[0].endswith("/models"):
-            yield t[0], t[4], t[2], int(t[5]) if t[5].isdigit() else 0
+            yield t[0], t[4], t[2], int(t[5]) if t[5].isdigit() else 0, t[1]
 
 def human(b):
     """1024 steps labelled KB/MB/GB, one decimal above bytes -- the rule of
@@ -164,7 +164,22 @@ def inspect_block(f):
     return ('    <p><b>What <code class="inl">inspect</code> reports.</b></p>\n'
             '    <pre class="res help"><code>%s</code></pre>' % html.escape(t))
 
-def entry(d, f, tag, size, r):
+def source(text, src, f, tag):
+    """The Source line, with the file's own page linked. A HuggingFace row
+    (`hf:<org>/<repo>`) links to the file AT ITS TAG -- the bytes this binary
+    fetches, which `main` stops being as soon as a newer tag lands."""
+    if not text or text == "?": return ""
+    t = html.escape(text, quote=False)
+    if src.startswith("hf:"):
+        repo = src[3:]
+        url = "https://huggingface.co/%s/blob/%s/%s" % (repo, tag, f)
+        a = '<a href="%s" rel="noopener">' % html.escape(url, quote=True)
+        phrase = html.escape(repo, quote=False) + " on HuggingFace"
+        t = (t.replace(phrase, a + phrase + "</a>", 1) if phrase in t
+             else t + " (" + a + "this file on Hugging Face</a>)")
+    return "    <p><b>Source.</b> %s</p>" % t
+
+def entry(d, f, tag, size, r, src=""):
     """One folded entry per file; prose, not code. A link to #model-<key> opens it."""
     key = f.split(".", 1)[0]
     title = r.get("title") or "—"
@@ -175,7 +190,7 @@ def entry(d, f, tag, size, r):
     body = [para(l, t) for l, t in secs]
     body += ["    <p><b>Accuracy.</b> %s</p>" % html.escape(acc, quote=False)
              if acc != "—" and not any(l == "Accuracy" for l, _ in secs) else "",
-            para("Source", r.get("source", "")), citation(r.get("citation", "")),
+            source(r.get("source", ""), src, f, tag), citation(r.get("citation", "")),
             inspect_block(f),
             "    <p class=\"m\">%s · tag %s · %s</p>" % (html.escape(d), html.escape(tag), shown(size))]
     return ('  <details class="model" id="model-%s">\n    <summary><code class="inl">%s</code> '
@@ -185,18 +200,18 @@ def entry(d, f, tag, size, r):
 def build():
     tsv = read_tsv(TSV)
     items = []
-    for d, f, tag, size in registry_models():
+    for d, f, tag, size, src in registry_models():
         key, ext = f.split(".", 1)[0], "." + f.rsplit(".", 1)[1]
-        items.append((ROLE.get(ext, (9, ext))[0], d, f, tag, size, tsv.get(f, {})))
+        items.append((ROLE.get(ext, (9, ext))[0], d, f, tag, size, tsv.get(f, {}), src))
     items.sort(key=lambda x: (x[0], x[1], x[2]))
     out, role = [BEGIN], None
-    for r0, d, f, tag, size, r in items:
+    for r0, d, f, tag, size, r, src in items:
         if r0 != role:
             if role is not None: out.append("</section>")
             t, m = ROLE_TITLE.get(r0, (r0, ""))
             out.append('<section class="card">\n  <h2>%s <span class="m">— %s</span></h2>' % (t, m))
             role = r0
-        out.append(entry(d, f, tag, size, r))
+        out.append(entry(d, f, tag, size, r, src))
     out.append("</section>")
     out.append('<section class="card">\n  <p class="m">Generated from the file table <code class="inl">YAME/tools/registry/files.tsv</code> at the '
                'submodule\'s tag by <code class="inl">docs/build_models.py</code>; the same rows describe '
@@ -244,7 +259,7 @@ def main():
 
     ## the bank table and the one sentence that repeats its lite size
     rows = read_tsv(TSV)
-    sizes = {f: b for _, f, _, b in registry_models()}
+    sizes = {f: b for _, f, _, b, _ in registry_models()}
     size_of = lambda f: shown(sizes.get(f))
     bi, bj = new.find(BANK_BEGIN), new.find(BANK_END)
     if bi < 0 or bj < 0:

@@ -86,7 +86,11 @@
   .expand{color:var(--fg);margin:.5em 0 .4em;font-size:.95rem;max-width:76ch;line-height:1.55}
   .expand b{color:var(--fg)}
   .links{font-size:.82rem;color:var(--muted);margin:.2em 0 0}
-  .links a{font-weight:600}.links span{opacity:.4;margin:0 7px}
+  .links a{font-weight:600}.links>span{opacity:.4;margin:0 7px}
+  /* icon links: the GitHub mark takes the link colour (currentColor), the
+     Hugging Face face keeps its own yellow, which reads on both themes */
+  .links a.il{display:inline-flex;align-items:center;gap:.32em}
+  .links a.il svg{width:1.1em;height:1.1em;flex:none}
 
   /* --- horizontal tab bar: a page you scan, not one you navigate --- */
   .tabs{display:flex;flex-wrap:wrap;gap:2px;margin:14px 0 18px;border-bottom:1px solid var(--line)}
@@ -269,8 +273,10 @@
     Methylation Pattern) encoding — cell-type annotation, deconvolution, and genome-wide CpG
     upscaling.</p>
   <p class="links">
-    <a href="https://github.com/zhou-lab/methscope-cli">GitHub</a><span>·</span>
-    <a href="https://huggingface.co/zhou-lab/methscope">models</a><span>·</span>
+    <a class="il" href="https://github.com/zhou-lab/methscope-cli" title="GitHub"
+       aria-label="GitHub"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a><span>·</span>
+    <a class="il" href="https://huggingface.co/zhou-lab/methscope" title="Models on Hugging Face"
+       aria-label="Models on Hugging Face"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="14" r="12" fill="#FFD21E"/><circle cx="11.5" cy="11.5" r="1.7" fill="#32343D"/><circle cx="20.5" cy="11.5" r="1.7" fill="#32343D"/><path d="M10.5 16.5c1.4 3 3.3 4.4 5.5 4.4s4.1-1.4 5.5-4.4" fill="none" stroke="#32343D" stroke-width="1.8" stroke-linecap="round"/><ellipse cx="6.5" cy="24" rx="4" ry="3.2" fill="#FF9D0B"/><ellipse cx="25.5" cy="24" rx="4" ry="3.2" fill="#FF9D0B"/></svg><span>models</span></a><span>·</span>
     <a href="llms.txt">For coding agents</a><span>·</span>
     hg38 · mm10 · WGBS · single-cell · spatial
   </p>
@@ -1297,7 +1303,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
 <div class="grid">
 
 <section class="card">
-  <h2>Published models <span class="m">— huggingface.co/zhou-lab/methscope, one entry per file</span></h2>
+  <h2>Published models <span class="m">— <a href="https://huggingface.co/zhou-lab/methscope" rel="noopener">huggingface.co/zhou-lab/methscope</a>, one entry per file</span></h2>
   <p>Every model is a single self-contained bundle carrying its own MRMP feature definition
     (and labels or signature), so a query <code class="inl">.cg</code> runs directly. The file
     extension names the role — <code class="inl">.clfx</code> classifier,
@@ -1324,7 +1330,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
     <p><b>Training.</b> The reference is 84,601 labelled cells: pseudobulks from the Zhou lab 2025 single-cell atlas, the Loyfer sorted-cell atlas and BLUEPRINT. Built 2026-09-06 with mrmp-build --bank --resolver-gate -1 and classify-train --pool-nodes (max depth 4, colsample 0.4), over a 24-rung coverage ladder with binarized reads. The final model was assembled from the per-fold resolver cache. Both flags have since been retired (--resolvers N replaces the gate, and the single-booster mode is gone), so the current recipe is the one on the methscope training page.</p>
     <p><b>Accuracy.</b> Class-balanced 0.9544 / micro 0.9569 in ten-fold cross-validation over all 84,601 cells.</p>
     <p><b>History.</b> It replaces the routing-tree classifier hg38_celltype (33 classes), withdrawn at model tag v10.</p>
-    <p><b>Source.</b> zhou-lab/methscope on HuggingFace, published with methscope-cli</p>
+    <p><b>Source.</b> <a href="https://huggingface.co/zhou-lab/methscope/blob/v12/hg38_celltype_full.clfx" rel="noopener">zhou-lab/methscope on HuggingFace</a>, published with methscope-cli</p>
     <p><b>Citation.</b> Loyfer et al. 2023, Nature, <a href="https://doi.org/10.1038/s41586-022-05580-6" rel="noopener">doi:10.1038/s41586-022-05580-6</a>; Stunnenberg et al. 2016, Cell, <a href="https://doi.org/10.1016/j.cell.2016.11.007" rel="noopener">doi:10.1016/j.cell.2016.11.007</a> (BLUEPRINT); Zhou lab single-cell atlas 2025</p>
     <p><b>What <code class="inl">inspect</code> reports.</b></p>
     <pre class="res help"><code>container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections
@@ -1383,7 +1389,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
     <p><b>Training.</b> As hg38_celltype_full, with mrmp-build --min-pattern-cpgs 500 --resolvers 150 and classify-train -n 100 (methscope-cli 60988b9).</p>
     <p><b>Validation.</b> Correctly calls the four Loyfer example cells (ODC, Beta, NK CD16, Mono).</p>
     <p><b>Accuracy.</b> Class-balanced 0.9403 / micro 0.9558 in ten-fold cross-validation at full coverage, against 0.9544 / 0.9569 for the full model. The gap widens on sparse data: at 4,096 observed CpGs, class-balanced accuracy is 0.6685 against 0.7612.</p>
-    <p><b>Source.</b> zhou-lab/methscope on HuggingFace, published with methscope-cli</p>
+    <p><b>Source.</b> <a href="https://huggingface.co/zhou-lab/methscope/blob/v12/hg38_celltype_lite.clfx" rel="noopener">zhou-lab/methscope on HuggingFace</a>, published with methscope-cli</p>
     <p><b>Citation.</b> Loyfer et al. 2023, Nature, <a href="https://doi.org/10.1038/s41586-022-05580-6" rel="noopener">doi:10.1038/s41586-022-05580-6</a>; Stunnenberg et al. 2016, Cell, <a href="https://doi.org/10.1016/j.cell.2016.11.007" rel="noopener">doi:10.1016/j.cell.2016.11.007</a> (BLUEPRINT); Zhou lab single-cell atlas 2025</p>
     <p><b>What <code class="inl">inspect</code> reports.</b></p>
     <pre class="res help"><code>container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections
@@ -1440,7 +1446,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
     <p><b>What it is.</b> Calls a sample female or male. At 30 KB it is the smallest model in the catalogue, and a quick way to check that an installation works end to end.</p>
     <p><b>Architecture.</b> A logistic model over two X-inactivation features, Xa_lo and Xa_hi, from a three-state MRMP.</p>
     <p><b>Accuracy.</b> About 95.8% on an independent cohort.</p>
-    <p><b>Source.</b> zhou-lab/methscope on HuggingFace, published with methscope-cli</p>
+    <p><b>Source.</b> <a href="https://huggingface.co/zhou-lab/methscope/blob/v12/hg38_sex.clfx" rel="noopener">zhou-lab/methscope on HuggingFace</a>, published with methscope-cli</p>
     <p><b>Citation.</b> Loyfer et al. 2023, Nature, <a href="https://doi.org/10.1038/s41586-022-05580-6" rel="noopener">doi:10.1038/s41586-022-05580-6</a></p>
     <p><b>What <code class="inl">inspect</code> reports.</b></p>
     <pre class="res help"><code>container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 30,931 bytes
@@ -1477,7 +1483,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
     <p><b>Accuracy.</b> Class-balanced 0.9746 / micro 0.9720 in ten-fold cross-validation. On the 49,113 Liu cells that never entered the model (18 of the 41 classes, the large cortical ones): micro 0.9660 / class-balanced 0.9707.</p>
     <p><b>Caveats.</b> It is brain only. With no non-brain classes, a cell from another tissue is assigned to the nearest brain type without warning, so confirm the tissue first.</p>
     <p><b>History.</b> It replaces the routing-tree classifier mm10_celltype_brain, withdrawn at model tag v10.</p>
-    <p><b>Source.</b> zhou-lab/methscope on HuggingFace, published with methscope-cli</p>
+    <p><b>Source.</b> <a href="https://huggingface.co/zhou-lab/methscope/blob/v12/mm10_brain_full.clfx" rel="noopener">zhou-lab/methscope on HuggingFace</a>, published with methscope-cli</p>
     <p><b>Citation.</b> Liu et al. 2021, Nature, <a href="https://doi.org/10.1038/s41586-020-03182-8" rel="noopener">doi:10.1038/s41586-020-03182-8</a></p>
     <p><b>What <code class="inl">inspect</code> reports.</b></p>
     <pre class="res help"><code>container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections
@@ -1526,7 +1532,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
     <p><b>Accuracy.</b> On the 49,113 held-out Liu cells: micro 0.9583 / class-balanced 0.9638 (18 classes), within a point of the full model (0.9660 / 0.9707). On fold-0 cross-validation test cells, class-balanced accuracy is 0.9778 at full coverage (full model 0.9789) and 0.8195 at 4,096 observed CpGs (0.8778).</p>
     <p><b>Caveats.</b> Like every mouse classifier here, it is brain only.</p>
     <p><b>History.</b> It beats the v9 lite (micro 0.9482 / class-balanced 0.9595), which had 117 gate-picked resolvers and was twice this size.</p>
-    <p><b>Source.</b> zhou-lab/methscope on HuggingFace, published with methscope-cli</p>
+    <p><b>Source.</b> <a href="https://huggingface.co/zhou-lab/methscope/blob/v12/mm10_brain_lite.clfx" rel="noopener">zhou-lab/methscope on HuggingFace</a>, published with methscope-cli</p>
     <p><b>Citation.</b> Liu et al. 2021, Nature, <a href="https://doi.org/10.1038/s41586-020-03182-8" rel="noopener">doi:10.1038/s41586-020-03182-8</a></p>
     <p><b>What <code class="inl">inspect</code> reports.</b></p>
     <pre class="res help"><code>container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections
@@ -1578,7 +1584,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
     <p><b>Validation.</b> A shipped build uses every donor, so the confusion matrix was measured on a donor-held-out twin: per label, every fourth donor by sample-ID hash was held out as mixture components, giving 480 mixtures of 2 to 5 classes pooled over 2^16 to 2^22 CpGs. (The control sheet's own split column is a cohort flag covering only 9 of the 33 classes, so it could not be used.) The closest pairs are CD4 and CD8 T cells (0.43), macrophage and monocyte (0.23), dendritic cell and monocyte (0.17), bladder and prostate epithelium (0.12), and NK and CD8 T cells (0.10).</p>
     <p><b>Caveats.</b> Its macrophage class is monocyte-derived in vitro, so tissue-resident macrophages have no matching reference.</p>
     <p><b>History.</b> It replaced hg38_65celltypes.refx, withdrawn at model tag v7; methscope no longer reads that format. Version 3 of the format since model tag v12 adds the confusion matrix; the M/U block is byte-identical to version 2.</p>
-    <p><b>Source.</b> zhou-lab/methscope on HuggingFace, published with methscope-cli</p>
+    <p><b>Source.</b> <a href="https://huggingface.co/zhou-lab/methscope/blob/v12/hg38_33celltypes.msdref" rel="noopener">zhou-lab/methscope on HuggingFace</a>, published with methscope-cli</p>
     <p><b>Citation.</b> Loyfer et al. 2023, Nature, <a href="https://doi.org/10.1038/s41586-022-05580-6" rel="noopener">doi:10.1038/s41586-022-05580-6</a>; Stunnenberg et al. 2016, Cell, <a href="https://doi.org/10.1016/j.cell.2016.11.007" rel="noopener">doi:10.1016/j.cell.2016.11.007</a> (BLUEPRINT); Zhou lab single-cell atlas 2025</p>
     <p><b>What <code class="inl">inspect</code> reports.</b></p>
     <pre class="res help"><code>deconvolution reference  MSDREF1/v3, 554,072,253 bytes
@@ -1603,7 +1609,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
     <p><b>Training.</b> Per-class M/U pooled by read count (musum), then packed with deconv-build-ref at its default admission band 0.30,0.70.</p>
     <p><b>Validation.</b> A known 70/30 macrophage/monocyte mixture comes back within a few points of truth, where the bulk reference returns 0.14/0.56 and puts the missing mass on mast cells and stroma. T cells resolve to naive and memory CD4 and CD8. The confusion matrix was measured on a fold-held-out twin: pools rebuilt from Zhou cells in folds 1-9, fold 0 held out as mixture components, and Hepatocyte and Granulocyte held out by donor. The closest pairs are naive CD4 and CD8 T cells (0.29), colonic enterocyte and goblet cells (0.24), the CGE interneurons LAMP5, SNCG and VIP (0.22), muscle fibroblast and its adipogenic progenitor (0.20), NK CD16 and CD56 (0.15), adrenal ZG and ZR/ZF (0.14), cortical IT L4 and L5 (0.12), AT1 and AT2 (0.12), and Beta and Delta (0.11). A threshold of 0.15 joins five pairs, and 0.10 joins thirteen.</p>
     <p><b>History.</b> Version 3 of the format since model tag v12 adds the confusion matrix; the M/U block is byte-identical to version 2.</p>
-    <p><b>Source.</b> zhou-lab/methscope on HuggingFace, published with methscope-cli</p>
+    <p><b>Source.</b> <a href="https://huggingface.co/zhou-lab/methscope/blob/v12/hg38_62celltypes.msdref" rel="noopener">zhou-lab/methscope on HuggingFace</a>, published with methscope-cli</p>
     <p><b>Citation.</b> Loyfer et al. 2023, Nature, <a href="https://doi.org/10.1038/s41586-022-05580-6" rel="noopener">doi:10.1038/s41586-022-05580-6</a>; Stunnenberg et al. 2016, Cell, <a href="https://doi.org/10.1016/j.cell.2016.11.007" rel="noopener">doi:10.1016/j.cell.2016.11.007</a> (BLUEPRINT); Zhou lab single-cell atlas 2025</p>
     <p><b>What <code class="inl">inspect</code> reports.</b></p>
     <pre class="res help"><code>deconvolution reference  MSDREF1/v3, 1,510,196,803 bytes
@@ -1629,7 +1635,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
     <p><b>Validation.</b> An all-cells build has no held-out cells, so the confusion matrix was measured on a fold-held-out twin, each class alone at 2^16 to 2^22 CpGs, pooled across rungs. On P21 mouse-brain spatial data it agrees with an independent RNA-based deconvolution (RCTD): r = 0.74 for oligodendrocytes, 0.69 for CA1, 0.69 for dentate gyrus and 0.59 for CA3.</p>
     <p><b>Caveats.</b> Seven types rest on fewer than 300 cells, and grouping merges them into the neighbour that already absorbs them. The cortical IT ladder stays four separate labels.</p>
     <p><b>History.</b> The first version-3 .msdref, the format that carries a confusion matrix.</p>
-    <p><b>Source.</b> zhou-lab/methscope on HuggingFace, published with methscope-cli</p>
+    <p><b>Source.</b> <a href="https://huggingface.co/zhou-lab/methscope/blob/v12/mm10_41celltypes.msdref" rel="noopener">zhou-lab/methscope on HuggingFace</a>, published with methscope-cli</p>
     <p><b>Citation.</b> Liu et al. 2021, Nature, <a href="https://doi.org/10.1038/s41586-020-03182-8" rel="noopener">doi:10.1038/s41586-020-03182-8</a></p>
     <p><b>What <code class="inl">inspect</code> reports.</b></p>
     <pre class="res help"><code>deconvolution reference  MSDREF1/v3, 581,825,095 bytes
@@ -1656,7 +1662,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
     <p><b>Architecture.</b> UPDEC1: a single MLP decoder head for block 10k1.</p>
     <p><b>Training.</b> Trained on the same Loyfer sorted-cell atlas as hg38_wg.</p>
     <p><b>Caveats.</b> Its output is still a whole-genome .cg: the block is filled and every other CpG is NA.</p>
-    <p><b>Source.</b> zhou-lab/methscope on HuggingFace, published with methscope-cli</p>
+    <p><b>Source.</b> <a href="https://huggingface.co/zhou-lab/methscope/blob/v12/hg38_10k1.updecx" rel="noopener">zhou-lab/methscope on HuggingFace</a>, published with methscope-cli</p>
     <p><b>Citation.</b> Loyfer et al. 2023, Nature, <a href="https://doi.org/10.1038/s41586-022-05580-6" rel="noopener">doi:10.1038/s41586-022-05580-6</a></p>
     <p><b>What <code class="inl">inspect</code> reports.</b></p>
     <pre class="res help"><code>container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 29,075,778 bytes
@@ -1688,7 +1694,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
     <p><b>Training.</b> The patterns come from a 67-class Loyfer reference pooled from the 152 training samples only, cut to 500 patterns by CpG count and joined with the 100 resolver pairs of smallest footprint from the classifier bank (mrmp-pool --pooled-top 0) (835 columns in all). The model was trained on the 152/45/10 training/validation/test split of the 207-sample Loyfer atlas, against 100 binarized simulated replicates with coverage log-spaced from 71 to 2,940,180 observed CpGs (skew 0.5, dense-weighted). Each unit stops early on validation MAE (patience 400, 60,000-step cap); training took 7 h 38 min on one A100.</p>
     <p><b>Caveats.</b> At 2.7 GB this is the largest file in the catalogue; fetch it deliberately.</p>
     <p><b>History.</b> v10 (2026-09-16) changed where the patterns come from. Earlier references had no hepatocyte class, which caused an undercall at hepatocyte loci; at ELF3 with 29,000 observed CpGs the error fell from 0.309 to 0.047. On the 10 held-out samples v10 is more accurate at both ELF3 and MIR200C at every coverage tested (ELF3 0.113 to 0.107 at 29k, 0.098 to 0.089 at 290k, 0.093 to 0.089 at 2.9M; MIR200C 0.078 to 0.073, 0.072 to 0.069, 0.072 to 0.069). v9 and earlier took 500 patterns from a 35-class Zhou reference and trained at patience 20. v4 (2026-07-29) used a curated 117/45/45 split for a like-for-like comparison with the published MLP baseline.</p>
-    <p><b>Source.</b> zhou-lab/methscope on HuggingFace, published with methscope-cli</p>
+    <p><b>Source.</b> <a href="https://huggingface.co/zhou-lab/methscope/blob/v12/hg38_wg.updecx" rel="noopener">zhou-lab/methscope on HuggingFace</a>, published with methscope-cli</p>
     <p><b>Citation.</b> Loyfer et al. 2023, Nature, <a href="https://doi.org/10.1038/s41586-022-05580-6" rel="noopener">doi:10.1038/s41586-022-05580-6</a></p>
     <p><b>What <code class="inl">inspect</code> reports.</b></p>
     <pre class="res help"><code>container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 2,866,632,834 bytes
@@ -1736,7 +1742,7 @@ GSM5652181_Saphenous-Vein-Endothel-Z000000RM   0.9155   0.9413   0.9421</code></
     <p><b>Accuracy.</b> On held-out samples the mean absolute error is 0.098; with only 106 observed CpGs it is 0.134, at Pearson r 0.80.</p>
     <p><b>Caveats.</b> At 1.9 GB, fetch it deliberately.</p>
     <p><b>History.</b> Training across a coverage ladder is what closed the gap to the human model. A fixed-coverage build plateaued at 0.126 MAE; at 106 observed CpGs the ladder improved the error from 0.241 to 0.134 and Pearson r from 0.48 to 0.80.</p>
-    <p><b>Source.</b> zhou-lab/methscope on HuggingFace, published with methscope-cli</p>
+    <p><b>Source.</b> <a href="https://huggingface.co/zhou-lab/methscope/blob/v12/mm10_wg.updecx" rel="noopener">zhou-lab/methscope on HuggingFace</a>, published with methscope-cli</p>
     <p><b>Citation.</b> Liu et al. 2021, Nature, <a href="https://doi.org/10.1038/s41586-020-03182-8" rel="noopener">doi:10.1038/s41586-020-03182-8</a>; Zhou et al. 2018, Nat Genet, <a href="https://doi.org/10.1038/s41588-018-0073-4" rel="noopener">doi:10.1038/s41588-018-0073-4</a></p>
     <p><b>What <code class="inl">inspect</code> reports.</b></p>
     <pre class="res help"><code>container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 2,057,125,237 bytes
