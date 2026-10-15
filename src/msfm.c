@@ -103,6 +103,15 @@ int ms_msfm_open(ms_msfm_t *f, const char *path, char *err, size_t errn) {
   f->beta   = (const uint16_t *)((const char *)map + h->beta_offset);
   f->levels = (const uint32_t *)((const char *)map + h->levels_offset);
   f->class_id = (const uint16_t *)((const char *)map + h->labels_offset);
+  f->counts = NULL;
+  if (h->flags & MSFM_FLAG_COUNTS) {
+    uint64_t cb = nr * np * 4;
+    if (cb > len || len - cb < h->beta_offset + beta_bytes) {
+      snprintf(err, errn, "count block runs past the file");
+      munmap(map, (size_t)len); close(fd); return 0;
+    }
+    f->counts = (const uint32_t *)((const char *)map + (len - cb));
+  }
   f->pattern_names = blob_index((const char *)map, h->names_offset, h->n_patterns, len, err, errn);
   f->record_names  = blob_index((const char *)map, h->rows_offset, h->n_records, len, err, errn);
   f->class_names   = blob_index((const char *)map, h->labels_offset + nr * 2,
@@ -234,7 +243,8 @@ void ms_msfm_report(const char *path) {
       (h->flags & MSFM_FLAG_BIN_FLAT) ? "patterns binarised at 0.5"
     : (h->flags & MSFM_FLAG_BIN_PAT)  ? "patterns cut at per-pattern midpoints"
                                       : "continuous pattern betas";
-    printf("  %-14s MSFMAT1 v%u, %s%s\n", "format", h->version, coding, sat);
+    printf("  %-14s MSFMAT1 v%u, %s%s%s\n", "format", h->version, coding, sat,
+           (h->flags & MSFM_FLAG_COUNTS) ? ", per-pattern CpG counts" : "");
  }
   printf("\n");
   printf("  %-14s %s\n", "records", commafmt_msfm(h->n_records, cb));
@@ -408,7 +418,8 @@ static void write_msfm_raw(const char *out, const uint16_t *beta,
                            uint32_t n_cells, uint32_t n_reps, uint32_t ncol,
                            char *const *lab, const uint32_t *rep_sample,
                            uint32_t n_sets, const uint32_t *col0,
-                           char *const *set_names, uint32_t flags) {
+                           char *const *set_names, uint32_t flags,
+                           const uint32_t *counts) {
   uint64_t nr = (uint64_t)n_reps * n_cells;
   if (nr > UINT32_MAX) fdie("too many records", NULL);
 
@@ -470,6 +481,13 @@ static void write_msfm_raw(const char *out, const uint16_t *beta,
   h.file_bytes    = h.beta_offset + nr * ncol * 2;
   uint64_t chain_b = g_embed_chain ? path_size(g_embed_chain) : 0;
   if (chain_b) { h.mrmp_offset = h.file_bytes; h.file_bytes += 8 + chain_b; }
+  /* the count block goes LAST (see MSFM_FLAG_COUNTS), after the chain */
+  if (counts && !(flags & MSFM_FLAG_COUNTS)) counts = NULL;
+  uint32_t cpad = 0;                   /* 4-byte align the u32 block */
+  if (counts) {
+    cpad = (uint32_t)((4 - h.file_bytes % 4) % 4);
+    h.file_bytes += cpad + nr * ncol * 4;
+  }
 
   FILE *f = fopen(out, "wb");
   if (!f) fdie("cannot create output", out);
@@ -496,6 +514,11 @@ static void write_msfm_raw(const char *out, const uint16_t *beta,
       { wr(f, cb, got, out); left -= got; }
     fclose(cf);
     if (left) fdie("short read on the mrmp to embed", g_embed_chain);
+  }
+  if (counts) {
+    const char z[4] = {0, 0, 0, 0};
+    if (cpad) wr(f, z, cpad, out);
+    wr(f, counts, (size_t)nr * ncol * 4, out);
   }
   if (fclose(f)) fdie("cannot finalize output", out);
 
@@ -558,6 +581,10 @@ static int usage(FILE *out) {
     "                 beta does not once a global shift, mitotic or otherwise,\n"
     "                 moves every value at once.\n"
     "                 continuous either way; they are not a contrast.\n"
+    "  --with-n       Also store, per record and pattern, how many measured CpGs\n"
+    "                 the beta rests on. With --continuous-features this makes\n"
+    "                 the artifact an MRMP embedding `deconv` can take in place\n"
+    "                 of the .cg: each pattern is weighted by its CpGs.\n"
     "  --set NAME     featurize only this set of a chain, so one node of an\n"
     "                 mrmp-tree can be scored straight out of the tree it\n"
     "                 lives in -- a block inside a chain is byte-identical to\n"
@@ -729,6 +756,8 @@ int main_classify_featurize(int argc, char *argv[]) {
   int rank = 0;                     /* per-class rank columns: retired option, plumbing kept off */
   int i = 1;
   uint32_t min_cpgs = 0;   /* --counts N: below N measured CpGs -> NA */
+  int with_n = 0;          /* --with-n: write the MSFM_FLAG_COUNTS block */
+  uint32_t *counts = NULL;
   for (; i < argc; ++i) {
     if      (!strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
     else if (!strcmp(argv[i], "-l") && i + 1 < argc) labels = argv[++i];
@@ -743,6 +772,7 @@ int main_classify_featurize(int argc, char *argv[]) {
     else if (!strcmp(argv[i], "--counts") && i + 1 < argc)
       min_cpgs = (uint32_t)strtoul(argv[++i], NULL, 10);
     else if (!strcmp(argv[i], "--continuous-features")) binarize_feat = 0;
+    else if (!strcmp(argv[i], "--with-n")) with_n = 1;
     else if (!strcmp(argv[i], "--thresh-pattern")) binarize_feat = 2;
     else if (!strcmp(argv[i], "--set") && i + 1 < argc) g_only_set = argv[++i];
     else if (!strcmp(argv[i], "--satellite-contrast") && i + 1 < argc) {
@@ -777,6 +807,9 @@ int main_classify_featurize(int argc, char *argv[]) {
   free(fidx);
   if (sample_spec && !have_idx)
     fdie("--sample needs a .cg.idx to seek per record; run `yame index` first", query);
+  if (with_n && !have_idx)
+    fdie("--with-n needs a .cg.idx (the counts come from the indexed builder); "
+         "run `yame index` first", query);
   if (!have_idx)
     fprintf(stderr, "[methscope] classify-featurize: no .cg.idx for %s -- falling "
             "back to the single-threaded scan (run `yame index` to enable the "
@@ -814,7 +847,8 @@ int main_classify_featurize(int argc, char *argv[]) {
       ms_msfm_build_sampled_multi(query, refs, mbase, mlen, np0, 1, rep_sample,
                                   n_reps, binarize, min_cpgs, seed, threads,
                                   binarize_feat, contrast, rank,
-                                  &beta, &levels, &names, &n_cells, &ncol, col0_1);
+                                  &beta, &levels, &names, &n_cells, &ncol, col0_1,
+                                  with_n ? &counts : NULL);
     } else {
       /* Several MRMP sets in ONE pass over the query. Each cell is inflated
        * once and scored against every set, so N sets cost N scatter-adds per
@@ -836,7 +870,8 @@ int main_classify_featurize(int argc, char *argv[]) {
       ms_msfm_build_sampled_multi(query, refs, mbase, mlen, np, n_sets, rep_sample, n_reps,
                                   binarize, min_cpgs, seed, threads, binarize_feat,
                                   contrast, rank,
-                                  &beta, &levels, &names, &n_cells, &ncol, col0);
+                                  &beta, &levels, &names, &n_cells, &ncol, col0,
+                                  with_n ? &counts : NULL);
       /* The per-set start offsets used to be dumped here -- 100 numbers on one
        * line, for a layout `inspect` reports properly. */
       fprintf(stderr, "  %-14s %u set(s) fused, %u patterns\n",
@@ -854,8 +889,11 @@ int main_classify_featurize(int argc, char *argv[]) {
     if (contrast == 2) fflags |= MSFM_FLAG_CONTRAST_ONLY;
     if (rank == 1)     fflags |= MSFM_FLAG_RANK_ADD;
     if (rank == 2)     fflags |= MSFM_FLAG_RANK_ONLY;
+    if (with_n)        fflags |= MSFM_FLAG_COUNTS;
     write_msfm_raw(out, beta, levels, names, n_cells, n_reps, ncol, lab,
-                   rep_sample, n_sets_out, col0_out, set_names, fflags);
+                   rep_sample, n_sets_out, col0_out, set_names, fflags,
+                   counts);
+    free(counts);
     if (set_names) { for (uint32_t s = 0; s < n_sets_out; ++s) free(set_names[s]); free(set_names); }
     free(col0_out);
     if (snames) { for (uint32_t s = 0; s < n_sets; ++s) free(snames[s]); free(snames); }
@@ -960,7 +998,8 @@ int main_mrmp_summary(int argc, char *argv[]) {
   uint32_t n_cells = 0, ncol = 0;
   ms_msfm_build_sampled_multi(query, refs, mbase, mlen, np, n_sets, rep_sample,
                               1, 0, min_cpgs, 1, threads, 0, 0, 0,
-                              &beta, &levels, &names, &n_cells, &ncol, col0);
+                              &beta, &levels, &names, &n_cells, &ncol, col0,
+                              NULL);
 
   FILE *o = out_path ? fopen(out_path, "w") : stdout;
   if (!o) fdie("cannot open output", out_path);

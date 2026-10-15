@@ -659,6 +659,10 @@ Options:
                  beta does not once a global shift, mitotic or otherwise,
                  moves every value at once.
                  continuous either way; they are not a contrast.
+  --with-n       Also store, per record and pattern, how many measured CpGs
+                 the beta rests on. With --continuous-features this makes
+                 the artifact an MRMP embedding `deconv` can take in place
+                 of the .cg: each pattern is weighted by its CpGs.
   --set NAME     featurize only this set of a chain, so one node of an
                  mrmp-tree can be scored straight out of the tree it
                  lives in -- a block inside a chain is byte-identical to
@@ -780,6 +784,7 @@ Options:
 
 Usage:
   methscope deconv [options] <ref.msdref> <query.cg>
+  methscope deconv [options] <ref.msdref> <query.msfm>
 
 Purpose:
   Estimate the cell-type composition of each query record by non-negative
@@ -797,12 +802,28 @@ Purpose:
   scope only ever narrows, and rounds stop once it stops changing or at
   --max-round. --no-adaptive keeps the round-1 fit over every class.
 
+  The query may instead be an MRMP EMBEDDING: an .msfm from
+  `classify-featurize --continuous-features --with-n` against a .mrmp, or
+  written by any model that outputs MRMPs. The format is detected from the
+  file's first bytes; no option selects it. The embedding fixes the pattern
+  set, so this is a FIXED-PANEL mode: the reference .msdref is averaged over
+  each pattern's CpGs, and the adaptive rounds only drop classes and the
+  MRMPs constant over the classes left. They cannot regroup the query's CpGs
+  into new, larger patterns for the narrower scope, as a .cg query does, so
+  accuracy trails the .cg path at low coverage (about 2.5x the error at 2^16
+  CpGs on the mouse benchmark) and nears it at high coverage. Patterns are
+  weighted by the CpGs behind them when the .msfm carries counts
+  (--with-n), equally when it does not. Options that act
+  on the CpG-level panel (--panel-out, --scope-out, --pair-count, --rescue-*,
+  --global-ref, ...) are refused for an embedding.
+
 Arguments:
   <ref.msdref>   Deconvolution reference from `deconv-build-ref`. Its index
                  order is the binstring digit order.
   <query.cg>     Query methylome(s), YAME format 3 (M/U counts) or format 6
                  (universe bit plus binary call). Record names come from
                  <query.cg>.idx; without one they are 1,2,3,...
+  <query.msfm>   An MRMP embedding (see above); record names are its own.
 
 Options:
   -o <out.tsv>            Write output to a file instead of stdout.
@@ -833,7 +854,8 @@ Options:
   --threads N             Deconvolve N records in parallel. Default: 1.
                           The reference is shared, so
                           memory grows by the per-thread workspace (~16 MB),
-                          not linearly. Needs a <query.cg>.idx to seek by; -v
+                          not linearly. A .cg query needs <query.cg>.idx to
+                          seek by (an .msfm needs nothing); -v
                           and the dump options force a single thread.
   --max-round N           Cap on rebuild rounds. Default: 8. Rounds stop early
                           once the class set stops changing.

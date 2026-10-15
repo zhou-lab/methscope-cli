@@ -98,6 +98,8 @@
 #include "cdata.h"
 #include <pthread.h>
 #include "nnls.h"
+#include "msfm.h"
+#include "mrmp.h"
 #include <math.h>
 
 #define D2_MAGIC   "MSDREF1"
@@ -1846,6 +1848,325 @@ static void d2_emit(FILE *out, const d2ref_t *R, const char *name,
   free(o);
 }
 
+/* ---- MRMP-embedding queries --------------------------------------------
+ *
+ * A query that is an .msfm instead of a .cg: per record, each MRMP pattern's
+ * mean beta (and, under MSFM_FLAG_COUNTS, the CpGs behind it), plus the MRMP
+ * chain that defined the columns. The embedding is the methylome's
+ * representation, so a model that generates MRMPs rather than 29M CpGs can
+ * hand its output straight to deconv.
+ *
+ * WHAT CHANGES. The pattern set is the embedding's, fixed: the per-query
+ * rebuild from measured CpGs -- and with it the admission filter and the pair
+ * rescue, which act on CpGs -- has nothing to act on. The reference side is
+ * the same .msdref: each pattern's per-class mean is summed on the fly over
+ * that pattern's CpGs among the kept rows, once per run, so any embedding over
+ * the reference's row space works against any shipped reference.
+ *
+ * WHAT STAYS. The adaptive class scope. A pattern's binstring over a scope is
+ * its per-class mean cut at 0.5; a pattern constant over the scope carries no
+ * contrast and is left out, exactly as the CpG path drops an all-0/all-1
+ * binstring; segregating counts, the mass floor and the pull-back are the
+ * CpG path's own functions. So narrowing still sharpens the fit by removing
+ * classes; it just cannot admit new evidence the way a CpG rebuild does.
+ *
+ * Two caveats travel with it. The reference mean covers the pattern's kept
+ * rows, not the CpGs this query measured -- the CpG path matches them, this
+ * cannot. And without counts every pattern weighs the same (exponent 0), with
+ * the reference's CpG count standing in for n in the segregation tally. */
+typedef struct {
+  uint32_t ncol, nc;
+  double   *mean;     /* ncol * nc, reference mean beta; NAN = class uncovered */
+  uint32_t *rcpg;     /* ncol: kept-row CpGs behind each pattern */
+} d2mref_t;
+
+typedef struct {
+  const d2ref_t *R;
+  double   *sum;      /* ncol * nc */
+  uint32_t *cnt;      /* ncol * nc */
+  uint32_t *rcpg;
+  uint32_t  base, patterns, nc;
+  uint64_t  k;        /* cursor into R->row; runs arrive in position order */
+} d2mrun_t;
+
+static void d2m_run(void *ctx, uint64_t start, uint64_t len, uint32_t rank) {
+  d2mrun_t *a = ctx;
+  const d2ref_t *R = a->R;
+  if (rank == MRMP_PNA_MEMBERSHIP || rank >= a->patterns) return;
+  const uint32_t col = a->base + rank;
+  if (a->k > 0 && R->row[a->k - 1] >= start) a->k = 0;   /* never expected */
+  while (a->k < R->n_keep && R->row[a->k] < start) ++a->k;
+  for (uint64_t k = a->k; k < R->n_keep && R->row[k] < start + len; ++k) {
+    ++a->rcpg[col];
+    for (uint32_t c = 0; c < a->nc; ++c) {
+      uint16_t b = d2_b(R->mu[(size_t)c * R->n_keep + k]);
+      if (b == D2_BETA_NA) continue;
+      a->sum[(size_t)col * a->nc + c] += (double)b / 65534.0;
+      ++a->cnt[(size_t)col * a->nc + c];
+    }
+  }
+}
+
+/* Per-pattern, per-class reference means over CHAIN's patterns, in the column
+ * order an .msfm featurized against that chain uses: set-major, rank within a
+ * set. Refuses a chain in another row space, or one whose pattern total is
+ * not the embedding's column count. */
+static void d2m_ref_build(const d2ref_t *R, const char *chain,
+                          uint32_t ncol_want, d2mref_t *M) {
+  ms_mrmpset_t *ch = ms_mrmpset_open(chain);
+  uint32_t ncol = 0;
+  for (uint32_t s = 0; s < ch->n_sets; ++s) {
+    mrmp_top_t *t = ms_mrmp_top_read_at(chain, ch->block_off[s], UINT32_MAX);
+    ncol += t->n_patterns;
+    ms_mrmp_top_free(t);
+    uint64_t n_cpg = ms_mrmp_n_cpg_at(chain, ch->block_off[s]);
+    if (n_cpg != R->n_row) {
+      char m[256];
+      snprintf(m, sizeof m, "the embedding's MRMP set spans %llu CpG rows but "
+               "the reference has %llu -- a different genome or row space",
+               (unsigned long long)n_cpg, (unsigned long long)R->n_row);
+      d2die(m, ch->name[s]);
+    }
+  }
+  if (ncol != ncol_want)
+    d2die("the .msfm's columns do not match its own MRMP chain (one --set of "
+          "a chain, or contrast/rank columns?)", NULL);
+  M->ncol = ncol; M->nc = R->n_class;
+  double   *sum = d2alloc((size_t)ncol * M->nc, sizeof(double), "pattern sums");
+  uint32_t *cnt = d2alloc((size_t)ncol * M->nc, sizeof(uint32_t), "pattern counts");
+  M->rcpg = d2alloc(ncol, sizeof(uint32_t), "pattern CpGs");
+  d2mrun_t a = { R, sum, cnt, M->rcpg, 0, 0, M->nc, 0 };
+  for (uint32_t s = 0; s < ch->n_sets; ++s) {
+    mrmp_top_t *t = ms_mrmp_top_read_at(chain, ch->block_off[s], UINT32_MAX);
+    a.patterns = t->n_patterns; a.k = 0;
+    ms_mrmp_top_free(t);
+    ms_mrmp_membership_runs(chain, ch->block_off[s], ch->block_bytes[s],
+                            d2m_run, &a);
+    a.base += a.patterns;
+  }
+  M->mean = d2alloc((size_t)ncol * M->nc, sizeof(double), "pattern means");
+  for (size_t i = 0; i < (size_t)ncol * M->nc; ++i)
+    M->mean[i] = cnt[i] ? sum[i] / (double)cnt[i] : NAN;
+  free(sum); free(cnt);
+  ms_mrmpset_free(ch);
+}
+
+/* The fixed panel for scope `sel`: one row per pattern the query observed,
+ * every scope class covers, and the scope does not hold constant. */
+static void d2m_panel(const d2mref_t *M, const uint16_t *qb, const uint32_t *qn,
+                      const uint32_t *sel, uint32_t ns, d2pan_t *P) {
+  memset(P, 0, sizeof *P);
+  P->kw = (ns + 63) / 64; P->nall = M->nc;
+  const uint32_t cap = M->ncol ? M->ncol : 1;
+  P->key    = d2alloc((size_t)cap * P->kw, sizeof(uint64_t), "panel keys");
+  P->n      = d2alloc(cap, sizeof(uint64_t), "panel n");
+  P->rn     = d2alloc(cap, sizeof(uint64_t), "panel rn");
+  P->wscale = d2alloc(cap, sizeof(double), "panel weights");
+  P->rsum   = d2alloc((size_t)cap * M->nc, sizeof(double), "panel rsum");
+  P->qsum   = d2alloc(cap, sizeof(double), "panel qsum");
+  for (uint32_t j = 0; j < M->ncol; ++j) {
+    if (qb[j] == MSFM_NA) continue;
+    if (qn && !qn[j]) continue;
+    const double *mj = M->mean + (size_t)j * M->nc;
+    uint32_t ones = 0, ok = 1;
+    for (uint32_t s = 0; s < ns && ok; ++s) {
+      double v = mj[sel[s]];
+      if (v != v) ok = 0; else if (v >= 0.5) ++ones;
+    }
+    if (!ok || !ones || ones == ns) continue;
+    uint32_t r = P->n_pat++;
+    uint64_t *k = P->key + (size_t)r * P->kw;
+    for (uint32_t s = 0; s < ns; ++s)
+      if (mj[sel[s]] >= 0.5) k[s >> 6] |= 1ull << (s & 63);
+    P->n[r] = qn ? qn[j] : M->rcpg[j];
+    P->rn[r] = 1;                           /* rsum below already holds a mean */
+    P->wscale[r] = 1.0;
+    for (uint32_t c = 0; c < M->nc; ++c)
+      P->rsum[(size_t)r * M->nc + c] = mj[c] == mj[c] ? mj[c] : 0.0;
+    P->qsum[r] = msfm_decode(qb[j]) * (double)P->n[r];
+  }
+}
+
+typedef struct {
+  uint32_t *sel, *sel2, *seg, *seg2;
+  uint8_t  *inscope, *inscope2;
+  double   *x, *x2, *xf, *xadj;
+} d2mws_t;
+
+static void d2mws_init(uint32_t n, d2mws_t *w) {
+  w->sel  = d2alloc(n, sizeof(uint32_t), "scope");
+  for (uint32_t s = 0; s < n; ++s) w->sel[s] = s;
+  w->sel2 = d2alloc(n, sizeof(uint32_t), "scope classes");
+  w->seg  = d2alloc((size_t)n * n, sizeof(uint32_t), "seg");
+  w->seg2 = d2alloc((size_t)n * n, sizeof(uint32_t), "seg2");
+  w->inscope  = d2alloc(n, 1, "scope");
+  w->inscope2 = d2alloc(n, 1, "scope2");
+  w->x  = d2alloc(n, sizeof(double), "proportions");
+  w->x2 = d2alloc(n, sizeof(double), "round proportions");
+  w->xf = d2alloc(n, sizeof(double), "full vector");
+  w->xadj = d2alloc(n, sizeof(double), "final solve");
+}
+
+static void d2mws_free(d2mws_t *w) {
+  free(w->sel); free(w->sel2); free(w->seg); free(w->seg2);
+  free(w->inscope); free(w->inscope2);
+  free(w->x); free(w->x2); free(w->xf); free(w->xadj);
+}
+
+/* One record: round 1 over every class, then the same scope rounds and final
+ * solve as d2_record, each on the fixed panel restricted to the scope. */
+static void d2m_record(const d2ref_t *R, const d2mref_t *M, const d2opt_t *o,
+                       d2mws_t *w, const uint16_t *qb, const uint32_t *qn,
+                       const char *name, double *xout) {
+  const uint32_t nc = R->n_class;
+  d2pan_t P;
+  d2m_panel(M, qb, qn, w->sel, nc, &P);
+  d2_seg_matrix(R, &P, w->sel, nc, w->seg);
+  d2_solve(&P, w->sel, nc, o->min_n, o->wexp[0], w->x);
+  if (o->verbose)
+    fprintf(stderr, "[methscope] deconv: %s: %u of %u patterns over %u classes\n",
+            name, P.n_pat, M->ncol, nc);
+  d2pan_free(&P);
+  d2_scope(R, w->x, w->seg, o->mass_floor, o->max_seg, NULL, w->inscope);
+  if (!o->narrow) for (uint32_t c = 0; c < nc; ++c) w->inscope[c] = 1;
+  for (uint32_t round = 2; o->narrow && round <= o->max_round; ++round) {
+    uint32_t n2 = 0;
+    for (uint32_t c = 0; c < nc; ++c) if (w->inscope[c]) w->sel2[n2++] = c;
+    if (n2 < 2) break;
+    d2m_panel(M, qb, qn, w->sel2, n2, &P);
+    d2_seg_matrix_min(R, &P, w->sel2, n2, o->min_n, w->seg2);
+    double we = o->wexp[(round - 1) < (uint32_t)o->n_wexp
+                        ? (round - 1) : (uint32_t)(o->n_wexp - 1)];
+    d2_solve(&P, w->sel2, n2, o->min_n, we, w->x2);
+    for (uint32_t c = 0; c < nc; ++c) w->xf[c] = 0;
+    for (uint32_t s = 0; s < n2; ++s) w->xf[w->sel2[s]] = w->x2[s];
+    d2_scope(R, w->xf, w->seg2, o->mass_floor, o->max_seg, w->inscope,
+             w->inscope2);
+    if (o->verbose)
+      fprintf(stderr, "[methscope] deconv: %s: round %u on %u classes -> %u "
+              "patterns\n", name, round, n2, P.n_pat);
+    d2pan_free(&P);
+    int same = !memcmp(w->inscope, w->inscope2, nc);
+    memcpy(w->inscope, w->inscope2, nc);
+    memcpy(w->x, w->xf, nc * sizeof(double));
+    if (same) break;
+  }
+  uint32_t n_fin = 0;
+  for (uint32_t c = 0; c < nc; ++c) if (w->inscope[c]) w->sel2[n_fin++] = c;
+  if (n_fin >= 2) {
+    d2m_panel(M, qb, qn, w->sel2, n_fin, &P);
+    d2_solve(&P, w->sel2, n_fin, o->min_n, o->wexp[o->n_wexp - 1], w->xadj);
+    for (uint32_t c = 0; c < nc; ++c) w->x[c] = 0;
+    for (uint32_t s = 0; s < n_fin; ++s) w->x[w->sel2[s]] = w->xadj[s];
+    d2pan_free(&P);
+  }
+  memcpy(xout, w->x, nc * sizeof(double));
+}
+
+/* Records handed out by a mutex counter, as d2_worker does; the reference and
+ * the embedding are shared read-only, results land in per-record slots. */
+typedef struct {
+  const d2ref_t *R; const d2mref_t *M; const d2opt_t *o; const ms_msfm_t *F;
+  double *xall;
+  uint32_t next; pthread_mutex_t lock;
+} d2mjob_t;
+
+static void *d2m_worker(void *arg) {
+  d2mjob_t *J = arg;
+  const uint32_t np = J->F->header->n_patterns;
+  d2mws_t w; d2mws_init(J->R->n_class, &w);
+  for (;;) {
+    pthread_mutex_lock(&J->lock);
+    uint32_t rec = J->next < J->F->header->n_records ? J->next++ : UINT32_MAX;
+    pthread_mutex_unlock(&J->lock);
+    if (rec == UINT32_MAX) break;
+    d2m_record(J->R, J->M, J->o, &w, J->F->beta + (size_t)rec * np,
+               J->F->counts ? J->F->counts + (size_t)rec * np : NULL,
+               J->F->record_names[rec], J->xall + (size_t)rec * J->R->n_class);
+  }
+  d2mws_free(&w);
+  return NULL;
+}
+
+/* Options that act on the CpG-level panel, so an embedding query has nothing
+ * for them to act on. Named on the command line, not inferred from values,
+ * because several have non-zero defaults. */
+static const char *d2_cg_only_opt(int argc, char *argv[]) {
+  static const char *const cg_only[] = {
+    "--panel-out", "--pair-count", "--delta-mean-top", "--rescue-below",
+    "--rescue-gap", "--rescue-min-depth", "--rescue-target", "--rescue-floor",
+    "--rescue-qfilter", "--global-ref", "--scope-out", "--force-scope",
+    "--eval-x", "--design-out", NULL };
+  for (int i = 1; i < argc; ++i)
+    for (int k = 0; cg_only[k]; ++k)
+      if (!strcmp(argv[i], cg_only[k])) return cg_only[k];
+  return NULL;
+}
+
+static int d2_is_msfm(const char *path) {
+  char m[8] = {0};
+  FILE *f = fopen(path, "rb");
+  if (!f) d2die("cannot open query", path);
+  size_t got = fread(m, 1, 8, f);
+  fclose(f);
+  return got == 8 && !memcmp(m, MSFM_MAGIC, 7) && m[7] == '\0';
+}
+
+/* deconv on an .msfm query; `opt` as built by main_deconv. */
+static int d2m_main(const d2ref_t *R, d2opt_t *opt, const char *qpath,
+                    FILE *out, int outmode, double min_frac, const d2grp_t *G,
+                    int nthreads) {
+  ms_msfm_t F; char err[256];
+  if (!ms_msfm_open(&F, qpath, err, sizeof err)) d2die(err, qpath);
+  const uint32_t fl = F.header->flags;
+  if (fl & ~MSFM_FLAG_COUNTS)
+    d2die("an .msfm query must hold plain continuous pattern betas -- "
+          "featurize with --continuous-features and no contrast or rank "
+          "columns", qpath);
+  char *chain = ms_msfm_chain(qpath);
+  if (!chain)
+    d2die("the .msfm records no MRMP chain, so its columns cannot be placed "
+          "on the reference -- featurize against a .mrmp", qpath);
+  d2mref_t M;
+  d2m_ref_build(R, chain, F.header->n_patterns, &M);
+  unlink(chain); free(chain);
+  if (!F.counts) {
+    /* No counts: equal weights, the reference CpGs standing in for n */
+    for (int k = 0; k < opt->n_wexp; ++k) opt->wexp[k] = 0;
+    fprintf(stderr, "[methscope] deconv: %s carries no per-pattern CpG counts "
+            "(classify-featurize --with-n); weighting every pattern equally\n",
+            qpath);
+  }
+  const uint32_t nr = F.header->n_records, nc = R->n_class;
+  double *xall = d2alloc((size_t)nr * nc, sizeof(double), "results");
+  if (nthreads < 1) nthreads = 1;
+  if ((uint32_t)nthreads > nr) nthreads = nr ? (int)nr : 1;
+  d2mjob_t J = { R, &M, opt, &F, xall, 0, PTHREAD_MUTEX_INITIALIZER };
+  pthread_t *th = d2alloc(nthreads, sizeof(pthread_t), "threads");
+  for (int t = 0; t < nthreads; ++t)
+    if (pthread_create(&th[t], NULL, d2m_worker, &J) != 0)
+      d2die("cannot create thread", NULL);
+  for (int t = 0; t < nthreads; ++t) pthread_join(th[t], NULL);
+  /* classify-featurize names every row <cell>-R<draw>. With one draw per cell
+   * (every name ends -R1) the tag says nothing, so report the cell's own name,
+   * the one the .cg carried; a coverage ladder keeps its tags. */
+  int strip = nr > 0;
+  for (uint32_t r = 0; r < nr && strip; ++r) {
+    size_t L = strlen(F.record_names[r]);
+    strip = L > 3 && !strcmp(F.record_names[r] + L - 3, "-R1");
+  }
+  for (uint32_t r = 0; r < nr; ++r) {
+    char nm[1024];
+    snprintf(nm, sizeof nm, "%s", F.record_names[r]);
+    if (strip) nm[strlen(nm) - 3] = '\0';
+    d2_emit(out, R, nm, xall + (size_t)r * nc, outmode, min_frac, G);
+  }
+  free(th); free(xall);
+  free(M.mean); free(M.rcpg);
+  ms_msfm_close(&F);
+  return 0;
+}
+
 int main_deconv(int argc, char *argv[]) {
   const char *pos[2]; int npos = 0;
   const char *out_path = NULL, *panel_out = NULL, *pair_spec = NULL;
@@ -1970,6 +2291,7 @@ int main_deconv(int argc, char *argv[]) {
       ms_help(stdout,
 "Usage:\n"
 "  methscope deconv [options] <ref.msdref> <query.cg>\n"
+"  methscope deconv [options] <ref.msdref> <query.msfm>\n"
 "\n"
 "Purpose:\n"
 "  Estimate the cell-type composition of each query record by non-negative\n"
@@ -1987,12 +2309,28 @@ int main_deconv(int argc, char *argv[]) {
 "  scope only ever narrows, and rounds stop once it stops changing or at\n"
 "  --max-round. --no-adaptive keeps the round-1 fit over every class.\n"
 "\n"
+"  The query may instead be an MRMP EMBEDDING: an .msfm from\n"
+"  `classify-featurize --continuous-features --with-n` against a .mrmp, or\n"
+"  written by any model that outputs MRMPs. The format is detected from the\n"
+"  file's first bytes; no option selects it. The embedding fixes the pattern\n"
+"  set, so this is a FIXED-PANEL mode: the reference .msdref is averaged over\n"
+"  each pattern's CpGs, and the adaptive rounds only drop classes and the\n"
+"  MRMPs constant over the classes left. They cannot regroup the query's CpGs\n"
+"  into new, larger patterns for the narrower scope, as a .cg query does, so\n"
+"  accuracy trails the .cg path at low coverage (about 2.5x the error at 2^16\n"
+"  CpGs on the mouse benchmark) and nears it at high coverage. Patterns are\n"
+"  weighted by the CpGs behind them when the .msfm carries counts\n"
+"  (--with-n), equally when it does not. Options that act\n"
+"  on the CpG-level panel (--panel-out, --scope-out, --pair-count, --rescue-*,\n"
+"  --global-ref, ...) are refused for an embedding.\n"
+"\n"
 "Arguments:\n"
 "  <ref.msdref>   Deconvolution reference from `deconv-build-ref`. Its index\n"
 "                 order is the binstring digit order.\n"
 "  <query.cg>     Query methylome(s), YAME format 3 (M/U counts) or format 6\n"
 "                 (universe bit plus binary call). Record names come from\n"
 "                 <query.cg>.idx; without one they are 1,2,3,...\n"
+"  <query.msfm>   An MRMP embedding (see above); record names are its own.\n"
 "\n"
 "Options:\n"
 "  -o <out.tsv>            Write output to a file instead of stdout.\n"
@@ -2023,7 +2361,8 @@ int main_deconv(int argc, char *argv[]) {
 "  --threads N             Deconvolve N records in parallel. Default: 1.\n"
 "                          The reference is shared, so\n"
 "                          memory grows by the per-thread workspace (~16 MB),\n"
-"                          not linearly. Needs a <query.cg>.idx to seek by; -v\n"
+"                          not linearly. A .cg query needs <query.cg>.idx to\n"
+"                          seek by (an .msfm needs nothing); -v\n"
 "                          and the dump options force a single thread.\n"
 "  --max-round N           Cap on rebuild rounds. Default: 8. Rounds stop early\n"
 "                          once the class set stops changing.\n"
@@ -2121,7 +2460,7 @@ int main_deconv(int argc, char *argv[]) {
   }
   if (npos != 2) {
     fprintf(stderr,
-      "Usage: methscope deconv -o <out.tsv> <ref.msdref> <query.cg>\n");
+      "Usage: methscope deconv -o <out.tsv> <ref.msdref> <query.cg|query.msfm>\n");
     return 1;
   }
   char *rpath_owned = NULL;
@@ -2167,6 +2506,19 @@ int main_deconv(int argc, char *argv[]) {
   opt.pair_spec = pair_spec; opt.panel_out = panel_out;
   opt.scope_out = scope_out; opt.force_scope = force_scope;
   opt.eval_x = eval_x; opt.design_out = design_out;
+
+  /* The query's leading bytes decide the path: an .msfm starts "MSFMAT1\0",
+   * a .cg is BGZF and starts 1f 8b, so the two cannot be confused. */
+  if (d2_is_msfm(qpath)) {
+    const char *bad = d2_cg_only_opt(argc, argv);
+    if (bad) d2die("applies to a .cg query only, not to an .msfm embedding", bad);
+    int rc = d2m_main(&R, &opt, qpath, out, outmode, min_frac, G, nthreads);
+    if (out != stdout) fclose(out);
+    free(qoff);
+    for (uint32_t q = 0; q < n_qname; ++q) free(qname[q]);
+    free(qname); d2ref_free(&R);
+    return rc;
+  }
 
   if (nthreads > 1 && (verbose || panel_out || scope_out)) {
     fprintf(stderr, "[methscope] deconv: -v/--panel-out/--scope-out are "

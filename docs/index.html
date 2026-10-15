@@ -886,6 +886,61 @@ tnaive_cd4_70_cd8_30_2pow16: Tnaive_CD4 66.7%; Tnaive_CD8 32.0%; Endo_Lym 0.7%; 
 </section>
 
 <section class="card">
+  <h2>Deconvolve an MRMP embedding <span class="m">— an <code class="inl">.msfm</code> query</span></h2>
+  <p>The query can be an MRMP <i>embedding</i> instead of a <code class="inl">.cg</code>: per
+    record, each pattern's mean beta, as <code class="inl">classify-featurize
+    --continuous-features</code> writes it, or as any model that outputs MRMPs rather than
+    whole methylomes would. <code class="inl">deconv</code> tells the two apart by the file's
+    first bytes. The <code class="inl">.msfm</code> carries the MRMP chain it was built
+    against, so the same <code class="inl">.msdref</code> serves: each pattern's per-class
+    reference mean is averaged over that pattern's CpGs, and an embedding from another
+    genome or row space is refused.</p>
+  <!-- example:33_deconv_mrmp -->
+<pre><code><span class="cm"># the same nine mixtures as an MRMP embedding, over the shipped</span>
+<span class="cm"># classifier's MRMP chain, with each pattern's CpG count (--with-n)</span>
+methscope <a class="sub" href="#ref-fetch">fetch</a> -c hg38/models/hg38_celltype_lite.clfx
+methscope <a class="sub" href="#ref-classify-featurize">classify-featurize</a> --continuous-features --with-n \
+  -o mixture.msfm human_hg38_immune_mixture.cg hg38_celltype_lite.clfx
+
+<span class="cm"># an .msfm query is recognised by its first bytes; no option needed</span>
+methscope <a class="sub" href="#ref-deconv">deconv</a> --report hg38_62celltypes.msdref mixture.msfm</code></pre>
+<!-- /example -->
+  <pre class="res"><code>mac70_mono30_2pow22: Macrophage 67.5%; Mono 32.5%
+mac70_mono30_2pow18: Macrophage 71.3%; Mono 25.2%; Granulocyte 2.4%; Tnaive_CD8 1.1%
+mac70_mono30_2pow16: Macrophage 76.1%; Mono 16.6%; Endo_Vas 4.9%; Mic 1.3%; Fibro_Adr 1.2%
+cd4_70_cd8_30_2pow22: Tmem_CD4 50.1%; Tmem_CD8 27.1%; Tnaive_CD4 20.2%; Tnaive_CD8 2.7%
+cd4_70_cd8_30_2pow18: Tmem_CD4 49.4%; Tmem_CD8 27.6%; Tnaive_CD4 18.3%; Hema_Mast 1.8%; Tnaive_CD8 1.6%; NK_CD16 1.3%
+cd4_70_cd8_30_2pow16: Tmem_CD4 51.1%; Tnaive_CD4 24.5%; Tmem_CD8 23.6%; B_Mem 0.9%
+tnaive_cd4_70_cd8_30_2pow22: Tnaive_CD4 69.8%; Tnaive_CD8 30.2%
+tnaive_cd4_70_cd8_30_2pow18: Tnaive_CD4 78.5%; Tnaive_CD8 21.5%
+tnaive_cd4_70_cd8_30_2pow16: Tnaive_CD4 71.5%; Tnaive_CD8 19.6%; Hema_Mast 7.2%; NP 1.0%; ODC 0.7%</code></pre>
+  <p>At 2<sup>22</sup> CpGs this matches the <code class="inl">.cg</code> run above to within
+    two points; at 2<sup>16</sup> it drifts further. The embedding fixes the pattern set, so
+    this is a <b>fixed-panel</b> mode. The adaptive rounds still run: each one drops the
+    classes without mass, keeps only the MRMPs that still vary across the classes left in
+    scope, and refits. What they cannot do is regroup the query's CpGs. On a
+    <code class="inl">.cg</code> query, a narrower scope rebuilds the patterns from the
+    CpGs the query measured, so a pattern that only has to separate the few classes still
+    in play can admit far more CpGs, and the pair rescue adds more. An embedding has no
+    CpGs left to regroup, so each round works with the patterns it was given and fewer of
+    them. The cost shows at low coverage: about 2.5x the error of the
+    <code class="inl">.cg</code> path at 2<sup>16</sup> CpGs, and close to it at
+    2<sup>22</sup> (benchmark below).</p>
+  <p class="note"><b>Counts.</b> <code class="inl">--with-n</code> stores how many measured
+    CpGs each pattern's beta rests on, and <code class="inl">deconv</code> weights each
+    pattern by them, as the <code class="inl">.cg</code> path does: a beta from 2,000 CpGs
+    outweighs one from 2. Without counts every pattern weighs the same, and deconv says so.
+    On the mouse 41-class benchmark (held-out cells, 200 mixtures per depth) the shipped
+    <code class="inl">mm10_brain_lite</code> chain with counts scored mean TVD 0.189 at
+    2<sup>16</sup> and 0.027 at 2<sup>22</sup>, against 0.434 and 0.045 without counts and
+    0.077 and 0.023 for the <code class="inl">.cg</code> path. The MRMP set matters most: a
+    flat 41-class set covering 47k CpGs scored 0.29 even at 2<sup>22</sup>.
+    <code class="inl">--threads</code> runs records in parallel, as for a
+    <code class="inl">.cg</code>; options that act on the CpG-level panel
+    (<code class="inl">--panel-out</code>, <code class="inl">--rescue-*</code>, …) are refused.</p>
+</section>
+
+<section class="card">
   <h2>Build your own .msdref <span class="m">— a per-cell panel</span></h2>
   <p>Per-cell panel, so each cell must deconvolve to itself.</p>
   <!-- example:32_deconv_build_ref -->
@@ -2288,6 +2343,10 @@ Options:
                  beta does not once a global shift, mitotic or otherwise,
                  moves every value at once.
                  continuous either way; they are not a contrast.
+  --with-n       Also store, per record and pattern, how many measured CpGs
+                 the beta rests on. With --continuous-features this makes
+                 the artifact an MRMP embedding `deconv` can take in place
+                 of the .cg: each pattern is weighted by its CpGs.
   --set NAME     featurize only this set of a chain, so one node of an
                  mrmp-tree can be scored straight out of the tree it
                  lives in -- a block inside a chain is byte-identical to
@@ -2406,6 +2465,7 @@ Options:
     <summary><code class="inl">methscope deconv</code> <span class="m">— Estimate cell-type proportions, rebuilding the MRMP per query</span></summary>
     <pre class="help"><code>Usage:
   methscope deconv [options] &lt;ref.msdref&gt; &lt;query.cg&gt;
+  methscope deconv [options] &lt;ref.msdref&gt; &lt;query.msfm&gt;
 
 Purpose:
   Estimate the cell-type composition of each query record by non-negative
@@ -2423,12 +2483,28 @@ Purpose:
   scope only ever narrows, and rounds stop once it stops changing or at
   --max-round. --no-adaptive keeps the round-1 fit over every class.
 
+  The query may instead be an MRMP EMBEDDING: an .msfm from
+  `classify-featurize --continuous-features --with-n` against a .mrmp, or
+  written by any model that outputs MRMPs. The format is detected from the
+  file's first bytes; no option selects it. The embedding fixes the pattern
+  set, so this is a FIXED-PANEL mode: the reference .msdref is averaged over
+  each pattern's CpGs, and the adaptive rounds only drop classes and the
+  MRMPs constant over the classes left. They cannot regroup the query's CpGs
+  into new, larger patterns for the narrower scope, as a .cg query does, so
+  accuracy trails the .cg path at low coverage (about 2.5x the error at 2^16
+  CpGs on the mouse benchmark) and nears it at high coverage. Patterns are
+  weighted by the CpGs behind them when the .msfm carries counts
+  (--with-n), equally when it does not. Options that act
+  on the CpG-level panel (--panel-out, --scope-out, --pair-count, --rescue-*,
+  --global-ref, ...) are refused for an embedding.
+
 Arguments:
   &lt;ref.msdref&gt;   Deconvolution reference from `deconv-build-ref`. Its index
                  order is the binstring digit order.
   &lt;query.cg&gt;     Query methylome(s), YAME format 3 (M/U counts) or format 6
                  (universe bit plus binary call). Record names come from
                  &lt;query.cg&gt;.idx; without one they are 1,2,3,...
+  &lt;query.msfm&gt;   An MRMP embedding (see above); record names are its own.
 
 Options:
   -o &lt;out.tsv&gt;            Write output to a file instead of stdout.
@@ -2459,7 +2535,8 @@ Options:
   --threads N             Deconvolve N records in parallel. Default: 1.
                           The reference is shared, so
                           memory grows by the per-thread workspace (~16 MB),
-                          not linearly. Needs a &lt;query.cg&gt;.idx to seek by; -v
+                          not linearly. A .cg query needs &lt;query.cg&gt;.idx to
+                          seek by (an .msfm needs nothing); -v
                           and the dump options force a single thread.
   --max-round N           Cap on rebuild rounds. Default: 8. Rounds stop early
                           once the class set stops changing.

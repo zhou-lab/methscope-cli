@@ -82,6 +82,15 @@
  * against 90.8% for the same cells' binarised absolute calls. */
 #define MSFM_FLAG_RANK_ADD      16u  /* per-class rank columns ALONGSIDE patterns */
 #define MSFM_FLAG_RANK_ONLY     32u  /* per-class rank columns INSTEAD of them */
+/* A COUNT block: u32 measured CpGs per (record, pattern), row-major, as the
+ * LAST section of the file, so it starts at file_bytes - n_records * n_patterns
+ * * 4. Written by `classify-featurize --with-n`. It is what lets an embedding
+ * stand in for the methylome it summarises: `deconv` weights each pattern by
+ * the CpGs behind its beta, and a beta from 2 CpGs is not one from 2,000.
+ * Appended after everything else, so every offset an older reader follows is
+ * unchanged; such a reader simply never looks past the chain. A contrast or
+ * rank column counts the CpGs on both of its sides. */
+#define MSFM_FLAG_COUNTS        64u
 
 /* Ties (beta exactly on the cut) are MSFM_NA under both; see msfm_build.c. */
 
@@ -137,6 +146,8 @@ typedef struct {
   const msfm_header_t *header;
   const uint16_t  *beta;        /* n_records * n_patterns */
   const uint32_t  *levels;      /* n_records */
+  const uint32_t  *counts;      /* n_records * n_patterns, or NULL when the
+                                 * artifact has no MSFM_FLAG_COUNTS block */
   const uint16_t  *class_id;    /* n_records */
   char           **pattern_names;
   char           **record_names;
@@ -291,7 +302,8 @@ void ms_msfm_build_sampled_multi(const char *query, const char *const *mrmps,
                            int contrast, int rank,
                            uint16_t **beta_out, uint32_t **levels_out,
                            char ***names_out, uint32_t *n_cells_out,
-                           uint32_t *ncol_out, uint32_t *set_col0_out);
+                           uint32_t *ncol_out, uint32_t *set_col0_out,
+                           uint32_t **counts_out);   /* NULL = do not tally */
 
 /* Subcommand entry point. */
 int  main_classify_featurize(int argc, char *argv[]);
