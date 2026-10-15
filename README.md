@@ -104,6 +104,13 @@ with `methscope fetch`, and run `classify`, `deconv` or `upscale` on the store.
 Each command's options are documented at
 <https://zhou-lab.github.io/methscope-cli/> and by `methscope <command> -h`.
 
+`methscope fetch` with no arguments browses the catalogue. Pretrained models
+live on HuggingFace ([zhou-lab/methscope](https://huggingface.co/zhou-lab/methscope));
+the query `.cg` fixtures, including the demo store, live in
+[methscope_data](https://github.com/zhou-lab/methscope_data). The download
+store is shared with the other zhou-lab tools (`yame`, `kycg`) by convention,
+not by dependency.
+
 ## Reproducing the manuscript
 
 TBD: instructions for regenerating the published figures and numbers from
