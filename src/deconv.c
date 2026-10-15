@@ -2147,9 +2147,20 @@ static int d2m_main(const d2ref_t *R, d2opt_t *opt, const char *qpath,
     if (pthread_create(&th[t], NULL, d2m_worker, &J) != 0)
       d2die("cannot create thread", NULL);
   for (int t = 0; t < nthreads; ++t) pthread_join(th[t], NULL);
-  for (uint32_t r = 0; r < nr; ++r)
-    d2_emit(out, R, F.record_names[r], xall + (size_t)r * nc, outmode,
-            min_frac, G);
+  /* classify-featurize names every row <cell>-R<draw>. With one draw per cell
+   * (every name ends -R1) the tag says nothing, so report the cell's own name,
+   * the one the .cg carried; a coverage ladder keeps its tags. */
+  int strip = nr > 0;
+  for (uint32_t r = 0; r < nr && strip; ++r) {
+    size_t L = strlen(F.record_names[r]);
+    strip = L > 3 && !strcmp(F.record_names[r] + L - 3, "-R1");
+  }
+  for (uint32_t r = 0; r < nr; ++r) {
+    char nm[1024];
+    snprintf(nm, sizeof nm, "%s", F.record_names[r]);
+    if (strip) nm[strlen(nm) - 3] = '\0';
+    d2_emit(out, R, nm, xall + (size_t)r * nc, outmode, min_frac, G);
+  }
   free(th); free(xall);
   free(M.mean); free(M.rcpg);
   ms_msfm_close(&F);
@@ -2303,9 +2314,13 @@ int main_deconv(int argc, char *argv[]) {
 "  written by any model that outputs MRMPs. The format is detected from the\n"
 "  file's first bytes; no option selects it. The embedding fixes the pattern\n"
 "  set, so this is a FIXED-PANEL mode: the reference .msdref is averaged over\n"
-"  each pattern's CpGs, the adaptive class scope still narrows, but no round\n"
-"  can admit new CpGs. Patterns are weighted by the CpGs behind them when the\n"
-"  .msfm carries counts (--with-n), equally when it does not. Options that act\n"
+"  each pattern's CpGs, and the adaptive rounds only drop classes and the\n"
+"  MRMPs constant over the classes left. They cannot regroup the query's CpGs\n"
+"  into new, larger patterns for the narrower scope, as a .cg query does, so\n"
+"  accuracy trails the .cg path at low coverage (about 2.5x the error at 2^16\n"
+"  CpGs on the mouse benchmark) and nears it at high coverage. Patterns are\n"
+"  weighted by the CpGs behind them when the .msfm carries counts\n"
+"  (--with-n), equally when it does not. Options that act\n"
 "  on the CpG-level panel (--panel-out, --scope-out, --pair-count, --rescue-*,\n"
 "  --global-ref, ...) are refused for an embedding.\n"
 "\n"

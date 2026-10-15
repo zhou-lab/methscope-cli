@@ -807,9 +807,13 @@ Purpose:
   written by any model that outputs MRMPs. The format is detected from the
   file's first bytes; no option selects it. The embedding fixes the pattern
   set, so this is a FIXED-PANEL mode: the reference .msdref is averaged over
-  each pattern's CpGs, the adaptive class scope still narrows, but no round
-  can admit new CpGs. Patterns are weighted by the CpGs behind them when the
-  .msfm carries counts (--with-n), equally when it does not. Options that act
+  each pattern's CpGs, and the adaptive rounds only drop classes and the
+  MRMPs constant over the classes left. They cannot regroup the query's CpGs
+  into new, larger patterns for the narrower scope, as a .cg query does, so
+  accuracy trails the .cg path at low coverage (about 2.5x the error at 2^16
+  CpGs on the mouse benchmark) and nears it at high coverage. Patterns are
+  weighted by the CpGs behind them when the .msfm carries counts
+  (--with-n), equally when it does not. Options that act
   on the CpG-level panel (--panel-out, --scope-out, --pair-count, --rescue-*,
   --global-ref, ...) are refused for an embedding.
 

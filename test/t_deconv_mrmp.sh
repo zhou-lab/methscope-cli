@@ -50,7 +50,7 @@ done
 "$MS" deconv --wide "$d/r3.msdref" "$d/mix.msfm" 2>/dev/null > "$d/w1.tsv"
 check() {   ## $1 = wide output; truth from the record name m<A><B><C>
   awk -F'\t' 'NR == 1 { for (j = 2; j <= NF; j++) col[$j] = j; next }
-    { n = $1; sub(/-R1$/, "", n)
+    { n = $1
       t["A"] = substr(n, 2, 1) / 10; t["B"] = substr(n, 3, 1) / 10
       t["C"] = substr(n, 4, 1) / 10
       for (k in t) { e = $(col[k]) - t[k]; if (e < 0) e = -e
