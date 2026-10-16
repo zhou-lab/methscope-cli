@@ -40,7 +40,7 @@ Red Hat Enterprise Linux 9.1 (glibc 2.34; Intel Xeon Platinum 8380, 4 cores and
 
 YAME is compiled into the binary from a pinned submodule; `methscope --version`
 prints the YAME version and the model tag; at this commit it prints
-<!-- version:begin -->`(yame v1.58, models v12)`<!-- version:end -->.
+<!-- version:begin -->`(yame v1.59, models v12)`<!-- version:end -->.
 
 **Versions tested.** methscope v1.1.1 with models v12, libxgboost 3.4.2 and
 yame 1.59, on macOS 26.6 (osx-arm64) and RHEL 9.1 (linux-64).
@@ -111,11 +111,11 @@ the query `.cg` fixtures, including the demo store, live in
 store is shared with the other zhou-lab tools (`yame`, `kycg`) by convention,
 not by dependency.
 
-## Reproducing the manuscript
+## Reproducing the tests and examples
 
-TBD: instructions for regenerating the published figures and numbers from
-public sources (methscope_data, the pinned HuggingFace model tag, and the
-figure scripts), to be added before publication.
+Every example on the [documentation page](https://zhou-lab.github.io/methscope-cli/)
+shows its expected output, with the models pinned by tag and digest. `make test`
+and `make test-docs` rerun them all (see Development).
 
 ## Build from source
 
