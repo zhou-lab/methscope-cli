@@ -1,0 +1,14 @@
+{
+  "title": "MethScope: ultra-fast analysis of sparse DNA methylomes via Most Recurrent Methylation Pattern encoding",
+  "upload_type": "software",
+  "description": "Pure-C command-line tool for cell-type classification, mini-bulk and spatial deconvolution, and genome-wide upscaling of sparse DNA methylomes via Most Recurrent Methylation Pattern (MRMP) encoding. Documentation: https://zhou-lab.github.io/methscope-cli/. Pretrained models: https://huggingface.co/zhou-lab/methscope. License: available to academic and non-profit institutions for research purposes under the 2-Clause BSD License; commercial use requires a license from Children's Hospital of Philadelphia (zhouw3@chop.edu). See LICENSE. The GitHub source archive omits the YAME submodule; the release tarball methscope-cli-<version>.tar.gz on the GitHub release includes it.",
+  "license": "other-nc",
+  "creators": [
+    {"name": "Zhou, Wanding", "affiliation": "Children's Hospital of Philadelphia"},
+    {"name": "Fu, Hongxiang", "orcid": "0000-0002-9873-8606"}
+  ],
+  "keywords": ["DNA methylation", "single-cell", "deconvolution", "cell-type classification", "imputation", "MRMP"],
+  "related_identifiers": [
+    {"identifier": "https://github.com/zhou-lab/methscope-cli", "relation": "isSupplementTo", "scheme": "url"}
+  ]
+}
