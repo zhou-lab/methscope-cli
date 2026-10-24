@@ -70,10 +70,11 @@ These are the mistakes that are not visible in the usage strings.
 
 2. One training msur serves MANY models. `upscale-featurize` stores the raw
    per-pattern summary (beta, covered count, observed set), not encoder input;
-   `--features` and `--patterns` are chosen at TRAINING time and are just
-   projections of it. So do not rebuild a msur to change either. `--patterns P`
-   may be narrowed below the msur's pattern count but never widened past it, so
-   featurize at the widest vocabulary you might want.
+   `upscale-train --features` is chosen at TRAINING time and is just a
+   projection of it, so do not rebuild a msur to change it. The pattern
+   vocabulary is the opposite: featurize and train both take EVERY pattern of
+   the given `--mrmp` set, and there is no flag to narrow it. To train on a
+   different vocabulary, featurize again against that set.
 
 3. `inspect` describes ANY artifact -- bundle, .mrmp, .msui, .msur -- and is
    the fastest way to find out what an unlabeled file is and what it expects.

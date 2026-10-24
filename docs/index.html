@@ -463,7 +463,10 @@ root  40 classes | 261 patterns | 3,787 CpGs
   <!-- example:22_classify_mrmp_patterns -->
 <pre><code>methscope <a class="sub" href="#ref-inspect">inspect</a> --patterns --top 5 chr20_40celltypes.mrmp</code></pre>
 <!-- /example -->
-  <pre class="res"><code>#pattern                                  label  count   (top 5 of 261)
+  <pre class="res"><code>[the summary shown above, then]
+  PNA sentinel  2222222222222222222222222222222222222222
+
+#pattern                                  label  count   (top 5 of 261)
 1111111101111111111111111111111111111111  P1     385
 1111111111011111111111111111111111111111  P2     331
 1111111110111111111111111111111111111111  P3     304
@@ -615,8 +618,7 @@ methscope <a class="sub" href="#ref-inspect">inspect</a> hg38_sex.clfx</code></p
     calibrated resolver per class pair), featurize a balanced training draw across the
     coverage ladder, fit one pooled booster. These are the commands that built the shipped
     <code class="inl">hg38_celltype_full.clfx</code>, copied from the driver that ran them
-    (<code class="inl">labjournal/zhouw3/2026/20260904_bankfull_final.sh</code>) rather than
-    simplified for the page — the flags are load-bearing and a reader who drops them gets a
+    rather than simplified for the page — the flags are load-bearing and a reader who drops them gets a
     different model. The whole difference between <code class="inl">_lite</code> and
     <code class="inl">_full</code> is three flags: <code class="inl">--min-pattern-cpgs 500
     --resolvers 150</code> on the bank (the 150 class pairs with the thinnest hard-block
@@ -624,16 +626,15 @@ methscope <a class="sub" href="#ref-inspect">inspect</a> hg38_sex.clfx</code></p
     the booster. The driver writes <code class="inl">bank.clfx</code>; it is renamed when
     staged.</p>
   <!-- example:27_classify_train -->
-<pre data-norun="the recorded build of hg38_celltype_full.clfx (labjournal"><code><span class="cm">## 20260904_bankfull_final.sh, SPECIES=human); needs the labelled reference store.</span>
-<span class="cm">## Same recipe in CURRENT flags: that driver ran before 0.10 renamed them</span>
-<span class="cm">## (--resolver-gate -1 -&gt; --resolvers all, --pattern-floor -&gt; --min-pattern-cpgs)</span>
+<pre data-norun="the recorded build of hg38_celltype_full.clfx; needs the labelled reference store."><code><span class="cm">## Same recipe in CURRENT flags: the original run predates 0.10, which renamed</span>
+<span class="cm">## them (--resolver-gate -1 -&gt; --resolvers all, --pattern-floor -&gt; --min-pattern-cpgs)</span>
 <span class="cm">## and made the pooled booster the only mode (--pool-nodes is gone).</span>
-<span class="cm">## The _lite footnotes are 20260914_lite_build.sh, which shipped the v10 lites.</span>
 <span class="cm"># inputs: REF = 63 per-class pooled references, STORE = the 84,601 labelled cells,</span>
-<span class="cm"># CLAB = cell -&gt; label for every cell, TRIDS/TRLAB = a balanced training draw.</span>
-<span class="cm"># The driver spreads the pairwise resolver calibration over 8 SLURM jobs with</span>
+<span class="cm"># CLAB = cell -&gt; label for every cell, TRIDS/TRLAB = a balanced training draw;</span>
+<span class="cm"># B = the output directory.</span>
+<span class="cm"># The original run spread the pairwise resolver calibration over 8 SLURM jobs with</span>
 <span class="cm"># --resolver-stride k/8 into the same --resolver-cache; this is the one-job form.</span>
-LADDER=0,4096,16384,65536,262144; T=24; SEED=20260828
+B=bank; LADDER=0,4096,16384,65536,262144; T=24; SEED=20260828
 
 methscope <a class="sub" href="#ref-mrmp-build">mrmp-build</a> --bank --resolvers all --min-pattern-cpgs 2000 \
   --anneal-min-seg 10000,3000,1000 --max-depth 24 \
@@ -714,7 +715,7 @@ methscope <a class="sub" href="#ref-inspect">inspect</a> hg38_sex.MSA.clfx | hea
   <pre class="res"><code>mliftover: MSA: 274041 of 284309 probes sit on a CpG row of hg38 (29401795 rows); 9656 not lifted by type (not cg), 612 cg probes with no CpG row
 mliftover: mask: 3 states over 284309 target rows; Pna 282575 Xa_lo 1184 Xa_hi 550
 mliftover: hg38_sex.clfx -&gt; hg38_sex.MSA.clfx (MSA row space, 284309 rows)
-container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 45,617 bytes
+container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 2,712 bytes
 
   bundle     hg38_sex.MSA.clfx</code></pre>
 </section>
@@ -785,8 +786,7 @@ container  MSBNDL1 (MethScope BuNDLe v1) - 3 sections, 45,617 bytes
   </table>
   <p>The five tumour cells off the GI lineage are three ileal enterocytes, one perivascular and
     one keratinocyte-like call. Adjacent normal reads mostly goblet — a colon crypt, not a tumour.
-    Predictions: <code class="inl">20260904_coo_panel/bian_cells_final.tsv</code> via
-    <code class="inl">labjournal/zhouw3/2026/20260904_bian_coo_panels.sh</code>.</p>
+</p>
 </section>
 <section class="card" id="bank-features">
   <h2>How a bank chooses its features <span class="m">— adaptive at build time, fixed at query time</span></h2>
@@ -1274,21 +1274,39 @@ wrote chr20.msui (5891452 bytes) and chr20.msui.tsv</code></pre>
   <!-- example:55_upscale_train -->
 <pre><code>methscope <a class="sub" href="#ref-upscale-train">upscale-train</a> -i <span class="tip" data-tip="msur" tabindex="0">chr20.msur</span> --units <span class="tip" data-tip="msui" tabindex="0">chr20.msui</span> --mrmp chr20.mrmp -o <span class="tip" data-tip="updecx" tabindex="0">chr20.updecx</span> --work-dir work/ --threads 8</code></pre>
 <!-- /example -->
-  <pre class="res"><code>P=261 features=beta+count input=522 trunk=none pure=16 mixed=factor/32 activation=linear
-backend=cpu
-CPU backend; cells=40 reps=20 patterns=261 input=522 units=109 split=28/6/6 threads=8
-units 109/109 (resumed=0)
-val MAE over 109 units: mean 0.159952, median 0.168192, worst 0.323179
-wrote bare UPDEC2 work/model.updec2 (89885488 bytes), resumed=0</code></pre>
-  <p class="note">The validation MAE moves a little between runs — 0.171 and 0.194 on two
-    passes over this same input — so treat it as a scale, not a checksum. The unit count,
-    the pattern count and the model size are stable.</p>
+  <pre class="res"><code>upscale-train: data=chr20.msur index=chr20.msui MRMP=chr20.mrmp
+upscale-train: output=chr20.updecx work=work
+upscale-train: P=261 features=beta+count input=522 trunk=none pure=16 mixed=factor/32 activation=linear
+upscale-train: steps=2000..8000 eval=200 patience=8 batch=8192 seed=1
+upscale-train: split=seeded 70/15/15
+mrmp: wrote mask work/mrmp.cm (262 labels)
+upscale-train: backend=cpu
+upscale-train: CPU backend; cells=40 reps=20 patterns=261 input=522 units=109 split=28/6/6 threads=8
+upscale-train: units 10/109 (resumed=0)
+upscale-train: units 20/109 (resumed=0)
+upscale-train: units 30/109 (resumed=0)
+upscale-train: units 40/109 (resumed=0)
+upscale-train: units 50/109 (resumed=0)
+upscale-train: units 60/109 (resumed=0)
+upscale-train: units 70/109 (resumed=0)
+upscale-train: units 80/109 (resumed=0)
+upscale-train: units 90/109 (resumed=0)
+upscale-train: units 100/109 (resumed=0)
+upscale-train: units 109/109 (resumed=0)
+upscale-train: val MAE over 109 units: mean 0.159952, median 0.168192, worst 0.323179
+upscale-train: wrote bare UPDEC2 work/model.updec2 (89885488 bytes), resumed=0
+upscale-train: complete -&gt; chr20.updecx</code></pre>
+  <p class="note">Training is deterministic for a given <code class="inl">--seed</code>: repeated
+    runs over this input give the same validation MAE (0.159952) and a byte-identical model.</p>
   <p><code class="inl">make CUDA=1 CUDA_HOME=/path/to/cuda CUDA_ARCH=sm_80</code> builds the GPU
     backend, which is picked automatically when a device answers; checkpoints are interchangeable,
     so you can start on CPU and finish on a GPU node. The chr20 demo is small; a whole-genome
     decoder is memory- and GPU-heavy, so submit it to a GPU node:</p>
   <!-- example:56_upscale_train_wg -->
-<pre data-norun="the recorded command that built hg38_wg.updecx (models v10)"><code>sbatch -q gpu --gres=gpu:1 --mem=64G -c 8 -t 16:00:00 --wrap '\
+<pre data-norun="the recorded command that built hg38_wg.updecx (models v10)"><code><span class="cm"># W = the directory holding the training msur, unit index and MRMP set;</span>
+<span class="cm"># SPLIT = the curated cell split (format below). sbatch passes both to the job.</span>
+export W=wg SPLIT=wg/split.tsv
+sbatch -q gpu --gres=gpu:1 --mem=64G -c 8 -t 16:00:00 --wrap '\
   methscope <a class="sub" href="#ref-upscale-train">upscale-train</a> -i $W/loyfer_100r_flat500_bank100.msur \
     --units $W/units_16k.msui --mrmp $W/loyfer_train_flat500_bank100.mrmp \
     -o $W/hg38_wg.updecx --work-dir $W/work --split $SPLIT \

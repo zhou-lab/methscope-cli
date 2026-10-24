@@ -1,16 +1,15 @@
 #!/bin/bash
 ## title: Train your own classifier
-## norun: the recorded build of hg38_celltype_full.clfx (labjournal
-## 20260904_bankfull_final.sh, SPECIES=human); needs the labelled reference store.
-## Same recipe in CURRENT flags: that driver ran before 0.10 renamed them
-## (--resolver-gate -1 -> --resolvers all, --pattern-floor -> --min-pattern-cpgs)
+## norun: the recorded build of hg38_celltype_full.clfx; needs the labelled reference store.
+## Same recipe in CURRENT flags: the original run predates 0.10, which renamed
+## them (--resolver-gate -1 -> --resolvers all, --pattern-floor -> --min-pattern-cpgs)
 ## and made the pooled booster the only mode (--pool-nodes is gone).
-## The _lite footnotes are 20260914_lite_build.sh, which shipped the v10 lites.
 # inputs: REF = 63 per-class pooled references, STORE = the 84,601 labelled cells,
-# CLAB = cell -> label for every cell, TRIDS/TRLAB = a balanced training draw.
-# The driver spreads the pairwise resolver calibration over 8 SLURM jobs with
+# CLAB = cell -> label for every cell, TRIDS/TRLAB = a balanced training draw;
+# B = the output directory.
+# The original run spread the pairwise resolver calibration over 8 SLURM jobs with
 # --resolver-stride k/8 into the same --resolver-cache; this is the one-job form.
-LADDER=0,4096,16384,65536,262144; T=24; SEED=20260828
+B=bank; LADDER=0,4096,16384,65536,262144; T=24; SEED=20260828
 
 methscope mrmp-build --bank --resolvers all --min-pattern-cpgs 2000 \
   --anneal-min-seg 10000,3000,1000 --max-depth 24 \

@@ -1,6 +1,9 @@
 #!/bin/bash
 ## title: Train
 ## norun: the recorded command that built hg38_wg.updecx (models v10)
+# W = the directory holding the training msur, unit index and MRMP set;
+# SPLIT = the curated cell split (format below). sbatch passes both to the job.
+export W=wg SPLIT=wg/split.tsv
 sbatch -q gpu --gres=gpu:1 --mem=64G -c 8 -t 16:00:00 --wrap '\
   methscope upscale-train -i $W/loyfer_100r_flat500_bank100.msur \
     --units $W/units_16k.msui --mrmp $W/loyfer_train_flat500_bank100.mrmp \
