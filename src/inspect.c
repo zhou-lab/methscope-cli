@@ -591,6 +591,7 @@ bundle_report:;
   int is_updec  = (mlen >= 6  && memcmp(mbuf, "UPDEC1", 6) == 0);
   int is_linear = (mlen >= 16 && memcmp(mbuf, "methscope-linear", 16) == 0);
   int is_vio    = (mlen >= 19 && memcmp(mbuf, "methscope-violation", 19) == 0);
+  int is_rf     = (mlen >= 8  && memcmp(mbuf, "MSRFMOD1", 8) == 0);
 
   /* bundled-MRMP state count (used in both the layout and the model summary) */
   size_t rlen = 0;
@@ -632,6 +633,7 @@ bundle_report:;
   else if (is_vio)    snprintf(mdesc, sizeof mdesc,
                         "methscope-violation text spec (%d classes x %d patterns)",
                         vio_lab, vio_pat);
+  else if (is_rf)     snprintf(mdesc, sizeof mdesc, "methscope random forest (MSRFMOD1)");
   else                snprintf(mdesc, sizeof mdesc, "xgboost booster (UBJ binary)");
 
   /* role = how the whole bundle is used (its framework mark applies bundle-wide) */
@@ -641,6 +643,7 @@ bundle_report:;
   else if (is_linear) snprintf(role, sizeof role, "%s linear classifier - run via `classify`", kind ? kind : "linear");
   else if (is_vio)    snprintf(role, sizeof role,
                         "violation rule (unfitted) - run via `classify`");
+  else if (is_rf)     snprintf(role, sizeof role, "random-forest classifier - run via `classify`");
   else                snprintf(role, sizeof role, "xgboost classifier - run via `classify`");
 
   /* ---- container ---- */
@@ -748,6 +751,8 @@ bundle_report:;
         for (int j = 0; j < lm->n_feat; ++j)
           printf("        %-12s weight=%-12.6g mean=%.6g\n", lm->names[j], lm->w[j], lm->mean[j]);
         ms_linmodel_free(lm);
+      } else if (is_rf) {
+        ms_rf_describe(mbuf, mlen, path, stdout);
       } else {
         BoosterHandle b;
         if (XGBoosterCreate(NULL, 0, &b) == 0) {

@@ -57,6 +57,7 @@ dkms.conf
 # --- methscope-cli project ---
 /methscope
 /test/nnls_check
+/test/rf_check
 /models/
 *.msm
 *~

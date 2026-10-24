@@ -167,6 +167,11 @@ int main_inspect(int argc, char *argv[]);
 int main_predict(int argc, char *argv[]);
 int main_train(int argc, char *argv[]);
 int main_train_tree(int argc, char *argv[]);
+/* the random-forest framework (classify_rf.c) */
+int main_train_rf(int argc, char *argv[]);
+int ms_classify_rf(const char *query_cg, const char *bundle,
+                   const char *out_path, int with_probs, int no_header);
+void ms_rf_describe(const void *buf, size_t len, const char *src, FILE *out);
 int main_deconv_build_ref(int argc, char *argv[]);
 int main_mliftover(int argc, char *argv[]);
 int main_deconv(int argc, char *argv[]);

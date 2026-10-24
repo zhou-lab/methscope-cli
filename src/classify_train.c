@@ -163,6 +163,9 @@ static int train_usage(FILE *out) {
     "                     xgboost    gradient-boosted trees (multiclass).\n"
     "                     logistic   binary L2-regularized logistic regression;\n"
     "                                needs a .clfx out.\n"
+    "                     rf         random forest on single CpGs, selected\n"
+    "                                inside the run; takes <query.cg> alone\n"
+    "                                (see `classify-train --framework rf -h`).\n"
     "                   The violation rule is unfitted, so it is a scoring mode:\n"
     "                   `classify --framework violation ref.mrmp query.cg`.\n"
     "  -n <nrounds>     Boosting rounds, xgboost only (default: round(sqrt(n_cells))).\n"
@@ -517,6 +520,9 @@ int main_train(int argc, char *argv[]) {
     }
     /* -h before the --data check, or `classify-train -h` -- the commonest way
      * to ask what the flags ARE -- dies telling you to pass one. */
+    /* The forest selects its own single-row features from the records, so
+     * it shares neither the MRMP positionals nor the .msfm path. */
+    if (!strcmp(fw, "rf")) return main_train_rf(argc, argv);
     if (want_help) { return train_usage(stdout); }
     if (!strcmp(fw, "xgboost")) {
       /* xgboost is tree-only now. The flat single-booster format is gone --
@@ -568,7 +574,7 @@ int main_train(int argc, char *argv[]) {
    * the framework is logistic: the one fitted model that still takes a raw
    * <query.cg> <ref.cm> and features it itself. */
   if (strcmp(framework, "logistic"))
-    tdie("unknown --framework (xgboost|logistic)", framework);
+    tdie("unknown --framework (xgboost|logistic|rf)", framework);
 
   /* With --data the features are already built, so <query.cg> drops out and
    * only <ref.cm> stays positional -- the bundle still has to carry the MRMP. */

@@ -71,9 +71,10 @@ check-updec2: $(PROG)
 ## packs its own fixtures with yame from inline text, so this needs no network
 ## and no model store. Tests that DO want the shared store skip cleanly when
 ## YAME_DATA_HOME is unset.
-test: $(PROG) yame-lib yame-bin test/nnls_check
+test: $(PROG) yame-lib yame-bin test/nnls_check test/rf_check
 	MS=./$(PROG) YAME=$(YAME_DIR)/yame XGB_PREFIX=$(XGB_PREFIX) bash test/run.sh
 	./test/nnls_check
+	./test/rf_check
 	./tools/make_registry.sh --check
 	$(PYTHON) docs/build_models.py --check
 	$(PYTHON) docs/build_examples.py --check
@@ -88,6 +89,13 @@ test: $(PROG) yame-lib yame-bin test/nnls_check
 ## instrumented build (scripts/coverage.sh) counts it toward nnls.c.
 test/nnls_check: test/nnls_check.c src/nnls.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm
+
+## The random forest behind feature selection, tested on its own: a seeded
+## problem whose informative features must top both importances, and the
+## same fit at 1 and 4 threads, which must agree exactly. Given a matrix it
+## prints OOB error and importances, for comparison against R randomForest.
+test/rf_check: test/rf_check.c src/rforest.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -lm -lpthread
 
 ## docs/index.html is prose around three generated parts: the example blocks
 ## (docs/examples/*.sh, build_examples.py), the model table (YAME's
@@ -207,7 +215,8 @@ dist:
 
 clean:
 	rm -f $(OBJ) $(DEP) src/upunit_cuda.o \
-	      src/updec_cuda.o src/updec_nn.o src/updec_train.o $(PROG) test/nnls_check
+	      src/updec_cuda.o src/updec_nn.o src/updec_train.o $(PROG) test/nnls_check \
+	      test/rf_check
 
 # Also clean the YAME submodule build artifacts.
 clean-all: clean

@@ -771,6 +771,14 @@ int main_predict(int argc, char *argv[]) {
       free(bbuf); free(kind);
       return rc;
     }
+    if (strcmp(kind, "rf") == 0) {
+      if (data_path)
+        pdie("--data is xgboost-only; a random forest reads its own single-row "
+             "features from the query", model_name);
+      int rc = ms_classify_rf(query_cg, model_name, out_path, with_probs, no_header);
+      free(kind);
+      return rc;
+    }
     if (strcmp(kind, "tree") == 0) {
       /* --probs has no meaning here yet and was being accepted silently: a tree
        * has no single softmax to report, since each node emits probabilities
@@ -808,7 +816,7 @@ int main_predict(int argc, char *argv[]) {
            "routing-tree bundle (a single-node tree if nothing splits)",
            model_name);
     pdie("unknown model framework 'kind' "
-         "(expected tree/violation/logistic)", kind);
+         "(expected tree/violation/logistic/rf)", kind);
   }
   return 1;   /* not reached */
 }

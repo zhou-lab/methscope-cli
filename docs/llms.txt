@@ -587,6 +587,9 @@ Options:
                      xgboost    gradient-boosted trees (multiclass).
                      logistic   binary L2-regularized logistic regression;
                                 needs a .clfx out.
+                     rf         random forest on single CpGs, selected
+                                inside the run; takes <query.cg> alone
+                                (see `classify-train --framework rf -h`).
                    The violation rule is unfitted, so it is a scoring mode:
                    `classify --framework violation ref.mrmp query.cg`.
   -n <nrounds>     Boosting rounds, xgboost only (default: round(sqrt(n_cells))).
