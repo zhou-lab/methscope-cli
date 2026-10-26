@@ -51,6 +51,9 @@ is the machine-readable form to read before fetching anything.
   mm10_brain_full.clfx     Cell-type classifier (mouse brain, full)
   mm10_brain_lite.clfx     Cell-type classifier (mouse brain, lite)
   mm10_41celltypes.msdref  Deconvolution reference (mouse brain)
+  EPICv2_thyroid_driver.clfx Thyroid carcinoma driver-group classifier (EPICv2)
+  EPICv2_thyroid_invasiveness.clfx Thyroid carcinoma invasiveness classifier (EPICv2)
+  EPICv2_thyroid_malignancy.clfx Thyroid nodule benign vs malignant classifier (EPICv2)
 
 Example queries with KNOWN answers live beside the models in hg38/data:
 `human_hg38_immune_mixture.cg` holds nine mixtures whose truths are exact by

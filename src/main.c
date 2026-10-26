@@ -35,27 +35,33 @@ static const yame_fetch_cfg_t ms_cfg = {
   MS_FILES, MS_FILES_N, "methscope", "METHSCOPE_DATA_HOME", 0
 };
 
-/* The tag the model directories are pinned at, for --version and the banner.
+/* The model tag, for --version and the banner: the NEWEST tag any model
+ * directory (<dir>/models) is pinned at.
  *
  * The registry is a flat file list since YAME v1.50 -- no directory rows, no
- * per-directory tag -- so the tag comes off any row that lands in
- * hg38/models: yame_file_dirlen() gives that row's directory and
- * yame_key_tag() the tag out of its source@tag:path key. Both model
- * directories are pinned together, so hg38's answers for mm10 too; the
- * emitter refuses a table where one directory spans two tags. */
+ * per-directory tag -- so tags come off the rows: yame_file_dirlen() gives a
+ * row's directory and yame_key_tag() the tag out of its source@tag:path key.
+ * One directory spans one tag (the emitter refuses a table that mixes them),
+ * but directories may differ: at models v14 hg38/ and mm10/models sat at v12
+ * while EPICv2/models was new at v14. A tag is additive and holds every file,
+ * so the newest one names what this binary can fetch. */
 static const char *ms_models_tag(void) {
-  static const char dir[] = "hg38/models";
-  static char tag[32];
+  static const char sfx[] = "/models";
+  static char tag[32], best[32] = "?";
+  long best_n = -1;
   for (size_t i = 0; i < MS_FILES_N; ++i) {
     const yame_asset_file_t *f = &MS_FILES[i];
-    if (yame_file_dirlen(f) != sizeof dir - 1) continue;
-    if (strncmp(f->store_path, dir, sizeof dir - 1)) continue;
+    size_t dl = yame_file_dirlen(f);
+    if (dl < sizeof sfx - 1 ||
+        strncmp(f->store_path + dl - (sizeof sfx - 1), sfx, sizeof sfx - 1))
+      continue;
     /* yame_key_tag returns the length it WANTED, so a long tag is caught
      * rather than silently truncated into the banner. */
-    if (yame_key_tag(f->key, tag, sizeof tag) > sizeof tag - 1) break;
-    return tag;
+    if (yame_key_tag(f->key, tag, sizeof tag) > sizeof tag - 1) continue;
+    long n = (tag[0] == 'v') ? strtol(tag + 1, NULL, 10) : -1;
+    if (n > best_n) { best_n = n; memcpy(best, tag, sizeof tag); }
   }
-  return "?";
+  return best;
 }
 
 /* Grouped, ANSI-styled overview. Colors are emitted only when stderr is a TTY,

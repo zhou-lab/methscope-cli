@@ -21,7 +21,9 @@ root=$(cd "$here/.." && pwd)
 
 ## What methscope offers, as store_path globs. `*` stops at a slash.
 ##   hg38/data/*          the example .cg files the docs fetch
-##   {hg38,mm10}/models/* the published bundles
+##   */models/*           the published bundles: hg38 and mm10 genome-wide,
+##                        and array-space ones (EPICv2/models, the thyroid
+##                        classifiers), which score the platform's own .cg
 ##   */cpg_nocontig.cr    every coordinate stream -- hg38 AND mm10 AND mm39.
 ##                        The mouse models need mm10's row space; mm39 has
 ##                        been offered since the old `coordinates` unit.
@@ -29,7 +31,7 @@ root=$(cd "$here/.." && pwd)
 ##                        table `mliftover --to <platform>` joins on
 ##   */*.ordering.tsv.gz  and its probe IDs in row order, which decide the
 ##                        probe TYPE: only cg probes are joined
-PATTERNS=( 'hg38/data/*' 'hg38/models/*' 'mm10/models/*' '*/cpg_nocontig.cr'
+PATTERNS=( 'hg38/data/*' '*/models/*' '*/cpg_nocontig.cr'
            '*/*.coord.tsv.gz' '*/*.ordering.tsv.gz' )
 
 emit() {

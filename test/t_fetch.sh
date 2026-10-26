@@ -25,8 +25,9 @@ dirs=$(printf '%s\n' "$list" | tail -n +2 | cut -f1 | sort -u | tr '\n' ' ')
 ## two files per array platform: the per-probe coordinate table it joins on
 ## and the ordering whose probe IDs decide which probes are cg. Nothing else
 ## from a platform -- no mask, no knowledgebase -- which is the point of a
-## per-tool projection.
-[ "$dirs" = "EPIC EPICv2 hg38 hg38/data hg38/models HM27 HM450 Mammal40 mm10 mm10/models MM285 mm39 MSA " ] ||
+## per-tool projection. EPICv2/models holds the array-space classifiers
+## (since models v14).
+[ "$dirs" = "EPIC EPICv2 EPICv2/models hg38 hg38/data hg38/models HM27 HM450 Mammal40 mm10 mm10/models MM285 mm39 MSA " ] ||
   { echo "fetch -l directories: '$dirs'"; exit 1; }
 for plat in EPIC EPICv2 HM27 HM450 Mammal40 MM285 MSA; do
   files=$(printf '%s\n' "$list" | awk -F'\t' -v p="$plat" '$1 == p { print $5 }' | sort | tr '\n' ' ')
@@ -51,10 +52,13 @@ for gone in hg38_celltype.clfx mm10_celltype_brain.clfx; do
 done
 :
 
-## --version carries the model tag the catalogue pins
+## --version carries the NEWEST model tag the catalogue pins, over every
+## <dir>/models (they may differ: hg38/ and mm10/models stayed at v12 when
+## EPICv2/models arrived at v14)
 v=$("$MS" --version)
 case "$v" in *"models v"[0-9]*) ;; *) echo "--version lacks the models tag: $v"; exit 1;; esac
-tag=$(printf '%s\n' "$list" | awk -F'\t' 'NR>1 && $1 == "hg38/models" {print $3; exit}')
+tag=$(printf '%s\n' "$list" | awk -F'\t' 'NR>1 && $1 ~ /\/models$/ { n = substr($3, 2) + 0
+        if (n > best) { best = n; t = $3 } } END { print t }')
 case "$v" in *"models $tag)"*) ;; *) echo "--version tag '$v' != registry tag '$tag'"; exit 1;; esac
 
 ## an empty store is silent; a store filled at a tag this binary has never
