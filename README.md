@@ -40,7 +40,7 @@ Red Hat Enterprise Linux 9.1 (glibc 2.34; Intel Xeon Platinum 8380, 4 cores and
 
 YAME is compiled into the binary from a pinned submodule; `methscope --version`
 prints the YAME version and the model tag; at this commit it prints
-<!-- version:begin -->`(yame v1.59, models v12)`<!-- version:end -->.
+<!-- version:begin -->`(yame v1.62, models v14)`<!-- version:end -->.
 
 **Versions tested.** methscope v1.1.1 with models v12, libxgboost 3.4.2 and
 yame 1.59, on macOS 26.6 (osx-arm64) and RHEL 9.1 (linux-64).
